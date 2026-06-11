@@ -1,0 +1,23 @@
+pre-commit:
+  parallel: true
+  commands:
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run --fix
+      stage_fixed: true
+    buf-format:
+      glob: "proto/**/*.proto"
+      run: go tool -modfile=tools.mod buf format -w proto
+      stage_fixed: true
+    buf-lint:
+      glob: "proto/**/*.proto"
+      run: go tool -modfile=tools.mod buf lint
+
+commit-msg:
+  commands:
+    conventional-commit:
+      run: |
+        head -n1 {1} | grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|ci|hotfix)(\([^)]*\))?!?: .+' || {
+          echo "commit message must follow Conventional Commits, e.g. 'feat: add LSP codec'" >&2
+          exit 1
+        }

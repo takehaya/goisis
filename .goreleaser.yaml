@@ -1,0 +1,66 @@
+version: 2
+
+project_name: goisis
+
+builds:
+  - id: goisisd
+    main: ./cmd/goisisd
+    binary: goisisd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/takehaya/goisis/internal/version.Version={{.Version}}
+  - id: goisis
+    main: ./cmd/goisis
+    binary: goisis
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/takehaya/goisis/internal/version.Version={{.Version}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+
+dockers_v2:
+  - id: goisis
+    ids:
+      - goisisd
+      - goisis
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/takehaya/goisis
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64

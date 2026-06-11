@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package goisis.v1alpha1;
+
+// IsisService is the management API for goisisd. It stays in v1alpha1 until
+// the TLV/LSDB data model stabilizes; expect breaking changes before v1.
+service IsisService {
+  // GetIsis returns instance-wide daemon state.
+  rpc GetIsis(GetIsisRequest) returns (GetIsisResponse);
+}
+
+message GetIsisRequest {}
+
+message GetIsisResponse {
+  Global global = 1;
+}
+
+// Global is instance-wide state of the goisisd process.
+message Global {
+  // version is the goisisd build version.
+  string version = 1;
+}

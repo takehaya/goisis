@@ -1,0 +1,17 @@
+version: v2
+clean: true
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/takehaya/goisis/gen
+plugins:
+  # Plugins are pinned in tools.mod (kept out of go.mod so library consumers
+  # don't inherit the toolchain's module graph). Run generate from the repo
+  # root so the -modfile path resolves.
+  - local: ["go", "tool", "-modfile=tools.mod", "protoc-gen-go"]
+    out: gen
+    opt: paths=source_relative
+  - local: ["go", "tool", "-modfile=tools.mod", "protoc-gen-connect-go"]
+    out: gen
+    opt: paths=source_relative

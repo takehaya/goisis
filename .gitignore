@@ -1,0 +1,10 @@
+# Build artifacts
+/bin/
+/dist/
+
+# Test/coverage output
+coverage.out
+*.test
+
+# Logs
+*.log

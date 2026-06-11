@@ -1,0 +1,37 @@
+name: proto
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  buf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: bufbuild/buf-action@v1
+        with:
+          push: false
+
+  generate-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Check generated code is up to date
+        run: |
+          go tool -modfile=tools.mod buf generate
+          status="$(git status --porcelain gen/)"
+          if [ -n "$status" ]; then
+            echo "$status"
+            echo "gen/ is stale; run 'make proto' and commit the result" >&2
+            exit 1
+          fi

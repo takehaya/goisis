@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  enable:
+    - misspell
+    - unconvert
+    - unparam
+  exclusions:
+    generated: lax
+    paths:
+      - ^gen/
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/takehaya/goisis
+  exclusions:
+    paths:
+      - ^gen/
