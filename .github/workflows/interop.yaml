@@ -1,0 +1,27 @@
+name: interop
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+# Continuous interop against FRR isisd: every push/PR forms adjacencies
+# between goisis and a real FRR over a veth pair (broadcast and p2p).
+jobs:
+  frr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Pull FRR image
+        run: docker pull quay.io/frrouting/frr:10.6.1
+      - name: Build interop tests
+        run: go test -c -o /tmp/interop.test ./test/interop
+      - name: Run interop (needs root for AF_PACKET + veth)
+        run: sudo /tmp/interop.test -test.v -test.timeout 8m

@@ -14,8 +14,17 @@ import (
 	"github.com/takehaya/goisis/internal/version"
 )
 
+func mustServer(t *testing.T, opts ...ServerOption) *IsisServer {
+	t.Helper()
+	s, err := NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	return s
+}
+
 func TestGetGlobal(t *testing.T) {
-	s := NewIsisServer()
+	s := mustServer(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
@@ -30,7 +39,7 @@ func TestGetGlobal(t *testing.T) {
 }
 
 func TestGetIsisOverConnect(t *testing.T) {
-	s := NewIsisServer()
+	s := mustServer(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
@@ -51,7 +60,7 @@ func TestGetIsisOverConnect(t *testing.T) {
 }
 
 func TestMgmtOperationAfterServeStopped(t *testing.T) {
-	s := NewIsisServer()
+	s := mustServer(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	serveDone := make(chan struct{})
 	go func() {
@@ -69,7 +78,7 @@ func TestMgmtOperationAfterServeStopped(t *testing.T) {
 }
 
 func TestMgmtOperationCancelled(t *testing.T) {
-	s := NewIsisServer()
+	s := mustServer(t)
 	// No Serve loop running: a cancelled context must not deadlock.
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

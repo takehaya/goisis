@@ -38,7 +38,10 @@ func run(logger *slog.Logger, apiListen string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	isis := server.NewIsisServer(server.WithLogger(logger))
+	isis, err := server.NewIsisServer(server.WithLogger(logger))
+	if err != nil {
+		return err
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle(server.NewConnectHandler(isis))
