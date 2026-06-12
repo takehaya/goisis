@@ -31,8 +31,10 @@ type IsisServer struct {
 	eventCh chan event
 	done    chan struct{}
 
-	// circuits is owned by the Serve loop after Serve starts.
+	// The following are owned by the Serve loop after Serve starts.
 	circuits []*circuit
+	dbs      map[packet.Level]*lsdb
+	levelCap levelSet // union of circuit levels, for the LSP IS-Type field
 }
 
 type mgmtOp struct {
@@ -54,6 +56,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		mgmtCh:    make(chan *mgmtOp, 1),
 		eventCh:   make(chan event, 256),
 		done:      make(chan struct{}),
+		dbs:       map[packet.Level]*lsdb{},
 	}
 	// Pseudonode octets are a single byte and must be nonzero and unique
 	// per box, so at most 255 circuits can be assigned distinct octets.
@@ -67,7 +70,14 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		}
 		// Pseudonode / extended-circuit IDs must be nonzero and unique
 		// per box; the 1-based circuit index serves both.
-		s.circuits = append(s.circuits, newCircuit(cfg, uint8(i+1), uint32(i+1))) //nolint:gosec // bounded by the 255 check above
+		c := newCircuit(cfg, uint8(i+1), uint32(i+1)) //nolint:gosec // bounded by the 255 check above
+		s.circuits = append(s.circuits, c)
+		for _, l := range cfg.levels() {
+			s.levelCap.add(l)
+			if s.dbs[l] == nil {
+				s.dbs[l] = newLSDB(l)
+			}
+		}
 	}
 	return s, nil
 }
@@ -92,11 +102,13 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 		}(c)
 	}
 
-	// Send an initial hello burst so adjacencies form promptly.
+	// Send an initial hello burst and originate our LSPs so neighbors and
+	// their databases learn about us promptly.
 	now := time.Now()
 	for _, c := range s.circuits {
 		s.sendHellos(c, now)
 	}
+	s.regenerateLSPs(false, now)
 
 	ticker := time.NewTicker(housekeepInterval)
 	defer ticker.Stop()
@@ -150,8 +162,8 @@ func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
 	}
 }
 
-// housekeeping runs periodic per-circuit maintenance: hello transmission and
-// holding-time expiry.
+// housekeeping runs periodic maintenance: hello transmission, holding-time
+// expiry, LSP aging/refresh, and flooding transmission.
 func (s *IsisServer) housekeeping(now time.Time) {
 	for _, c := range s.circuits {
 		if !now.Before(c.nextHello) {
@@ -159,6 +171,9 @@ func (s *IsisServer) housekeeping(now time.Time) {
 		}
 		s.expireAdjacencies(c, now)
 	}
+	s.ageLSPs(now)
+	s.refreshOwnLSPs(now)
+	s.floodTransmit(now)
 }
 
 // mgmtOperation runs f on the Serve loop and waits for its result. State
@@ -204,6 +219,19 @@ func (s *IsisServer) GetGlobal(ctx context.Context) (Global, error) {
 		return nil
 	})
 	return g, err
+}
+
+// ListLSDB returns a snapshot of the link-state database for every level.
+func (s *IsisServer) ListLSDB(ctx context.Context) ([]LSPInfo, error) {
+	var out []LSPInfo
+	err := s.mgmtOperation(ctx, func() error {
+		now := time.Now()
+		for _, db := range s.dbs {
+			out = append(out, db.snapshot(now)...)
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ListAdjacencies returns a snapshot of all adjacencies across all circuits.

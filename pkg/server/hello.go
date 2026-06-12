@@ -166,8 +166,12 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 		s.processLANHello(c, frame.Src, h)
 	case *packet.P2PHello:
 		s.processP2PHello(c, frame.Src, h)
-	default:
-		// LSPs/CSNPs/PSNPs are handled from M3 onward.
+	case *packet.LSP:
+		s.processLSP(c, frame.PDU, h, time.Now())
+	case *packet.CSNP:
+		s.processCSNP(c, h, time.Now())
+	case *packet.PSNP:
+		s.processPSNP(c, h, time.Now())
 	}
 }
 
@@ -215,11 +219,18 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
-	}
-	if prev != newState || (newState == AdjUp && electionChanged) {
-		s.electDIS(c, level)
-		// Triggered hello so the neighbor sees our echo / new DIS promptly.
+		// Triggered hello so the neighbor sees our echo promptly (speeds the
+		// three-way handshake); harmless even when no DIS decision changes.
 		s.sendOne(c, datalink.DestForLevel(level), s.buildLANHello(c, level))
+	}
+	// Re-run DIS election only when the set of Up adjacencies changes, or an
+	// Up neighbor's election attributes change. Electing while a neighbor is
+	// still in Init would have us briefly claim DIS (no Up neighbors yet) and
+	// then retract it, churning the LAN.
+	upChanged := (prev == AdjUp) != (newState == AdjUp)
+	if upChanged || (newState == AdjUp && electionChanged) {
+		s.electDIS(c, level)
+		s.regenerateLSPs(false, time.Now())
 	}
 }
 
@@ -269,6 +280,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
+		s.regenerateLSPs(false, time.Now())
 	}
 }
 
@@ -278,17 +290,23 @@ func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 		if adj := c.p2pAdj; adj != nil && expired(adj, now) {
 			s.logger.Info("p2p adjacency expired", "circuit", c.cfg.Name, "neighbor", adj.systemID)
 			c.p2pAdj = nil
+			s.regenerateLSPs(false, now)
 		}
 		return
 	}
+	changed := false
 	for _, level := range c.cfg.levels() {
 		for id, adj := range c.adjs[level] {
 			if expired(adj, now) {
 				s.logger.Info("adjacency expired", "circuit", c.cfg.Name, "level", level, "neighbor", id)
 				delete(c.adjs[level], id)
 				s.electDIS(c, level)
+				changed = true
 			}
 		}
+	}
+	if changed {
+		s.regenerateLSPs(false, now)
 	}
 }
 

@@ -196,6 +196,33 @@ func goisisSeesUp(t *testing.T, s *server.IsisServer, frrSysID packet.SystemID) 
 	return false
 }
 
+// goisisHasLSPFrom reports whether goisis's LSDB holds an LSP originated by
+// the given system id.
+func goisisHasLSPFrom(t *testing.T, s *server.IsisServer, sysID packet.SystemID) bool {
+	t.Helper()
+	lsps, err := s.ListLSDB(context.Background())
+	if err != nil {
+		return false
+	}
+	for _, l := range lsps {
+		if l.LSPID.NodeID().SystemID() == sysID && l.SequenceNumber > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// databaseContains reports whether FRR's IS-IS database output mentions the
+// given substring (an LSP ID or hostname).
+func (n *frrNode) databaseContains(t *testing.T, substr string) bool {
+	t.Helper()
+	out, err := exec.Command("docker", "exec", n.name, "vtysh", "-c", "show isis database").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), substr)
+}
+
 func waitUp(t *testing.T, what string, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(40 * time.Second)

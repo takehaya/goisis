@@ -19,6 +19,14 @@ type circuit struct {
 
 	dis       map[packet.Level]packet.NodeID // elected DIS LAN ID per level
 	nextHello time.Time
+
+	// Flooding flags per level (ISO 10589 7.3): srm[level][lspid] holds the
+	// earliest time to (re)send that LSP on this circuit; ssn[level][lspid]
+	// marks an LSP to report in the next PSNP. nextCSNP drives periodic
+	// CSNP transmission when this circuit is the DIS.
+	srm      map[packet.Level]map[packet.LSPID]time.Time
+	ssn      map[packet.Level]map[packet.LSPID]bool
+	nextCSNP map[packet.Level]time.Time
 }
 
 func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circuit {
@@ -28,11 +36,49 @@ func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circui
 		extCircID:    extCircID,
 		adjs:         map[packet.Level]map[packet.SystemID]*adjacency{},
 		dis:          map[packet.Level]packet.NodeID{},
+		srm:          map[packet.Level]map[packet.LSPID]time.Time{},
+		ssn:          map[packet.Level]map[packet.LSPID]bool{},
+		nextCSNP:     map[packet.Level]time.Time{},
 	}
 	for _, l := range cfg.levels() {
 		c.adjs[l] = map[packet.SystemID]*adjacency{}
+		c.srm[l] = map[packet.LSPID]time.Time{}
+		c.ssn[l] = map[packet.LSPID]bool{}
 	}
 	return c
+}
+
+// setSRM marks an LSP for transmission on this circuit at the given level.
+func (c *circuit) setSRM(level packet.Level, id packet.LSPID, when time.Time) {
+	if m := c.srm[level]; m != nil {
+		m[id] = when
+	}
+}
+
+// clearSRM stops retransmitting an LSP on this circuit.
+func (c *circuit) clearSRM(level packet.Level, id packet.LSPID) {
+	if m := c.srm[level]; m != nil {
+		delete(m, id)
+	}
+}
+
+// setSSN marks an LSP to be reported in the next PSNP on this circuit.
+func (c *circuit) setSSN(level packet.Level, id packet.LSPID) {
+	if m := c.ssn[level]; m != nil {
+		m[id] = true
+	}
+}
+
+func (c *circuit) clearSSN(level packet.Level, id packet.LSPID) {
+	if m := c.ssn[level]; m != nil {
+		delete(m, id)
+	}
+}
+
+// isDIS reports whether we are the elected DIS at a level on this broadcast
+// circuit.
+func (c *circuit) isDIS(level packet.Level, self packet.SystemID) bool {
+	return !c.cfg.P2P && c.dis[level].SystemID() == self && c.dis[level].PseudonodeID() != 0
 }
 
 // adjacencyInfos returns snapshots of all adjacencies on the circuit.

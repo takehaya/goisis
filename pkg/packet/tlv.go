@@ -15,6 +15,7 @@ const (
 	TLVTypePadding                TLVType = 8
 	TLVTypeLSPEntries             TLVType = 9
 	TLVTypeAuthentication         TLVType = 10
+	TLVTypePurgeOriginatorID      TLVType = 13
 	TLVTypeExtendedISReachability TLVType = 22
 	TLVTypeSRv6Locator            TLVType = 27
 	TLVTypeProtocolsSupported     TLVType = 129
@@ -94,6 +95,10 @@ func decodeTLVs(b []byte) ([]TLV, error) {
 	}
 	return out, nil
 }
+
+// MarshalTLVs renders a TLV area (without any PDU framing). It is exposed
+// for callers that assemble or diff TLV areas, such as LSP body comparison.
+func MarshalTLVs(tlvs []TLV) ([]byte, error) { return serializeTLVs(tlvs) }
 
 // serializeTLVs renders a TLV area in order.
 func serializeTLVs(tlvs []TLV) ([]byte, error) {
