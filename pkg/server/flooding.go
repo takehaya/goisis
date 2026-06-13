@@ -110,6 +110,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		lifetime: lsp.RemainingTime,
 		purgedAt: purgedAt,
 	}
+	s.markDirty()
 
 	// Flood to all other circuits; on the arrival circuit clear SRM and, on
 	// p2p, acknowledge.
@@ -138,6 +139,7 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 	}
 	db.entries[id] = &lspEntry{lsp: &lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
 	s.logger.Info("re-originate LSP", "level", level, "lsp", id, "seq", lsp.SequenceNumber)
+	s.markDirty()
 	s.floodLSP(level, id, nil, now)
 }
 

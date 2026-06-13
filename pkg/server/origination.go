@@ -29,6 +29,9 @@ func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 		s.regenerateNodeLSP(l, forceRefresh, now)
 		s.regeneratePseudonodeLSPs(l, forceRefresh, now)
 	}
+	// A topology/adjacency change warrants an SPF recompute even when our own
+	// LSP content is unchanged (e.g. a redundant next hop was lost).
+	s.markDirty()
 }
 
 // regenerateNodeLSP builds fragment 0 of this node's own LSP at a level.
@@ -68,6 +71,24 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	}
 	if len(neighbors) > 0 {
 		tlvs = append(tlvs, &packet.ExtendedISReachabilityTLV{Neighbors: neighbors})
+	}
+
+	// IP reachability: prefixes this node originates (TLV 135 for IPv4, 236
+	// for IPv6).
+	var v4 []packet.ExtendedIPReachEntry
+	var v6 []packet.IPv6ReachEntry
+	for _, p := range s.prefixes {
+		if p.Prefix.Addr().Is4() {
+			v4 = append(v4, packet.ExtendedIPReachEntry{Metric: p.Metric, Prefix: p.Prefix})
+		} else {
+			v6 = append(v6, packet.IPv6ReachEntry{Metric: p.Metric, Prefix: p.Prefix})
+		}
+	}
+	if len(v4) > 0 {
+		tlvs = append(tlvs, &packet.ExtendedIPReachabilityTLV{Prefixes: v4})
+	}
+	if len(v6) > 0 {
+		tlvs = append(tlvs, &packet.IPv6ReachabilityTLV{Prefixes: v6})
 	}
 
 	att := level == packet.Level1 && s.levelCap.has(packet.Level2)
@@ -143,6 +164,7 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
 	s.logger.Info("originate LSP", "level", level, "lsp", id, "seq", seq)
+	s.markDirty()
 	s.floodLSP(level, id, nil, now)
 }
 

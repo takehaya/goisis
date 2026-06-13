@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -45,6 +46,11 @@ type adjacency struct {
 	// p2p three-way (RFC 5303): the neighbor's extended local circuit ID.
 	neighborExtCircID uint32
 	levels            levelSet
+
+	// Neighbor interface addresses from its hellos (TLV 132 / 232), used to
+	// resolve SPF next-hop gateways. IPv6 are link-local.
+	neighborIPv4 []netip.Addr
+	neighborIPv6 []netip.Addr
 }
 
 // AdjacencyInfo is an exported snapshot of an adjacency.

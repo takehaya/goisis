@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"net/netip"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
@@ -215,6 +216,8 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.lastHeard = time.Now()
 	adj.state = newState
 	adj.levels.add(level)
+	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
+	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
 
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
@@ -272,6 +275,8 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	adj.lastHeard = time.Now()
 	adj.levels = common
 	adj.state = newState
+	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
+	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
 	if three != nil && three.HasLocal {
 		adj.neighborExtCircID = three.ExtLocalCircuitID
 	}
@@ -316,6 +321,24 @@ func expired(adj *adjacency, now time.Time) bool {
 }
 
 // --- TLV helpers ---
+
+func ipv4AddrsOf(tlvs []packet.TLV) []netip.Addr {
+	for _, t := range tlvs {
+		if a, ok := t.(*packet.IPInterfaceAddressesTLV); ok {
+			return a.Addresses
+		}
+	}
+	return nil
+}
+
+func ipv6AddrsOf(tlvs []packet.TLV) []netip.Addr {
+	for _, t := range tlvs {
+		if a, ok := t.(*packet.IPv6InterfaceAddressesTLV); ok {
+			return a.Addresses
+		}
+	}
+	return nil
+}
 
 func areaAddressesOf(tlvs []packet.TLV) []packet.AreaAddress {
 	for _, t := range tlvs {

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/takehaya/goisis/internal/version"
+	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
@@ -26,16 +28,25 @@ type IsisServer struct {
 	systemID  packet.SystemID
 	areaAddrs []packet.AreaAddress
 	hostname  string
+	prefixes  []AdvertisedPrefix
 
 	mgmtCh  chan *mgmtOp
 	eventCh chan event
 	done    chan struct{}
 
 	// The following are owned by the Serve loop after Serve starts.
-	circuits []*circuit
-	dbs      map[packet.Level]*lsdb
-	levelCap levelSet // union of circuit levels, for the LSP IS-Type field
+	circuits  []*circuit
+	dbs       map[packet.Level]*lsdb
+	levelCap  levelSet // union of circuit levels, for the LSP IS-Type field
+	fib       fib.FIB
+	rib       map[netip.Prefix]RouteInfo
+	connected map[netip.Prefix]bool // directly-connected prefixes (never installed)
+	spfDirty  bool                  // a topology change needs an SPF recompute
 }
+
+// markDirty requests an SPF/RIB recompute on the next loop iteration. Called
+// from LSDB mutations on the Serve goroutine.
+func (s *IsisServer) markDirty() { s.spfDirty = true }
 
 type mgmtOp struct {
 	f     func() error
@@ -53,10 +64,20 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		systemID:  o.systemID,
 		areaAddrs: o.areaAddrs,
 		hostname:  o.hostname,
+		prefixes:  o.prefixes,
 		mgmtCh:    make(chan *mgmtOp, 1),
 		eventCh:   make(chan event, 256),
 		done:      make(chan struct{}),
 		dbs:       map[packet.Level]*lsdb{},
+		fib:       o.fib,
+		rib:       map[netip.Prefix]RouteInfo{},
+		connected: map[netip.Prefix]bool{},
+	}
+	if s.fib == nil {
+		s.fib = fib.Noop{}
+	}
+	for _, p := range o.connected {
+		s.connected[p] = true
 	}
 	// Pseudonode octets are a single byte and must be nonzero and unique
 	// per box, so at most 255 circuits can be assigned distinct octets.
@@ -110,6 +131,12 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	}
 	s.regenerateLSPs(false, now)
 
+	// Drop any routes a previous incarnation left in the FIB but that we have
+	// not (yet) recomputed.
+	if err := s.fib.Sweep(func(p netip.Prefix) bool { _, ok := s.rib[p]; return ok }); err != nil {
+		s.logger.Error("fib startup sweep", "error", err)
+	}
+
 	ticker := time.NewTicker(housekeepInterval)
 	defer ticker.Stop()
 
@@ -124,6 +151,12 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 			s.handleEvent(ev)
 		case t := <-ticker.C:
 			s.housekeeping(t)
+		}
+		// Recompute routes promptly after any topology change, rather than
+		// waiting for the next housekeeping tick.
+		if s.spfDirty {
+			s.spfDirty = false
+			s.updateRIB(time.Now())
 		}
 	}
 }

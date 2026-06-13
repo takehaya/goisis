@@ -18,27 +18,42 @@ import (
 
 	"github.com/takehaya/goisis/gen/goisis/v1alpha1/goisisv1alpha1connect"
 	"github.com/takehaya/goisis/internal/version"
+	"github.com/takehaya/goisis/pkg/config"
 	"github.com/takehaya/goisis/pkg/server"
 )
 
 func main() {
 	apiListen := flag.String("api-listen", "127.0.0.1:50051", "listen address for the Connect/gRPC API")
+	configFile := flag.String("f", "", "path to the configuration file")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
-	if err := run(logger, *apiListen); err != nil {
+	if err := run(logger, *apiListen, *configFile); err != nil {
 		logger.Error("goisisd exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger, apiListen string) error {
+func run(logger *slog.Logger, apiListen, configFile string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	isis, err := server.NewIsisServer(server.WithLogger(logger))
+	opts := []server.ServerOption{server.WithLogger(logger)}
+	if configFile != "" {
+		cfg, err := config.Load(configFile)
+		if err != nil {
+			return err
+		}
+		cfgOpts, err := cfg.Options()
+		if err != nil {
+			return err
+		}
+		opts = append(opts, cfgOpts...)
+	}
+
+	isis, err := server.NewIsisServer(opts...)
 	if err != nil {
 		return err
 	}

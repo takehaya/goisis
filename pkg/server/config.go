@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
+	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
@@ -19,6 +20,7 @@ const (
 	DefaultHelloInterval     = 3 * time.Second
 	DefaultHoldingMultiplier = 10
 	DefaultPriority          = 64
+	DefaultMetric            = 10
 	housekeepInterval        = 1 * time.Second
 )
 
@@ -123,7 +125,7 @@ func (c *CircuitConfig) applyDefaults() error {
 		c.HoldingMultiplier = DefaultHoldingMultiplier
 	}
 	if c.Metric == 0 {
-		c.Metric = 10
+		c.Metric = DefaultMetric
 	}
 	return nil
 }
@@ -131,12 +133,21 @@ func (c *CircuitConfig) applyDefaults() error {
 // ServerOption configures an IsisServer.
 type ServerOption func(*options)
 
+// AdvertisedPrefix is a prefix originated in this node's LSP (TLV 135/236).
+type AdvertisedPrefix struct {
+	Prefix netip.Prefix
+	Metric uint32
+}
+
 type options struct {
 	logger      *slog.Logger
 	systemID    packet.SystemID
 	areaAddrs   []packet.AreaAddress
 	hostname    string
 	circuits    []CircuitConfig
+	prefixes    []AdvertisedPrefix
+	connected   []netip.Prefix
+	fib         fib.FIB
 	hasSystemID bool
 }
 
@@ -163,4 +174,25 @@ func WithHostname(name string) ServerOption {
 // WithCircuit adds a circuit to the server.
 func WithCircuit(cfg CircuitConfig) ServerOption {
 	return func(o *options) { o.circuits = append(o.circuits, cfg) }
+}
+
+// WithAdvertisedPrefix originates a prefix in this node's LSP. The metric
+// defaults to 0 when unset.
+func WithAdvertisedPrefix(prefix netip.Prefix, metric uint32) ServerOption {
+	return func(o *options) {
+		o.prefixes = append(o.prefixes, AdvertisedPrefix{Prefix: prefix, Metric: metric})
+	}
+}
+
+// WithFIB sets the forwarding sink that SPF results are programmed into.
+// Defaults to fib.Noop.
+func WithFIB(f fib.FIB) ServerOption {
+	return func(o *options) { o.fib = f }
+}
+
+// WithConnectedPrefix marks a prefix as directly connected: it is never
+// installed into the FIB (the kernel already has the connected route), even
+// when a neighbor also advertises it.
+func WithConnectedPrefix(prefix netip.Prefix) ServerOption {
+	return func(o *options) { o.connected = append(o.connected, prefix.Masked()) }
 }

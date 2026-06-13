@@ -19,9 +19,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Pull FRR image
-        run: docker pull quay.io/frrouting/frr:10.6.1
+      - name: Pull images
+        run: |
+          docker pull quay.io/frrouting/frr:10.6.1
+          docker pull alpine:3.22
       - name: Build interop tests
         run: go test -c -o /tmp/interop.test ./test/interop
-      - name: Run interop (needs root for AF_PACKET + veth)
-        run: sudo /tmp/interop.test -test.v -test.timeout 8m
+      - name: Run interop (needs root for AF_PACKET + veth; PATH kept for `go`)
+        run: sudo env "PATH=$PATH" /tmp/interop.test -test.v -test.timeout 12m

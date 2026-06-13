@@ -35,6 +35,7 @@ func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: 0, own: true, purgedAt: now}
 	s.logger.Info("purge LSP", "level", level, "lsp", id, "seq", seq)
+	s.markDirty()
 	s.floodLSP(level, id, nil, now)
 }
 
@@ -48,6 +49,7 @@ func (s *IsisServer) ageLSPs(now time.Time) {
 			case !e.purgedAt.IsZero():
 				if now.Sub(e.purgedAt) >= zeroAgeSeconds*time.Second {
 					delete(db.entries, id)
+					s.markDirty()
 				}
 			case e.own && now.Sub(e.inserted) >= refreshSeconds*time.Second:
 				// handled by refreshOwnLSPs to keep aging side-effect-free
@@ -69,6 +71,7 @@ func (s *IsisServer) expirePurge(level packet.Level, id packet.LSPID, e *lspEntr
 	e.lifetime = 0
 	e.inserted = now
 	s.logger.Info("expire LSP", "level", level, "lsp", id)
+	s.markDirty()
 	s.floodLSP(level, id, nil, now)
 }
 
