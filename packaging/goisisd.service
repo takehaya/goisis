@@ -1,0 +1,27 @@
+[Unit]
+Description=goisis IS-IS routing daemon
+Documentation=https://github.com/takehaya/goisis
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/goisisd -f /etc/goisis/goisisd.yaml
+Restart=on-failure
+RestartSec=2
+
+# goisisd needs CAP_NET_RAW to open AF_PACKET sockets, and CAP_NET_ADMIN to
+# program the kernel FIB (when fib: true). Granting only these ambient
+# capabilities avoids running as full root.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=true
+
+# Hardening.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

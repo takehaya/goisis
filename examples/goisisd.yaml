@@ -1,7 +1,7 @@
 # Example goisisd configuration. Run: goisisd -f goisisd.yaml
 #
-# The NET encodes the area address and 6-octet system ID (last octet, the
-# NSEL, must be 00).
+# The NET encodes the area address and the 6-octet system ID (the last octet,
+# the NSEL, must be 00).
 net: 49.0001.0000.0000.0001.00
 hostname: r1
 
@@ -10,15 +10,37 @@ hostname: r1
 # consuming routes via the WatchEvent API into your own dataplane).
 fib: true
 
+# Set the overload bit for this long after startup, then clear it, so peers
+# route no transit traffic through this node until routes have settled.
+# overload-on-startup: 30s
+
 circuits:
   - interface: eth0
-    level: "12"     # "1", "2", or "12"
+    level: "12"     # "1", "2", or "12" (default "12")
     # p2p: true     # point-to-point instead of broadcast/LAN
-    # priority: 64  # DIS election priority (0-127)
-    # metric: 10
+    # priority: 64  # DIS election priority on a LAN (0-127)
+    # metric: 10    # circuit wide metric
 
 # Static prefixes to originate (connected subnets of the circuits above are
 # advertised automatically).
 prefixes:
   - 10.1.1.1/32
   - 2001:db8:1::1/128
+
+# SRv6 locators (RFC 9352). Each is advertised in the SRv6 Locator TLV with a
+# local End SID at its base address; with fib:true that End SID is installed as
+# a seg6local route.
+srv6:
+  locators:
+    - fc00:0:1::/48
+
+# Flexible Algorithms (RFC 9350). The node participates in each listed algo
+# (advertised in the SR-Algorithm sub-TLV); set advertise:true to also originate
+# the definition (FAD). An optional per-algo SRv6 locator binds a locator to the
+# algorithm so its route is computed over that algorithm's pruned topology.
+flex-algo:
+  - algo: 128
+    metric-type: igp   # igp (default), delay, or te
+    priority: 100
+    advertise: true
+    locator: fc00:0:128::/48
