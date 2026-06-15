@@ -176,6 +176,7 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 			s.logger.Error("send LSP", "circuit", c.cfg.Name, "lsp", id, "error", err)
 			continue
 		}
+		s.metrics.FloodTx(c.cfg.Name)
 		if c.cfg.P2P {
 			c.srm[level][id] = now.Add(minLSPTransmissionInterval)
 		} else {

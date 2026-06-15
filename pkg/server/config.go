@@ -224,6 +224,7 @@ type options struct {
 	locators          []SRv6LocatorConfig
 	flexAlgos         []FlexAlgoConfig
 	fib               fib.FIB
+	metrics           Metrics
 	overloadOnStartup time.Duration
 	hasSystemID       bool
 }
@@ -265,6 +266,12 @@ func WithAdvertisedPrefix(prefix netip.Prefix, metric uint32) ServerOption {
 // Defaults to fib.Noop.
 func WithFIB(f fib.FIB) ServerOption {
 	return func(o *options) { o.fib = f }
+}
+
+// WithMetrics sets the observability sink. Defaults to NoopMetrics. Wire a
+// Prometheus collector with pkg/metrics, or supply a custom implementation.
+func WithMetrics(m Metrics) ServerOption {
+	return func(o *options) { o.metrics = m }
 }
 
 // WithConnectedPrefix marks a prefix as directly connected: it is never

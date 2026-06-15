@@ -167,6 +167,8 @@ type tentEntry struct {
 // connectivity check, the overload bit (no transit through an overloaded node),
 // and ECMP are honored.
 func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) map[netip.Prefix]route {
+	t0 := time.Now()
+	defer func() { s.metrics.SPFRun(levelLabel(level), time.Since(t0)) }()
 	nodes := s.buildTopology(level, algo, now)
 	self := nodeID(s.systemID, 0)
 	if nodes[self] == nil {

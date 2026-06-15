@@ -41,6 +41,7 @@ type IsisServer struct {
 	dbs        map[packet.Level]*lsdb
 	levelCap   levelSet // union of circuit levels, for the LSP IS-Type field
 	fib        fib.FIB
+	metrics    Metrics
 	rib        map[netip.Prefix]RouteInfo
 	connected  map[netip.Prefix]bool // directly-connected prefixes (never installed)
 	fibPending map[netip.Prefix]bool // routes whose last FIB write failed; retried
@@ -80,6 +81,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		done:              make(chan struct{}),
 		dbs:               map[packet.Level]*lsdb{},
 		fib:               o.fib,
+		metrics:           o.metrics,
 		rib:               map[netip.Prefix]RouteInfo{},
 		connected:         map[netip.Prefix]bool{},
 		fibPending:        map[netip.Prefix]bool{},
@@ -89,6 +91,9 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	}
 	if s.fib == nil {
 		s.fib = fib.Noop{}
+	}
+	if s.metrics == nil {
+		s.metrics = NoopMetrics{}
 	}
 	for _, p := range o.connected {
 		s.connected[p] = true
@@ -309,6 +314,9 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	s.floodTransmit(now)
 	if len(s.locators) > 0 {
 		s.installLocalSIDs()
+	}
+	for level, db := range s.dbs {
+		s.metrics.LSDBSize(levelLabel(level), len(db.entries))
 	}
 }
 

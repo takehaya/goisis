@@ -222,6 +222,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
+		s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(level), newState.String())
 		s.emitAdjacency(c.infoFor(adj, level))
 		// Triggered hello so the neighbor sees our echo promptly (speeds the
 		// three-way handshake); harmless even when no DIS decision changes.
@@ -286,6 +287,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {
+			s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(l), newState.String())
 			s.emitAdjacency(c.infoFor(adj, l))
 		}
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
