@@ -358,6 +358,25 @@ func (s *IsisServer) ListAdjacencies(ctx context.Context) ([]AdjacencyInfo, erro
 	return out, err
 }
 
+// LocatorInfo describes an advertised SRv6 locator.
+type LocatorInfo struct {
+	Prefix    netip.Prefix
+	Algorithm uint8
+	EndSID    netip.Addr
+}
+
+// ListLocators returns the SRv6 locators this node advertises.
+func (s *IsisServer) ListLocators(ctx context.Context) ([]LocatorInfo, error) {
+	var out []LocatorInfo
+	err := s.mgmtOperation(ctx, func() error {
+		for _, lc := range s.locators {
+			out = append(out, LocatorInfo{Prefix: lc.Prefix.Masked(), Algorithm: lc.Algo, EndSID: lc.endSID()})
+		}
+		return nil
+	})
+	return out, err
+}
+
 // netString renders the server's NET for diagnostics.
 func (s *IsisServer) netString() string {
 	if len(s.areaAddrs) == 0 {

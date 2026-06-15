@@ -524,11 +524,14 @@ func (x *NextHop) GetGateway() string {
 
 // Route is one computed route.
 type Route struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Prefix        string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
-	Metric        uint32                 `protobuf:"varint,2,opt,name=metric,proto3" json:"metric,omitempty"`
-	Level         Level                  `protobuf:"varint,3,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
-	NextHops      []*NextHop             `protobuf:"bytes,4,rep,name=next_hops,json=nextHops,proto3" json:"next_hops,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Prefix   string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Metric   uint32                 `protobuf:"varint,2,opt,name=metric,proto3" json:"metric,omitempty"`
+	Level    Level                  `protobuf:"varint,3,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
+	NextHops []*NextHop             `protobuf:"bytes,4,rep,name=next_hops,json=nextHops,proto3" json:"next_hops,omitempty"`
+	// algorithm is the IGP algorithm the route was computed under: 0 = normal
+	// SPF, 128-255 = Flexible Algorithm (RFC 9350).
+	Algorithm     uint32 `protobuf:"varint,5,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -591,6 +594,218 @@ func (x *Route) GetNextHops() []*NextHop {
 	return nil
 }
 
+func (x *Route) GetAlgorithm() uint32 {
+	if x != nil {
+		return x.Algorithm
+	}
+	return 0
+}
+
+// Locator is an SRv6 locator advertised by this node.
+type Locator struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Prefix string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// algorithm is 0 (normal SPF) or a Flexible Algorithm (128-255).
+	Algorithm uint32 `protobuf:"varint,2,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	// end_sid is the local End SID instantiated at the locator's base address.
+	EndSid        string `protobuf:"bytes,3,opt,name=end_sid,json=endSid,proto3" json:"end_sid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Locator) Reset() {
+	*x = Locator{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Locator) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Locator) ProtoMessage() {}
+
+func (x *Locator) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Locator.ProtoReflect.Descriptor instead.
+func (*Locator) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *Locator) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *Locator) GetAlgorithm() uint32 {
+	if x != nil {
+		return x.Algorithm
+	}
+	return 0
+}
+
+func (x *Locator) GetEndSid() string {
+	if x != nil {
+		return x.EndSid
+	}
+	return ""
+}
+
+// FlexAlgoDefinition is the elected Flexible Algorithm Definition (RFC 9350).
+type FlexAlgoDefinition struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// metric_type: 0 = IGP, 1 = min unidirectional link delay, 2 = TE.
+	MetricType uint32 `protobuf:"varint,1,opt,name=metric_type,json=metricType,proto3" json:"metric_type,omitempty"`
+	CalcType   uint32 `protobuf:"varint,2,opt,name=calc_type,json=calcType,proto3" json:"calc_type,omitempty"`
+	Priority   uint32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
+	// advertiser is the System ID of the node whose definition won the election.
+	Advertiser    string `protobuf:"bytes,4,opt,name=advertiser,proto3" json:"advertiser,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlexAlgoDefinition) Reset() {
+	*x = FlexAlgoDefinition{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlexAlgoDefinition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlexAlgoDefinition) ProtoMessage() {}
+
+func (x *FlexAlgoDefinition) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlexAlgoDefinition.ProtoReflect.Descriptor instead.
+func (*FlexAlgoDefinition) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *FlexAlgoDefinition) GetMetricType() uint32 {
+	if x != nil {
+		return x.MetricType
+	}
+	return 0
+}
+
+func (x *FlexAlgoDefinition) GetCalcType() uint32 {
+	if x != nil {
+		return x.CalcType
+	}
+	return 0
+}
+
+func (x *FlexAlgoDefinition) GetPriority() uint32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *FlexAlgoDefinition) GetAdvertiser() string {
+	if x != nil {
+		return x.Advertiser
+	}
+	return ""
+}
+
+// FlexAlgo is one Flexible Algorithm's state at a level.
+type FlexAlgo struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Algorithm uint32                 `protobuf:"varint,1,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	Level     Level                  `protobuf:"varint,2,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
+	// definition is the elected FAD, unset if no node advertises one.
+	Definition *FlexAlgoDefinition `protobuf:"bytes,3,opt,name=definition,proto3" json:"definition,omitempty"`
+	// participants are the System IDs participating in this algorithm.
+	Participants  []string `protobuf:"bytes,4,rep,name=participants,proto3" json:"participants,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlexAlgo) Reset() {
+	*x = FlexAlgo{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlexAlgo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlexAlgo) ProtoMessage() {}
+
+func (x *FlexAlgo) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlexAlgo.ProtoReflect.Descriptor instead.
+func (*FlexAlgo) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *FlexAlgo) GetAlgorithm() uint32 {
+	if x != nil {
+		return x.Algorithm
+	}
+	return 0
+}
+
+func (x *FlexAlgo) GetLevel() Level {
+	if x != nil {
+		return x.Level
+	}
+	return Level_LEVEL_UNSPECIFIED
+}
+
+func (x *FlexAlgo) GetDefinition() *FlexAlgoDefinition {
+	if x != nil {
+		return x.Definition
+	}
+	return nil
+}
+
+func (x *FlexAlgo) GetParticipants() []string {
+	if x != nil {
+		return x.Participants
+	}
+	return nil
+}
+
 type ListCircuitsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -599,7 +814,7 @@ type ListCircuitsRequest struct {
 
 func (x *ListCircuitsRequest) Reset() {
 	*x = ListCircuitsRequest{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -611,7 +826,7 @@ func (x *ListCircuitsRequest) String() string {
 func (*ListCircuitsRequest) ProtoMessage() {}
 
 func (x *ListCircuitsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -624,7 +839,7 @@ func (x *ListCircuitsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCircuitsRequest.ProtoReflect.Descriptor instead.
 func (*ListCircuitsRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{8}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{11}
 }
 
 type ListCircuitsResponse struct {
@@ -636,7 +851,7 @@ type ListCircuitsResponse struct {
 
 func (x *ListCircuitsResponse) Reset() {
 	*x = ListCircuitsResponse{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -648,7 +863,7 @@ func (x *ListCircuitsResponse) String() string {
 func (*ListCircuitsResponse) ProtoMessage() {}
 
 func (x *ListCircuitsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -661,7 +876,7 @@ func (x *ListCircuitsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCircuitsResponse.ProtoReflect.Descriptor instead.
 func (*ListCircuitsResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{9}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListCircuitsResponse) GetCircuits() []*Circuit {
@@ -679,7 +894,7 @@ type ListAdjacenciesRequest struct {
 
 func (x *ListAdjacenciesRequest) Reset() {
 	*x = ListAdjacenciesRequest{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -691,7 +906,7 @@ func (x *ListAdjacenciesRequest) String() string {
 func (*ListAdjacenciesRequest) ProtoMessage() {}
 
 func (x *ListAdjacenciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -704,7 +919,7 @@ func (x *ListAdjacenciesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAdjacenciesRequest.ProtoReflect.Descriptor instead.
 func (*ListAdjacenciesRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{10}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{13}
 }
 
 type ListAdjacenciesResponse struct {
@@ -716,7 +931,7 @@ type ListAdjacenciesResponse struct {
 
 func (x *ListAdjacenciesResponse) Reset() {
 	*x = ListAdjacenciesResponse{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -728,7 +943,7 @@ func (x *ListAdjacenciesResponse) String() string {
 func (*ListAdjacenciesResponse) ProtoMessage() {}
 
 func (x *ListAdjacenciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -741,7 +956,7 @@ func (x *ListAdjacenciesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAdjacenciesResponse.ProtoReflect.Descriptor instead.
 func (*ListAdjacenciesResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{11}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListAdjacenciesResponse) GetAdjacencies() []*Adjacency {
@@ -759,7 +974,7 @@ type GetLsdbRequest struct {
 
 func (x *GetLsdbRequest) Reset() {
 	*x = GetLsdbRequest{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -771,7 +986,7 @@ func (x *GetLsdbRequest) String() string {
 func (*GetLsdbRequest) ProtoMessage() {}
 
 func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -784,7 +999,7 @@ func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLsdbRequest.ProtoReflect.Descriptor instead.
 func (*GetLsdbRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{12}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{15}
 }
 
 type GetLsdbResponse struct {
@@ -796,7 +1011,7 @@ type GetLsdbResponse struct {
 
 func (x *GetLsdbResponse) Reset() {
 	*x = GetLsdbResponse{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -808,7 +1023,7 @@ func (x *GetLsdbResponse) String() string {
 func (*GetLsdbResponse) ProtoMessage() {}
 
 func (x *GetLsdbResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,7 +1036,7 @@ func (x *GetLsdbResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLsdbResponse.ProtoReflect.Descriptor instead.
 func (*GetLsdbResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{13}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetLsdbResponse) GetLsps() []*Lsp {
@@ -839,7 +1054,7 @@ type ListRoutesRequest struct {
 
 func (x *ListRoutesRequest) Reset() {
 	*x = ListRoutesRequest{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +1066,7 @@ func (x *ListRoutesRequest) String() string {
 func (*ListRoutesRequest) ProtoMessage() {}
 
 func (x *ListRoutesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +1079,7 @@ func (x *ListRoutesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutesRequest.ProtoReflect.Descriptor instead.
 func (*ListRoutesRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{14}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{17}
 }
 
 type ListRoutesResponse struct {
@@ -876,7 +1091,7 @@ type ListRoutesResponse struct {
 
 func (x *ListRoutesResponse) Reset() {
 	*x = ListRoutesResponse{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +1103,7 @@ func (x *ListRoutesResponse) String() string {
 func (*ListRoutesResponse) ProtoMessage() {}
 
 func (x *ListRoutesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,12 +1116,172 @@ func (x *ListRoutesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutesResponse.ProtoReflect.Descriptor instead.
 func (*ListRoutesResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{15}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ListRoutesResponse) GetRoutes() []*Route {
 	if x != nil {
 		return x.Routes
+	}
+	return nil
+}
+
+type ListLocatorsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListLocatorsRequest) Reset() {
+	*x = ListLocatorsRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListLocatorsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListLocatorsRequest) ProtoMessage() {}
+
+func (x *ListLocatorsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListLocatorsRequest.ProtoReflect.Descriptor instead.
+func (*ListLocatorsRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{19}
+}
+
+type ListLocatorsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Locators      []*Locator             `protobuf:"bytes,1,rep,name=locators,proto3" json:"locators,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListLocatorsResponse) Reset() {
+	*x = ListLocatorsResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListLocatorsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListLocatorsResponse) ProtoMessage() {}
+
+func (x *ListLocatorsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListLocatorsResponse.ProtoReflect.Descriptor instead.
+func (*ListLocatorsResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListLocatorsResponse) GetLocators() []*Locator {
+	if x != nil {
+		return x.Locators
+	}
+	return nil
+}
+
+type ListFlexAlgosRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListFlexAlgosRequest) Reset() {
+	*x = ListFlexAlgosRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListFlexAlgosRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListFlexAlgosRequest) ProtoMessage() {}
+
+func (x *ListFlexAlgosRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListFlexAlgosRequest.ProtoReflect.Descriptor instead.
+func (*ListFlexAlgosRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{21}
+}
+
+type ListFlexAlgosResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FlexAlgos     []*FlexAlgo            `protobuf:"bytes,1,rep,name=flex_algos,json=flexAlgos,proto3" json:"flex_algos,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListFlexAlgosResponse) Reset() {
+	*x = ListFlexAlgosResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListFlexAlgosResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListFlexAlgosResponse) ProtoMessage() {}
+
+func (x *ListFlexAlgosResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListFlexAlgosResponse.ProtoReflect.Descriptor instead.
+func (*ListFlexAlgosResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ListFlexAlgosResponse) GetFlexAlgos() []*FlexAlgo {
+	if x != nil {
+		return x.FlexAlgos
 	}
 	return nil
 }
@@ -919,7 +1294,7 @@ type WatchEventRequest struct {
 
 func (x *WatchEventRequest) Reset() {
 	*x = WatchEventRequest{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -931,7 +1306,7 @@ func (x *WatchEventRequest) String() string {
 func (*WatchEventRequest) ProtoMessage() {}
 
 func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -944,7 +1319,7 @@ func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventRequest.ProtoReflect.Descriptor instead.
 func (*WatchEventRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{16}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{23}
 }
 
 type WatchEventResponse struct {
@@ -960,7 +1335,7 @@ type WatchEventResponse struct {
 
 func (x *WatchEventResponse) Reset() {
 	*x = WatchEventResponse{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -972,7 +1347,7 @@ func (x *WatchEventResponse) String() string {
 func (*WatchEventResponse) ProtoMessage() {}
 
 func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -985,7 +1360,7 @@ func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventResponse.ProtoReflect.Descriptor instead.
 func (*WatchEventResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{17}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *WatchEventResponse) GetEvent() isWatchEventResponse_Event {
@@ -1039,7 +1414,7 @@ type AdjacencyEvent struct {
 
 func (x *AdjacencyEvent) Reset() {
 	*x = AdjacencyEvent{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1051,7 +1426,7 @@ func (x *AdjacencyEvent) String() string {
 func (*AdjacencyEvent) ProtoMessage() {}
 
 func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1064,7 +1439,7 @@ func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjacencyEvent.ProtoReflect.Descriptor instead.
 func (*AdjacencyEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{18}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AdjacencyEvent) GetAdjacency() *Adjacency {
@@ -1086,7 +1461,7 @@ type RouteEvent struct {
 
 func (x *RouteEvent) Reset() {
 	*x = RouteEvent{}
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1098,7 +1473,7 @@ func (x *RouteEvent) String() string {
 func (*RouteEvent) ProtoMessage() {}
 
 func (x *RouteEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1111,7 +1486,7 @@ func (x *RouteEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteEvent.ProtoReflect.Descriptor instead.
 func (*RouteEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{19}
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RouteEvent) GetRoute() *Route {
@@ -1163,12 +1538,32 @@ const file_goisis_v1alpha1_goisis_proto_rawDesc = "" +
 	"\x03own\x18\x06 \x01(\bR\x03own\"A\n" +
 	"\aNextHop\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x18\n" +
-	"\agateway\x18\x02 \x01(\tR\agateway\"\x9c\x01\n" +
+	"\agateway\x18\x02 \x01(\tR\agateway\"\xba\x01\n" +
 	"\x05Route\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x16\n" +
 	"\x06metric\x18\x02 \x01(\rR\x06metric\x12,\n" +
 	"\x05level\x18\x03 \x01(\x0e2\x16.goisis.v1alpha1.LevelR\x05level\x125\n" +
-	"\tnext_hops\x18\x04 \x03(\v2\x18.goisis.v1alpha1.NextHopR\bnextHops\"\x15\n" +
+	"\tnext_hops\x18\x04 \x03(\v2\x18.goisis.v1alpha1.NextHopR\bnextHops\x12\x1c\n" +
+	"\talgorithm\x18\x05 \x01(\rR\talgorithm\"X\n" +
+	"\aLocator\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x1c\n" +
+	"\talgorithm\x18\x02 \x01(\rR\talgorithm\x12\x17\n" +
+	"\aend_sid\x18\x03 \x01(\tR\x06endSid\"\x8e\x01\n" +
+	"\x12FlexAlgoDefinition\x12\x1f\n" +
+	"\vmetric_type\x18\x01 \x01(\rR\n" +
+	"metricType\x12\x1b\n" +
+	"\tcalc_type\x18\x02 \x01(\rR\bcalcType\x12\x1a\n" +
+	"\bpriority\x18\x03 \x01(\rR\bpriority\x12\x1e\n" +
+	"\n" +
+	"advertiser\x18\x04 \x01(\tR\n" +
+	"advertiser\"\xbf\x01\n" +
+	"\bFlexAlgo\x12\x1c\n" +
+	"\talgorithm\x18\x01 \x01(\rR\talgorithm\x12,\n" +
+	"\x05level\x18\x02 \x01(\x0e2\x16.goisis.v1alpha1.LevelR\x05level\x12C\n" +
+	"\n" +
+	"definition\x18\x03 \x01(\v2#.goisis.v1alpha1.FlexAlgoDefinitionR\n" +
+	"definition\x12\"\n" +
+	"\fparticipants\x18\x04 \x03(\tR\fparticipants\"\x15\n" +
 	"\x13ListCircuitsRequest\"L\n" +
 	"\x14ListCircuitsResponse\x124\n" +
 	"\bcircuits\x18\x01 \x03(\v2\x18.goisis.v1alpha1.CircuitR\bcircuits\"\x18\n" +
@@ -1180,7 +1575,14 @@ const file_goisis_v1alpha1_goisis_proto_rawDesc = "" +
 	"\x04lsps\x18\x01 \x03(\v2\x14.goisis.v1alpha1.LspR\x04lsps\"\x13\n" +
 	"\x11ListRoutesRequest\"D\n" +
 	"\x12ListRoutesResponse\x12.\n" +
-	"\x06routes\x18\x01 \x03(\v2\x16.goisis.v1alpha1.RouteR\x06routes\"\x13\n" +
+	"\x06routes\x18\x01 \x03(\v2\x16.goisis.v1alpha1.RouteR\x06routes\"\x15\n" +
+	"\x13ListLocatorsRequest\"L\n" +
+	"\x14ListLocatorsResponse\x124\n" +
+	"\blocators\x18\x01 \x03(\v2\x18.goisis.v1alpha1.LocatorR\blocators\"\x16\n" +
+	"\x14ListFlexAlgosRequest\"Q\n" +
+	"\x15ListFlexAlgosResponse\x128\n" +
+	"\n" +
+	"flex_algos\x18\x01 \x03(\v2\x19.goisis.v1alpha1.FlexAlgoR\tflexAlgos\"\x13\n" +
 	"\x11WatchEventRequest\"\x93\x01\n" +
 	"\x12WatchEventResponse\x12?\n" +
 	"\tadjacency\x18\x01 \x01(\v2\x1f.goisis.v1alpha1.AdjacencyEventH\x00R\tadjacency\x123\n" +
@@ -1195,14 +1597,16 @@ const file_goisis_v1alpha1_goisis_proto_rawDesc = "" +
 	"\x05Level\x12\x15\n" +
 	"\x11LEVEL_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aLEVEL_1\x10\x01\x12\v\n" +
-	"\aLEVEL_2\x10\x022\x9c\x04\n" +
+	"\aLEVEL_2\x10\x022\xd9\x05\n" +
 	"\vIsisService\x12L\n" +
 	"\aGetIsis\x12\x1f.goisis.v1alpha1.GetIsisRequest\x1a .goisis.v1alpha1.GetIsisResponse\x12[\n" +
 	"\fListCircuits\x12$.goisis.v1alpha1.ListCircuitsRequest\x1a%.goisis.v1alpha1.ListCircuitsResponse\x12d\n" +
 	"\x0fListAdjacencies\x12'.goisis.v1alpha1.ListAdjacenciesRequest\x1a(.goisis.v1alpha1.ListAdjacenciesResponse\x12L\n" +
 	"\aGetLsdb\x12\x1f.goisis.v1alpha1.GetLsdbRequest\x1a .goisis.v1alpha1.GetLsdbResponse\x12U\n" +
 	"\n" +
-	"ListRoutes\x12\".goisis.v1alpha1.ListRoutesRequest\x1a#.goisis.v1alpha1.ListRoutesResponse\x12W\n" +
+	"ListRoutes\x12\".goisis.v1alpha1.ListRoutesRequest\x1a#.goisis.v1alpha1.ListRoutesResponse\x12[\n" +
+	"\fListLocators\x12$.goisis.v1alpha1.ListLocatorsRequest\x1a%.goisis.v1alpha1.ListLocatorsResponse\x12^\n" +
+	"\rListFlexAlgos\x12%.goisis.v1alpha1.ListFlexAlgosRequest\x1a&.goisis.v1alpha1.ListFlexAlgosResponse\x12W\n" +
 	"\n" +
 	"WatchEvent\x12\".goisis.v1alpha1.WatchEventRequest\x1a#.goisis.v1alpha1.WatchEventResponse0\x01B\xbe\x01\n" +
 	"\x13com.goisis.v1alpha1B\vGoisisProtoP\x01Z=github.com/takehaya/goisis/gen/goisis/v1alpha1;goisisv1alpha1\xa2\x02\x03GXX\xaa\x02\x0fGoisis.V1alpha1\xca\x02\x0fGoisis\\V1alpha1\xe2\x02\x1bGoisis\\V1alpha1\\GPBMetadata\xea\x02\x10Goisis::V1alpha1b\x06proto3"
@@ -1220,7 +1624,7 @@ func file_goisis_v1alpha1_goisis_proto_rawDescGZIP() []byte {
 }
 
 var file_goisis_v1alpha1_goisis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_goisis_v1alpha1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_goisis_v1alpha1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_goisis_v1alpha1_goisis_proto_goTypes = []any{
 	(Level)(0),                      // 0: goisis.v1alpha1.Level
 	(*GetIsisRequest)(nil),          // 1: goisis.v1alpha1.GetIsisRequest
@@ -1231,18 +1635,25 @@ var file_goisis_v1alpha1_goisis_proto_goTypes = []any{
 	(*Lsp)(nil),                     // 6: goisis.v1alpha1.Lsp
 	(*NextHop)(nil),                 // 7: goisis.v1alpha1.NextHop
 	(*Route)(nil),                   // 8: goisis.v1alpha1.Route
-	(*ListCircuitsRequest)(nil),     // 9: goisis.v1alpha1.ListCircuitsRequest
-	(*ListCircuitsResponse)(nil),    // 10: goisis.v1alpha1.ListCircuitsResponse
-	(*ListAdjacenciesRequest)(nil),  // 11: goisis.v1alpha1.ListAdjacenciesRequest
-	(*ListAdjacenciesResponse)(nil), // 12: goisis.v1alpha1.ListAdjacenciesResponse
-	(*GetLsdbRequest)(nil),          // 13: goisis.v1alpha1.GetLsdbRequest
-	(*GetLsdbResponse)(nil),         // 14: goisis.v1alpha1.GetLsdbResponse
-	(*ListRoutesRequest)(nil),       // 15: goisis.v1alpha1.ListRoutesRequest
-	(*ListRoutesResponse)(nil),      // 16: goisis.v1alpha1.ListRoutesResponse
-	(*WatchEventRequest)(nil),       // 17: goisis.v1alpha1.WatchEventRequest
-	(*WatchEventResponse)(nil),      // 18: goisis.v1alpha1.WatchEventResponse
-	(*AdjacencyEvent)(nil),          // 19: goisis.v1alpha1.AdjacencyEvent
-	(*RouteEvent)(nil),              // 20: goisis.v1alpha1.RouteEvent
+	(*Locator)(nil),                 // 9: goisis.v1alpha1.Locator
+	(*FlexAlgoDefinition)(nil),      // 10: goisis.v1alpha1.FlexAlgoDefinition
+	(*FlexAlgo)(nil),                // 11: goisis.v1alpha1.FlexAlgo
+	(*ListCircuitsRequest)(nil),     // 12: goisis.v1alpha1.ListCircuitsRequest
+	(*ListCircuitsResponse)(nil),    // 13: goisis.v1alpha1.ListCircuitsResponse
+	(*ListAdjacenciesRequest)(nil),  // 14: goisis.v1alpha1.ListAdjacenciesRequest
+	(*ListAdjacenciesResponse)(nil), // 15: goisis.v1alpha1.ListAdjacenciesResponse
+	(*GetLsdbRequest)(nil),          // 16: goisis.v1alpha1.GetLsdbRequest
+	(*GetLsdbResponse)(nil),         // 17: goisis.v1alpha1.GetLsdbResponse
+	(*ListRoutesRequest)(nil),       // 18: goisis.v1alpha1.ListRoutesRequest
+	(*ListRoutesResponse)(nil),      // 19: goisis.v1alpha1.ListRoutesResponse
+	(*ListLocatorsRequest)(nil),     // 20: goisis.v1alpha1.ListLocatorsRequest
+	(*ListLocatorsResponse)(nil),    // 21: goisis.v1alpha1.ListLocatorsResponse
+	(*ListFlexAlgosRequest)(nil),    // 22: goisis.v1alpha1.ListFlexAlgosRequest
+	(*ListFlexAlgosResponse)(nil),   // 23: goisis.v1alpha1.ListFlexAlgosResponse
+	(*WatchEventRequest)(nil),       // 24: goisis.v1alpha1.WatchEventRequest
+	(*WatchEventResponse)(nil),      // 25: goisis.v1alpha1.WatchEventResponse
+	(*AdjacencyEvent)(nil),          // 26: goisis.v1alpha1.AdjacencyEvent
+	(*RouteEvent)(nil),              // 27: goisis.v1alpha1.RouteEvent
 }
 var file_goisis_v1alpha1_goisis_proto_depIdxs = []int32{
 	3,  // 0: goisis.v1alpha1.GetIsisResponse.global:type_name -> goisis.v1alpha1.Global
@@ -1250,31 +1661,39 @@ var file_goisis_v1alpha1_goisis_proto_depIdxs = []int32{
 	0,  // 2: goisis.v1alpha1.Lsp.level:type_name -> goisis.v1alpha1.Level
 	0,  // 3: goisis.v1alpha1.Route.level:type_name -> goisis.v1alpha1.Level
 	7,  // 4: goisis.v1alpha1.Route.next_hops:type_name -> goisis.v1alpha1.NextHop
-	4,  // 5: goisis.v1alpha1.ListCircuitsResponse.circuits:type_name -> goisis.v1alpha1.Circuit
-	5,  // 6: goisis.v1alpha1.ListAdjacenciesResponse.adjacencies:type_name -> goisis.v1alpha1.Adjacency
-	6,  // 7: goisis.v1alpha1.GetLsdbResponse.lsps:type_name -> goisis.v1alpha1.Lsp
-	8,  // 8: goisis.v1alpha1.ListRoutesResponse.routes:type_name -> goisis.v1alpha1.Route
-	19, // 9: goisis.v1alpha1.WatchEventResponse.adjacency:type_name -> goisis.v1alpha1.AdjacencyEvent
-	20, // 10: goisis.v1alpha1.WatchEventResponse.route:type_name -> goisis.v1alpha1.RouteEvent
-	5,  // 11: goisis.v1alpha1.AdjacencyEvent.adjacency:type_name -> goisis.v1alpha1.Adjacency
-	8,  // 12: goisis.v1alpha1.RouteEvent.route:type_name -> goisis.v1alpha1.Route
-	1,  // 13: goisis.v1alpha1.IsisService.GetIsis:input_type -> goisis.v1alpha1.GetIsisRequest
-	9,  // 14: goisis.v1alpha1.IsisService.ListCircuits:input_type -> goisis.v1alpha1.ListCircuitsRequest
-	11, // 15: goisis.v1alpha1.IsisService.ListAdjacencies:input_type -> goisis.v1alpha1.ListAdjacenciesRequest
-	13, // 16: goisis.v1alpha1.IsisService.GetLsdb:input_type -> goisis.v1alpha1.GetLsdbRequest
-	15, // 17: goisis.v1alpha1.IsisService.ListRoutes:input_type -> goisis.v1alpha1.ListRoutesRequest
-	17, // 18: goisis.v1alpha1.IsisService.WatchEvent:input_type -> goisis.v1alpha1.WatchEventRequest
-	2,  // 19: goisis.v1alpha1.IsisService.GetIsis:output_type -> goisis.v1alpha1.GetIsisResponse
-	10, // 20: goisis.v1alpha1.IsisService.ListCircuits:output_type -> goisis.v1alpha1.ListCircuitsResponse
-	12, // 21: goisis.v1alpha1.IsisService.ListAdjacencies:output_type -> goisis.v1alpha1.ListAdjacenciesResponse
-	14, // 22: goisis.v1alpha1.IsisService.GetLsdb:output_type -> goisis.v1alpha1.GetLsdbResponse
-	16, // 23: goisis.v1alpha1.IsisService.ListRoutes:output_type -> goisis.v1alpha1.ListRoutesResponse
-	18, // 24: goisis.v1alpha1.IsisService.WatchEvent:output_type -> goisis.v1alpha1.WatchEventResponse
-	19, // [19:25] is the sub-list for method output_type
-	13, // [13:19] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	0,  // 5: goisis.v1alpha1.FlexAlgo.level:type_name -> goisis.v1alpha1.Level
+	10, // 6: goisis.v1alpha1.FlexAlgo.definition:type_name -> goisis.v1alpha1.FlexAlgoDefinition
+	4,  // 7: goisis.v1alpha1.ListCircuitsResponse.circuits:type_name -> goisis.v1alpha1.Circuit
+	5,  // 8: goisis.v1alpha1.ListAdjacenciesResponse.adjacencies:type_name -> goisis.v1alpha1.Adjacency
+	6,  // 9: goisis.v1alpha1.GetLsdbResponse.lsps:type_name -> goisis.v1alpha1.Lsp
+	8,  // 10: goisis.v1alpha1.ListRoutesResponse.routes:type_name -> goisis.v1alpha1.Route
+	9,  // 11: goisis.v1alpha1.ListLocatorsResponse.locators:type_name -> goisis.v1alpha1.Locator
+	11, // 12: goisis.v1alpha1.ListFlexAlgosResponse.flex_algos:type_name -> goisis.v1alpha1.FlexAlgo
+	26, // 13: goisis.v1alpha1.WatchEventResponse.adjacency:type_name -> goisis.v1alpha1.AdjacencyEvent
+	27, // 14: goisis.v1alpha1.WatchEventResponse.route:type_name -> goisis.v1alpha1.RouteEvent
+	5,  // 15: goisis.v1alpha1.AdjacencyEvent.adjacency:type_name -> goisis.v1alpha1.Adjacency
+	8,  // 16: goisis.v1alpha1.RouteEvent.route:type_name -> goisis.v1alpha1.Route
+	1,  // 17: goisis.v1alpha1.IsisService.GetIsis:input_type -> goisis.v1alpha1.GetIsisRequest
+	12, // 18: goisis.v1alpha1.IsisService.ListCircuits:input_type -> goisis.v1alpha1.ListCircuitsRequest
+	14, // 19: goisis.v1alpha1.IsisService.ListAdjacencies:input_type -> goisis.v1alpha1.ListAdjacenciesRequest
+	16, // 20: goisis.v1alpha1.IsisService.GetLsdb:input_type -> goisis.v1alpha1.GetLsdbRequest
+	18, // 21: goisis.v1alpha1.IsisService.ListRoutes:input_type -> goisis.v1alpha1.ListRoutesRequest
+	20, // 22: goisis.v1alpha1.IsisService.ListLocators:input_type -> goisis.v1alpha1.ListLocatorsRequest
+	22, // 23: goisis.v1alpha1.IsisService.ListFlexAlgos:input_type -> goisis.v1alpha1.ListFlexAlgosRequest
+	24, // 24: goisis.v1alpha1.IsisService.WatchEvent:input_type -> goisis.v1alpha1.WatchEventRequest
+	2,  // 25: goisis.v1alpha1.IsisService.GetIsis:output_type -> goisis.v1alpha1.GetIsisResponse
+	13, // 26: goisis.v1alpha1.IsisService.ListCircuits:output_type -> goisis.v1alpha1.ListCircuitsResponse
+	15, // 27: goisis.v1alpha1.IsisService.ListAdjacencies:output_type -> goisis.v1alpha1.ListAdjacenciesResponse
+	17, // 28: goisis.v1alpha1.IsisService.GetLsdb:output_type -> goisis.v1alpha1.GetLsdbResponse
+	19, // 29: goisis.v1alpha1.IsisService.ListRoutes:output_type -> goisis.v1alpha1.ListRoutesResponse
+	21, // 30: goisis.v1alpha1.IsisService.ListLocators:output_type -> goisis.v1alpha1.ListLocatorsResponse
+	23, // 31: goisis.v1alpha1.IsisService.ListFlexAlgos:output_type -> goisis.v1alpha1.ListFlexAlgosResponse
+	25, // 32: goisis.v1alpha1.IsisService.WatchEvent:output_type -> goisis.v1alpha1.WatchEventResponse
+	25, // [25:33] is the sub-list for method output_type
+	17, // [17:25] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_goisis_v1alpha1_goisis_proto_init() }
@@ -1282,7 +1701,7 @@ func file_goisis_v1alpha1_goisis_proto_init() {
 	if File_goisis_v1alpha1_goisis_proto != nil {
 		return
 	}
-	file_goisis_v1alpha1_goisis_proto_msgTypes[17].OneofWrappers = []any{
+	file_goisis_v1alpha1_goisis_proto_msgTypes[24].OneofWrappers = []any{
 		(*WatchEventResponse_Adjacency)(nil),
 		(*WatchEventResponse_Route)(nil),
 	}
@@ -1292,7 +1711,7 @@ func file_goisis_v1alpha1_goisis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_goisis_v1alpha1_goisis_proto_rawDesc), len(file_goisis_v1alpha1_goisis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

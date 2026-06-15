@@ -15,6 +15,11 @@ service IsisService {
   rpc GetLsdb(GetLsdbRequest) returns (GetLsdbResponse);
   // ListRoutes returns the computed routes (the RIB).
   rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  // ListLocators lists the SRv6 locators this node advertises.
+  rpc ListLocators(ListLocatorsRequest) returns (ListLocatorsResponse);
+  // ListFlexAlgos lists Flexible Algorithm state (elected definitions and
+  // participating nodes) per level.
+  rpc ListFlexAlgos(ListFlexAlgosRequest) returns (ListFlexAlgosResponse);
   // WatchEvent streams adjacency and route changes as they happen.
   rpc WatchEvent(WatchEventRequest) returns (stream WatchEventResponse);
 }
@@ -83,6 +88,38 @@ message Route {
   uint32 metric = 2;
   Level level = 3;
   repeated NextHop next_hops = 4;
+  // algorithm is the IGP algorithm the route was computed under: 0 = normal
+  // SPF, 128-255 = Flexible Algorithm (RFC 9350).
+  uint32 algorithm = 5;
+}
+
+// Locator is an SRv6 locator advertised by this node.
+message Locator {
+  string prefix = 1;
+  // algorithm is 0 (normal SPF) or a Flexible Algorithm (128-255).
+  uint32 algorithm = 2;
+  // end_sid is the local End SID instantiated at the locator's base address.
+  string end_sid = 3;
+}
+
+// FlexAlgoDefinition is the elected Flexible Algorithm Definition (RFC 9350).
+message FlexAlgoDefinition {
+  // metric_type: 0 = IGP, 1 = min unidirectional link delay, 2 = TE.
+  uint32 metric_type = 1;
+  uint32 calc_type = 2;
+  uint32 priority = 3;
+  // advertiser is the System ID of the node whose definition won the election.
+  string advertiser = 4;
+}
+
+// FlexAlgo is one Flexible Algorithm's state at a level.
+message FlexAlgo {
+  uint32 algorithm = 1;
+  Level level = 2;
+  // definition is the elected FAD, unset if no node advertises one.
+  FlexAlgoDefinition definition = 3;
+  // participants are the System IDs participating in this algorithm.
+  repeated string participants = 4;
 }
 
 message ListCircuitsRequest {}
@@ -103,6 +140,16 @@ message GetLsdbResponse {
 message ListRoutesRequest {}
 message ListRoutesResponse {
   repeated Route routes = 1;
+}
+
+message ListLocatorsRequest {}
+message ListLocatorsResponse {
+  repeated Locator locators = 1;
+}
+
+message ListFlexAlgosRequest {}
+message ListFlexAlgosResponse {
+  repeated FlexAlgo flex_algos = 1;
 }
 
 message WatchEventRequest {}

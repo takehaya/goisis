@@ -113,6 +113,55 @@ func (h *connectHandler) ListRoutes(
 	return connect.NewResponse(&goisisv1alpha1.ListRoutesResponse{Routes: out}), nil
 }
 
+func (h *connectHandler) ListLocators(
+	ctx context.Context,
+	_ *connect.Request[goisisv1alpha1.ListLocatorsRequest],
+) (*connect.Response[goisisv1alpha1.ListLocatorsResponse], error) {
+	locs, err := h.s.ListLocators(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*goisisv1alpha1.Locator, 0, len(locs))
+	for _, l := range locs {
+		out = append(out, &goisisv1alpha1.Locator{
+			Prefix:    l.Prefix.String(),
+			Algorithm: uint32(l.Algorithm),
+			EndSid:    l.EndSID.String(),
+		})
+	}
+	return connect.NewResponse(&goisisv1alpha1.ListLocatorsResponse{Locators: out}), nil
+}
+
+func (h *connectHandler) ListFlexAlgos(
+	ctx context.Context,
+	_ *connect.Request[goisisv1alpha1.ListFlexAlgosRequest],
+) (*connect.Response[goisisv1alpha1.ListFlexAlgosResponse], error) {
+	infos, err := h.s.ListFlexAlgos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*goisisv1alpha1.FlexAlgo, 0, len(infos))
+	for _, fi := range infos {
+		fa := &goisisv1alpha1.FlexAlgo{
+			Algorithm: uint32(fi.Algo),
+			Level:     levelToProto(fi.Level),
+		}
+		if fi.Definition != nil {
+			fa.Definition = &goisisv1alpha1.FlexAlgoDefinition{
+				MetricType: uint32(fi.Definition.MetricType),
+				CalcType:   uint32(fi.Definition.CalcType),
+				Priority:   uint32(fi.Definition.Priority),
+				Advertiser: fi.Definition.Advertiser.String(),
+			}
+		}
+		for _, p := range fi.Participants {
+			fa.Participants = append(fa.Participants, p.String())
+		}
+		out = append(out, fa)
+	}
+	return connect.NewResponse(&goisisv1alpha1.ListFlexAlgosResponse{FlexAlgos: out}), nil
+}
+
 func (h *connectHandler) WatchEvent(
 	ctx context.Context,
 	_ *connect.Request[goisisv1alpha1.WatchEventRequest],
@@ -181,10 +230,11 @@ func routeToProto(r RouteInfo) *goisisv1alpha1.Route {
 		nhs = append(nhs, &goisisv1alpha1.NextHop{Interface: nh.Interface, Gateway: nh.Gateway.String()})
 	}
 	return &goisisv1alpha1.Route{
-		Prefix:   r.Prefix.String(),
-		Metric:   r.Metric,
-		Level:    levelToProto(r.Level),
-		NextHops: nhs,
+		Prefix:    r.Prefix.String(),
+		Metric:    r.Metric,
+		Level:     levelToProto(r.Level),
+		NextHops:  nhs,
+		Algorithm: uint32(r.Algorithm),
 	}
 }
 

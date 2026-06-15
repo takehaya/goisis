@@ -45,6 +45,12 @@ const (
 	IsisServiceGetLsdbProcedure = "/goisis.v1alpha1.IsisService/GetLsdb"
 	// IsisServiceListRoutesProcedure is the fully-qualified name of the IsisService's ListRoutes RPC.
 	IsisServiceListRoutesProcedure = "/goisis.v1alpha1.IsisService/ListRoutes"
+	// IsisServiceListLocatorsProcedure is the fully-qualified name of the IsisService's ListLocators
+	// RPC.
+	IsisServiceListLocatorsProcedure = "/goisis.v1alpha1.IsisService/ListLocators"
+	// IsisServiceListFlexAlgosProcedure is the fully-qualified name of the IsisService's ListFlexAlgos
+	// RPC.
+	IsisServiceListFlexAlgosProcedure = "/goisis.v1alpha1.IsisService/ListFlexAlgos"
 	// IsisServiceWatchEventProcedure is the fully-qualified name of the IsisService's WatchEvent RPC.
 	IsisServiceWatchEventProcedure = "/goisis.v1alpha1.IsisService/WatchEvent"
 )
@@ -61,6 +67,11 @@ type IsisServiceClient interface {
 	GetLsdb(context.Context, *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error)
 	// ListRoutes returns the computed routes (the RIB).
 	ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error)
+	// ListLocators lists the SRv6 locators this node advertises.
+	ListLocators(context.Context, *connect.Request[v1alpha1.ListLocatorsRequest]) (*connect.Response[v1alpha1.ListLocatorsResponse], error)
+	// ListFlexAlgos lists Flexible Algorithm state (elected definitions and
+	// participating nodes) per level.
+	ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error)
 }
@@ -106,6 +117,18 @@ func NewIsisServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(isisServiceMethods.ByName("ListRoutes")),
 			connect.WithClientOptions(opts...),
 		),
+		listLocators: connect.NewClient[v1alpha1.ListLocatorsRequest, v1alpha1.ListLocatorsResponse](
+			httpClient,
+			baseURL+IsisServiceListLocatorsProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ListLocators")),
+			connect.WithClientOptions(opts...),
+		),
+		listFlexAlgos: connect.NewClient[v1alpha1.ListFlexAlgosRequest, v1alpha1.ListFlexAlgosResponse](
+			httpClient,
+			baseURL+IsisServiceListFlexAlgosProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ListFlexAlgos")),
+			connect.WithClientOptions(opts...),
+		),
 		watchEvent: connect.NewClient[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse](
 			httpClient,
 			baseURL+IsisServiceWatchEventProcedure,
@@ -122,6 +145,8 @@ type isisServiceClient struct {
 	listAdjacencies *connect.Client[v1alpha1.ListAdjacenciesRequest, v1alpha1.ListAdjacenciesResponse]
 	getLsdb         *connect.Client[v1alpha1.GetLsdbRequest, v1alpha1.GetLsdbResponse]
 	listRoutes      *connect.Client[v1alpha1.ListRoutesRequest, v1alpha1.ListRoutesResponse]
+	listLocators    *connect.Client[v1alpha1.ListLocatorsRequest, v1alpha1.ListLocatorsResponse]
+	listFlexAlgos   *connect.Client[v1alpha1.ListFlexAlgosRequest, v1alpha1.ListFlexAlgosResponse]
 	watchEvent      *connect.Client[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse]
 }
 
@@ -150,6 +175,16 @@ func (c *isisServiceClient) ListRoutes(ctx context.Context, req *connect.Request
 	return c.listRoutes.CallUnary(ctx, req)
 }
 
+// ListLocators calls goisis.v1alpha1.IsisService.ListLocators.
+func (c *isisServiceClient) ListLocators(ctx context.Context, req *connect.Request[v1alpha1.ListLocatorsRequest]) (*connect.Response[v1alpha1.ListLocatorsResponse], error) {
+	return c.listLocators.CallUnary(ctx, req)
+}
+
+// ListFlexAlgos calls goisis.v1alpha1.IsisService.ListFlexAlgos.
+func (c *isisServiceClient) ListFlexAlgos(ctx context.Context, req *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error) {
+	return c.listFlexAlgos.CallUnary(ctx, req)
+}
+
 // WatchEvent calls goisis.v1alpha1.IsisService.WatchEvent.
 func (c *isisServiceClient) WatchEvent(ctx context.Context, req *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error) {
 	return c.watchEvent.CallServerStream(ctx, req)
@@ -167,6 +202,11 @@ type IsisServiceHandler interface {
 	GetLsdb(context.Context, *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error)
 	// ListRoutes returns the computed routes (the RIB).
 	ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error)
+	// ListLocators lists the SRv6 locators this node advertises.
+	ListLocators(context.Context, *connect.Request[v1alpha1.ListLocatorsRequest]) (*connect.Response[v1alpha1.ListLocatorsResponse], error)
+	// ListFlexAlgos lists Flexible Algorithm state (elected definitions and
+	// participating nodes) per level.
+	ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error
 }
@@ -208,6 +248,18 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(isisServiceMethods.ByName("ListRoutes")),
 		connect.WithHandlerOptions(opts...),
 	)
+	isisServiceListLocatorsHandler := connect.NewUnaryHandler(
+		IsisServiceListLocatorsProcedure,
+		svc.ListLocators,
+		connect.WithSchema(isisServiceMethods.ByName("ListLocators")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceListFlexAlgosHandler := connect.NewUnaryHandler(
+		IsisServiceListFlexAlgosProcedure,
+		svc.ListFlexAlgos,
+		connect.WithSchema(isisServiceMethods.ByName("ListFlexAlgos")),
+		connect.WithHandlerOptions(opts...),
+	)
 	isisServiceWatchEventHandler := connect.NewServerStreamHandler(
 		IsisServiceWatchEventProcedure,
 		svc.WatchEvent,
@@ -226,6 +278,10 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 			isisServiceGetLsdbHandler.ServeHTTP(w, r)
 		case IsisServiceListRoutesProcedure:
 			isisServiceListRoutesHandler.ServeHTTP(w, r)
+		case IsisServiceListLocatorsProcedure:
+			isisServiceListLocatorsHandler.ServeHTTP(w, r)
+		case IsisServiceListFlexAlgosProcedure:
+			isisServiceListFlexAlgosHandler.ServeHTTP(w, r)
 		case IsisServiceWatchEventProcedure:
 			isisServiceWatchEventHandler.ServeHTTP(w, r)
 		default:
@@ -255,6 +311,14 @@ func (UnimplementedIsisServiceHandler) GetLsdb(context.Context, *connect.Request
 
 func (UnimplementedIsisServiceHandler) ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListRoutes is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ListLocators(context.Context, *connect.Request[v1alpha1.ListLocatorsRequest]) (*connect.Response[v1alpha1.ListLocatorsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListLocators is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListFlexAlgos is not implemented"))
 }
 
 func (UnimplementedIsisServiceHandler) WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error {

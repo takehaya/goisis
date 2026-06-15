@@ -36,6 +36,8 @@ func newRootCmd() *cobra.Command {
 		newNeighborCmd(&addr),
 		newDatabaseCmd(&addr),
 		newRouteCmd(&addr),
+		newLocatorCmd(&addr),
+		newFlexAlgoCmd(&addr),
 		newMonitorCmd(&addr),
 		newVersionCmd(),
 	)
@@ -167,13 +169,83 @@ func newRouteCmd(addr *string) *cobra.Command {
 				return err
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tMETRIC\tNEXT-HOPS")
+			_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tALGO\tMETRIC\tNEXT-HOPS")
 			for _, r := range res.Msg.GetRoutes() {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()), r.GetMetric(), nextHops(r))
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()), r.GetAlgorithm(), r.GetMetric(), nextHops(r))
 			}
 			return w.Flush()
 		},
 	}
+}
+
+func newLocatorCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "locator",
+		Short: "List advertised SRv6 locators",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := newClient(*addr).ListLocators(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListLocatorsRequest{}))
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "PREFIX\tALGO\tEND-SID")
+			for _, l := range res.Msg.GetLocators() {
+				_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", l.GetPrefix(), l.GetAlgorithm(), l.GetEndSid())
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func newFlexAlgoCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "flex-algo",
+		Aliases: []string{"flexalgo"},
+		Short:   "List Flexible Algorithm definitions and participants",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			res, err := newClient(*addr).ListFlexAlgos(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListFlexAlgosRequest{}))
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			_, _ = fmt.Fprintln(w, "ALGO\tLEVEL\tMETRIC-TYPE\tPRIORITY\tADVERTISER\tPARTICIPANTS")
+			for _, fa := range res.Msg.GetFlexAlgos() {
+				mt, prio, adv := "-", "-", "-"
+				if d := fa.GetDefinition(); d != nil {
+					mt = metricTypeStr(d.GetMetricType())
+					prio = fmt.Sprintf("%d", d.GetPriority())
+					adv = d.GetAdvertiser()
+				}
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+					fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, joinStrings(fa.GetParticipants()))
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func metricTypeStr(mt uint32) string {
+	switch mt {
+	case 0:
+		return "igp"
+	case 1:
+		return "delay"
+	case 2:
+		return "te"
+	default:
+		return fmt.Sprintf("%d", mt)
+	}
+}
+
+func joinStrings(s []string) string {
+	out := ""
+	for i, v := range s {
+		if i > 0 {
+			out += ", "
+		}
+		out += v
+	}
+	return out
 }
 
 func nextHops(r *goisisv1alpha1.Route) string {
