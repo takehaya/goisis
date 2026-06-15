@@ -43,10 +43,16 @@ type Subscription struct {
 // lagging consumer has missed events and should resubscribe.
 func (sub *Subscription) Lagged() bool {
 	lagged := false
-	_ = sub.s.mgmtOperation(context.Background(), func() error {
+	if err := sub.s.mgmtOperation(context.Background(), func() error {
 		lagged = sub.w.lagged
 		return nil
-	})
+	}); err != nil {
+		// The Serve loop has stopped, so the closure did not run. A lagging
+		// drop sets w.lagged before closing the channel and never mutates it
+		// again, and the loop goroutine has fully exited, so a direct read is
+		// race-free here.
+		return sub.w.lagged
+	}
 	return lagged
 }
 
@@ -103,6 +109,7 @@ func (s *IsisServer) emitAdjacency(info AdjacencyInfo) {
 // emitAdjacencyDown reports that an adjacency went down (its info with the
 // state overridden to Down, since the adjacency is about to be removed).
 func (s *IsisServer) emitAdjacencyDown(c *circuit, adj *adjacency, level packet.Level) {
+	s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(level), AdjDown.String())
 	if len(s.watchers) == 0 {
 		return
 	}

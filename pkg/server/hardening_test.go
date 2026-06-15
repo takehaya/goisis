@@ -60,6 +60,78 @@ func TestOverloadOnStartup(t *testing.T) {
 	})
 }
 
+// TestProcessLSPRefloodsPurgeOverSameSeqLive: when we hold a purge and a peer
+// floods a live copy at the same sequence number, we re-flood our purge (a
+// purge supersedes a live LSP at equal seq, ISO 10589 7.3.16.2).
+func TestProcessLSPRefloodsPurgeOverSameSeqLive(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: tr, Level2: true, Padding: ptrFalse()}),
+	)
+	c := s.circuits[0]
+	now := time.Now()
+	foreign := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+
+	live := &packet.LSP{Level: packet.Level2, RemainingTime: 1000, LSPID: foreign, SequenceNumber: 5, ISType: 2}
+	lraw, err := live.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, lraw, live, now) // install live seq 5
+
+	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: foreign, SequenceNumber: 5, ISType: 2}
+	praw, err := purge.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, praw, purge, now) // adopt the purge at seq 5
+	if e := s.dbs[packet.Level2].get(foreign); e == nil || e.purgedAt.IsZero() {
+		t.Fatal("expected to hold a purge for the foreign LSP")
+	}
+
+	c.clearSRM(packet.Level2, foreign) // isolate the next step
+	s.processLSP(c, lraw, live, now)   // peer re-floods the live copy at seq 5
+	if _, ok := c.srm[packet.Level2][foreign]; !ok {
+		t.Error("held purge was not re-flooded (SRM unset) when a peer sent a live LSP at the same seq")
+	}
+}
+
+// TestLaggedReportedAfterServerStop: a resource-exhaustion drop must still be
+// reported by Lagged() even when the Serve loop has already stopped (so the
+// WatchEvent handler returns CodeResourceExhausted, not a clean stop).
+func TestLaggedReportedAfterServerStop(t *testing.T) {
+	mock := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: mock, Level2: true, Padding: ptrFalse()}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Serve(ctx); close(done) }()
+
+	sub, err := s.Subscribe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a lagging drop on the Serve loop.
+	if err := s.mgmtOperation(context.Background(), func() error {
+		sub.w.lagged = true
+		s.dropWatcher(sub.w)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	<-done
+
+	if !sub.Lagged() {
+		t.Error("Lagged() = false after server stop; the resource-exhaustion drop must survive shutdown")
+	}
+}
+
 // TestCleanShutdownPurgesOwnLSP checks that a clean shutdown floods a purge so
 // the peer drops our LSP promptly rather than waiting out the lifetime.
 func TestCleanShutdownPurgesOwnLSP(t *testing.T) {

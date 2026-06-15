@@ -266,11 +266,19 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	}
 
 	adj := c.p2pAdj
-	if adj == nil || adj.systemID != h.SourceID {
+	if adj != nil && adj.systemID != h.SourceID {
+		// A different neighbor replaced the old one (system-ID change or the
+		// link recabled to another router): tear the old one down first so
+		// observers see it go away, rather than silently overwriting it.
+		s.teardownP2PAdj(c, adj)
+		adj = nil
+	}
+	if adj == nil {
 		adj = &adjacency{systemID: h.SourceID}
 		c.p2pAdj = adj
 	}
 	prev := adj.state
+	prevLevels := adj.levels
 	adj.snpa = src
 	adj.areaAddrs = areas
 	adj.holding = h.HoldingTime
@@ -283,16 +291,39 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		adj.neighborExtCircID = three.ExtLocalCircuitID
 	}
 
-	if prev != newState {
+	// React to a state change, or to the common-level set changing while Up
+	// (e.g. the neighbor reconfigured its circuit type): otherwise our own LSP
+	// would keep advertising IS reachability for a level the peer dropped.
+	if prev != newState || (newState == AdjUp && prevLevels != common) {
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {
 			s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(l), newState.String())
 			s.emitAdjacency(c.infoFor(adj, l))
 		}
+		// Levels that dropped while the adjacency stayed Up must be reported
+		// down so consumers and the RIB stop using them.
+		if newState == AdjUp {
+			for _, l := range prevLevels.levels() {
+				if !common.has(l) {
+					s.emitAdjacencyDown(c, adj, l)
+				}
+			}
+		}
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
 		s.regenerateLSPs(false, time.Now())
 	}
+}
+
+// teardownP2PAdj reports an old point-to-point neighbor going down (it was
+// replaced by a different neighbor) and re-originates so our LSP drops its
+// stale IS reachability.
+func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency) {
+	s.logger.Info("p2p adjacency replaced", "circuit", c.cfg.Name, "neighbor", adj.systemID)
+	for _, l := range adj.levels.levels() {
+		s.emitAdjacencyDown(c, adj, l)
+	}
+	s.regenerateLSPs(false, time.Now())
 }
 
 // expireAdjacencies tears down adjacencies whose holding time has elapsed.

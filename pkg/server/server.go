@@ -47,7 +47,7 @@ type IsisServer struct {
 	fibPending map[netip.Prefix]bool // routes whose last FIB write failed; retried
 	spfDirty   bool                  // a topology change needs an SPF recompute
 	watchers   map[*watcher]struct{} // WatchEvent subscribers
-	algoWarned map[uint8]bool        // Flex-Algos whose unsupported metric-type was logged
+	algoWarned map[algoKey]bool      // (level,algo) whose unsupported metric-type was logged
 
 	overloadOnStartup time.Duration // set the OL bit this long after startup
 	overloadUntil     time.Time     // OL bit is set while now < this (zero = not set)
@@ -86,7 +86,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		connected:         map[netip.Prefix]bool{},
 		fibPending:        map[netip.Prefix]bool{},
 		watchers:          map[*watcher]struct{}{},
-		algoWarned:        map[uint8]bool{},
+		algoWarned:        map[algoKey]bool{},
 		overloadOnStartup: o.overloadOnStartup,
 	}
 	if s.fib == nil {
@@ -176,8 +176,19 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	s.regenerateLSPs(false, now)
 
 	// Drop any routes a previous incarnation left in the FIB but that we have
-	// not (yet) recomputed.
-	if err := s.fib.Sweep(func(p netip.Prefix) bool { _, ok := s.rib[p]; return ok }); err != nil {
+	// not (yet) recomputed. Retain our own local End SID /128s: they are
+	// statically derived from config and reinstalled below, so deleting them
+	// here would needlessly withdraw seg6local forwarding mid-startup.
+	ownSIDs := map[netip.Prefix]bool{}
+	for _, lc := range s.locators {
+		ownSIDs[netip.PrefixFrom(lc.endSID(), 128)] = true
+	}
+	if err := s.fib.Sweep(func(p netip.Prefix) bool {
+		if _, ok := s.rib[p]; ok {
+			return true
+		}
+		return ownSIDs[p]
+	}); err != nil {
 		s.logger.Error("fib startup sweep", "error", err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -80,10 +81,16 @@ func run(logger *slog.Logger, apiListen, configFile string) error {
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetUnencryptedHTTP2(true)
+	// Request contexts derive from reqCtx; cancelling it on shutdown unblocks
+	// long-lived streaming handlers (WatchEvent / `goisis monitor`) that would
+	// otherwise keep Shutdown waiting for its full timeout.
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
 	httpServer := &http.Server{
-		Addr:      apiListen,
-		Handler:   mux,
-		Protocols: protocols,
+		Addr:        apiListen,
+		Handler:     mux,
+		Protocols:   protocols,
+		BaseContext: func(net.Listener) context.Context { return reqCtx },
 	}
 
 	logger.Info("starting goisisd", "version", version.Version, "api", apiListen)
@@ -105,11 +112,17 @@ func run(logger *slog.Logger, apiListen, configFile string) error {
 	})
 	g.Go(func() error {
 		<-gctx.Done()
+		cancelReq() // unblock streaming handlers so Shutdown drains promptly
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		err := httpServer.Shutdown(shutdownCtx)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			// A slow drain shouldn't fail the process exit; force-close any
+			// lingering connections instead.
+			logger.Warn("http server did not drain cleanly; forcing close", "error", err)
+			_ = httpServer.Close()
+		}
 		stopServe()
-		return err
+		return nil
 	})
 	return g.Wait()
 }

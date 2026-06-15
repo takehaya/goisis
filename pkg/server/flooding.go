@@ -71,6 +71,13 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 			c.setSRM(level, id, now)
 			c.clearSSN(level, id)
 		case ex != nil && lsp.SequenceNumber == ex.lsp.SequenceNumber &&
+			ex.remaining(now) == 0 && lsp.RemainingTime != 0:
+			// We hold a purge at this sequence number and the peer still has a
+			// live copy: a purge supersedes a live LSP at equal sequence (ISO
+			// 10589 7.3.16.2), so re-flood our purge instead of acknowledging.
+			c.setSRM(level, id, now)
+			c.clearSSN(level, id)
+		case ex != nil && lsp.SequenceNumber == ex.lsp.SequenceNumber &&
 			lsp.RemainingTime != 0 && ex.remaining(now) != 0 &&
 			lsp.Checksum() != ex.lsp.Checksum():
 			// Same sequence number, different content (ISO 10589 7.3.16.2):
@@ -278,6 +285,13 @@ func (s *IsisServer) processCSNP(c *circuit, csnp *packet.CSNP, now time.Time) {
 				c.setSSN(level, e.LSPID) // request it
 			case local.lsp.SequenceNumber > e.SequenceNumber:
 				c.setSRM(level, e.LSPID, now) // we have newer
+			case local.lsp.SequenceNumber == e.SequenceNumber &&
+				local.remaining(now) != 0 && e.RemainingTime != 0 &&
+				local.lsp.Checksum() != e.Checksum:
+				// Equal sequence, different content (ISO 10589 7.3.15): re-flood
+				// our copy so the conflict surfaces on the full-LSP path, which
+				// purges and lets the originator re-originate at a higher seq.
+				c.setSRM(level, e.LSPID, now)
 			default:
 				c.clearSRM(level, e.LSPID)
 			}
@@ -316,8 +330,12 @@ func (s *IsisServer) processPSNP(c *circuit, psnp *packet.PSNP, now time.Time) {
 				if local != nil && e.SequenceNumber >= local.lsp.SequenceNumber {
 					c.clearSRM(level, e.LSPID)
 				}
-			} else if local != nil && local.lsp.SequenceNumber > e.SequenceNumber {
-				// LAN request: we hold a newer copy, so send it.
+			} else if local != nil && (local.lsp.SequenceNumber > e.SequenceNumber ||
+				(local.lsp.SequenceNumber == e.SequenceNumber &&
+					local.remaining(now) != 0 && e.RemainingTime != 0 &&
+					local.lsp.Checksum() != e.Checksum)) {
+				// LAN request: we hold a newer copy, or an equal-sequence copy
+				// with conflicting content (ISO 10589 7.3.15), so send it.
 				c.setSRM(level, e.LSPID, now)
 			}
 		}

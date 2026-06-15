@@ -53,19 +53,29 @@ func (s *IsisServer) updateRIB(now time.Time) {
 					continue
 				}
 				if fi.Definition.MetricType != packet.FlexAlgoMetricIGP {
-					// Edge-triggered: warn once until the metric-type becomes
-					// supported again, so a persistent misconfiguration does not
-					// re-log on every recompute.
-					if !s.algoWarned[algo] {
+					// Edge-triggered, keyed per (level, algo) because each level
+					// elects its FAD independently: warn once until the
+					// metric-type becomes supported again so a persistent
+					// misconfiguration does not re-log on every recompute.
+					key := algoKey{level: level, algo: algo}
+					if !s.algoWarned[key] {
 						s.logger.Warn("flex-algo metric-type unsupported; not computing routes",
 							"algo", algo, "level", level, "metric_type", fi.Definition.MetricType)
-						s.algoWarned[algo] = true
+						s.algoWarned[key] = true
 					}
 					continue
 				}
-				delete(s.algoWarned, algo) // supported again: re-arm the warning
+				delete(s.algoWarned, algoKey{level: level, algo: algo}) // re-arm
 			}
 			for p, r := range s.computeSPF(level, algo, now) {
+				// Algorithm 0 and each Flex-Algo normally advertise disjoint
+				// prefixes, but a shared/anycast prefix claimed by two
+				// algorithms could collide here. Resolve deterministically by
+				// preferring the lower algorithm (plain reachability over a
+				// Flex-Algo) rather than depending on iteration order.
+				if cur, ok := merged[p]; ok && cur.algo <= r.algo && cur.level == level {
+					continue
+				}
 				merged[p] = r
 			}
 		}
@@ -94,6 +104,13 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// neither loses the withdraw bookkeeping nor re-emits change events.
 	s.programFIB(next)
 	s.rib = next
+}
+
+// algoKey identifies a (level, Flex-Algo) pair, used to de-dup the
+// unsupported-metric-type warning per level (each level elects independently).
+type algoKey struct {
+	level packet.Level
+	algo  uint8
 }
 
 // routingAlgos returns the algorithms to compute: algorithm 0 plus every
