@@ -27,17 +27,19 @@ func TestWatchEmitsAdjacencyAndRoute(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	// Start B and subscribe before A exists, so the adjacency cannot reach Up
+	// (and emit its event) before the subscriber is registered — otherwise the
+	// Up event races the Subscribe call and is occasionally missed under load.
 	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
-
 	sub, err := b.Subscribe(ctx)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer sub.Unsubscribe()
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 
 	var gotAdjUp, gotRoute bool
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(10 * time.Second)
 	for !gotAdjUp || !gotRoute {
 		select {
 		case ev, ok := <-sub.Events:
