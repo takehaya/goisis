@@ -31,16 +31,26 @@ type spfPrefix struct {
 	metric uint32
 }
 
-// route is one computed prefix reachability: the total metric and the set of
-// first-hop neighbor system IDs (resolved to interfaces/gateways at FIB time).
+// route is one computed prefix reachability: the total metric, the algorithm it
+// was computed under, and the set of first-hop neighbor system IDs (resolved to
+// interfaces/gateways at FIB time).
 type route struct {
 	metric   uint32
 	level    packet.Level
+	algo     uint8
 	nextHops []packet.SystemID
 }
 
-// buildTopology extracts the SPF graph for a level from the LSDB.
-func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet.NodeID]*spfNode {
+// buildTopology extracts the SPF graph for a level and algorithm from the LSDB.
+//
+// For algorithm 0 (normal SPF) every node is included and the prefixes are the
+// node's IP reachability (TLV 135/236) plus its algorithm-0 SRv6 locators. For
+// a Flexible Algorithm (RFC 9350) only participating real nodes are kept
+// (pseudonodes are transit and always kept), and the only prefixes are SRv6
+// locators advertised for that algorithm — there is no fallback to plain IP
+// reachability. Constraint-based link pruning (admin groups, SRLG) needs ASLA
+// link attributes and is deferred; only node participation is enforced here.
+func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time) map[packet.NodeID]*spfNode {
 	db := s.dbs[level]
 	if db == nil {
 		return nil
@@ -53,7 +63,13 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 		if id.FragmentID() != 0 {
 			continue // only fragment 0 carries the node's edges/flags (M4)
 		}
-		n := &spfNode{id: id.NodeID(), overload: e.lsp.Overload}
+		nid := id.NodeID()
+		// Flex-Algo prunes real nodes that do not participate in the algorithm;
+		// pseudonodes represent a LAN and are always kept as transit.
+		if algo != 0 && nid.PseudonodeID() == 0 && !lspParticipatesInAlgo(e, algo) {
+			continue
+		}
+		n := &spfNode{id: nid, overload: e.lsp.Overload}
 		// have tracks prefixes advertised as plain IP reachability (TLV
 		// 135/236) so an SRv6 locator (TLV 27) for the same prefix is not
 		// added twice; prefix reachability wins (RFC 9352). Prefixes are
@@ -72,6 +88,9 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 					}
 				}
 			case *packet.ExtendedIPReachabilityTLV:
+				if algo != 0 {
+					continue // plain IP reachability belongs to algorithm 0 only
+				}
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
@@ -80,6 +99,9 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 					}
 				}
 			case *packet.IPv6ReachabilityTLV:
+				if algo != 0 {
+					continue
+				}
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
@@ -89,7 +111,7 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 				}
 			case *packet.SRv6LocatorTLV:
 				for _, loc := range t.Locators {
-					if loc.Metric < maxPathMetric {
+					if loc.Algorithm == algo && loc.Metric < maxPathMetric {
 						locPrefixes = append(locPrefixes, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric})
 					}
 				}
@@ -102,9 +124,32 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 				n.prefixes = append(n.prefixes, lp)
 			}
 		}
-		nodes[id.NodeID()] = n
+		nodes[nid] = n
 	}
 	return nodes
+}
+
+// lspParticipatesInAlgo reports whether an LSP advertises the given algorithm
+// in its SR-Algorithm sub-TLV (Router Capability TLV 242).
+func lspParticipatesInAlgo(e *lspEntry, algo uint8) bool {
+	for _, tlv := range e.lsp.TLVs {
+		rc, ok := tlv.(*packet.RouterCapabilityTLV)
+		if !ok {
+			continue
+		}
+		for _, sub := range rc.SubTLVs {
+			sa, ok := sub.(*packet.SRAlgorithmSubTLV)
+			if !ok {
+				continue
+			}
+			for _, a := range sa.Algorithms {
+				if a == algo {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // tentEntry is a node under consideration in the Dijkstra TENT set.
@@ -117,11 +162,12 @@ type tentEntry struct {
 	firstHops map[packet.SystemID]bool
 }
 
-// computeSPF runs a Dijkstra shortest-path-first over the level's topology and
-// returns prefix routes keyed by prefix. The two-way connectivity check, the
-// overload bit (no transit through an overloaded node), and ECMP are honored.
-func (s *IsisServer) computeSPF(level packet.Level, now time.Time) map[netip.Prefix]route {
-	nodes := s.buildTopology(level, now)
+// computeSPF runs a Dijkstra shortest-path-first over the level's topology for
+// an algorithm and returns prefix routes keyed by prefix. The two-way
+// connectivity check, the overload bit (no transit through an overloaded node),
+// and ECMP are honored.
+func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) map[netip.Prefix]route {
+	nodes := s.buildTopology(level, algo, now)
 	self := nodeID(s.systemID, 0)
 	if nodes[self] == nil {
 		return nil
@@ -192,9 +238,9 @@ func (s *IsisServer) computeSPF(level packet.Level, now time.Time) map[netip.Pre
 			total := uint32(sum)
 			cur, ok := routes[p.prefix]
 			if !ok || total < cur.metric {
-				routes[p.prefix] = route{metric: total, level: level, nextHops: nh}
+				routes[p.prefix] = route{metric: total, level: level, algo: algo, nextHops: nh}
 			} else if total == cur.metric {
-				routes[p.prefix] = route{metric: total, level: level, nextHops: mergeHops(cur.nextHops, nh)}
+				routes[p.prefix] = route{metric: total, level: level, algo: algo, nextHops: mergeHops(cur.nextHops, nh)}
 			}
 		}
 	}

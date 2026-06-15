@@ -79,6 +79,26 @@ func TestRouterCapabilitySRv6Caps(t *testing.T) {
 	}
 }
 
+func TestSRv6CapabilitiesPreservesSubSubTLVs(t *testing.T) {
+	// Octets after the 2-byte flags (RFC 9352 optional sub-sub-TLVs) must
+	// round-trip byte-exact rather than being silently dropped.
+	tlv := &RouterCapabilityTLV{
+		SubTLVs: []SubTLV{&SRv6CapabilitiesSubTLV{Flags: 0x4000, SubSubTLVs: []byte{0xaa, 0xbb}}},
+	}
+	wire, err := tlv.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	decoded := checkTLVRoundtrip(t, wire)[0].(*RouterCapabilityTLV)
+	caps, ok := decoded.SubTLVs[0].(*SRv6CapabilitiesSubTLV)
+	if !ok {
+		t.Fatalf("sub-TLV not SRv6 capabilities: %T", decoded.SubTLVs[0])
+	}
+	if caps.Flags != 0x4000 || len(caps.SubSubTLVs) != 2 || caps.SubSubTLVs[0] != 0xaa || caps.SubSubTLVs[1] != 0xbb {
+		t.Errorf("trailing sub-sub-TLV octets not preserved: %+v", caps)
+	}
+}
+
 func TestSRv6EndpointBehaviorOpaque(t *testing.T) {
 	// An unknown endpoint behavior (e.g. a uSID flavor) must round-trip.
 	tlv := &SRv6LocatorTLV{Locators: []SRv6Locator{{

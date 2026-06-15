@@ -31,6 +31,56 @@ srv6:
 	}
 }
 
+func TestLoadFlexAlgo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := `net: 49.0001.0000.0000.0001.00
+circuits:
+  - interface: eth0
+flex-algo:
+  - algo: 128
+    metric-type: igp
+    priority: 100
+    advertise: true
+    locator: fc00:128:1::/48
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.FlexAlgo) != 1 {
+		t.Fatalf("flex-algo not parsed: %+v", c.FlexAlgo)
+	}
+	fa := c.FlexAlgo[0]
+	if fa.Algo != 128 || fa.MetricType != "igp" || fa.Priority != 100 || !fa.Advertise || fa.Locator != "fc00:128:1::/48" {
+		t.Errorf("flex-algo = %+v", fa)
+	}
+}
+
+func TestFlexAlgoMetricType(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want uint8
+		ok   bool
+	}{
+		{"", 0, true},
+		{"igp", 0, true},
+		{"delay", 1, true},
+		{"te", 2, true},
+		{"bogus", 0, false},
+	} {
+		got, err := flexAlgoMetricType(tc.in)
+		if (err == nil) != tc.ok {
+			t.Errorf("flexAlgoMetricType(%q) ok=%v, want %v", tc.in, err == nil, tc.ok)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("flexAlgoMetricType(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestLevels(t *testing.T) {
 	for _, tc := range []struct {
 		in         string

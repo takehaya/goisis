@@ -22,18 +22,33 @@ import (
 
 // Config is the goisisd file configuration.
 type Config struct {
-	NET      string          `yaml:"net"`
-	Hostname string          `yaml:"hostname"`
-	FIB      bool            `yaml:"fib"`
-	Circuits []CircuitConfig `yaml:"circuits"`
-	Prefixes []string        `yaml:"prefixes"`
-	SRv6     *SRv6Config     `yaml:"srv6"`
+	NET      string           `yaml:"net"`
+	Hostname string           `yaml:"hostname"`
+	FIB      bool             `yaml:"fib"`
+	Circuits []CircuitConfig  `yaml:"circuits"`
+	Prefixes []string         `yaml:"prefixes"`
+	SRv6     *SRv6Config      `yaml:"srv6"`
+	FlexAlgo []FlexAlgoConfig `yaml:"flex-algo"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
 type SRv6Config struct {
 	// Locators are IPv6 locator prefixes advertised in the SRv6 Locator TLV.
 	Locators []string `yaml:"locators"`
+}
+
+// FlexAlgoConfig configures one Flexible Algorithm (RFC 9350).
+type FlexAlgoConfig struct {
+	// Algo is the Flexible Algorithm number (128-255).
+	Algo uint8 `yaml:"algo"`
+	// MetricType is "igp" (default), "delay", or "te".
+	MetricType string `yaml:"metric-type"`
+	// Priority is the advertised election priority.
+	Priority uint8 `yaml:"priority"`
+	// Advertise controls whether this node advertises the FAD definition.
+	Advertise bool `yaml:"advertise"`
+	// Locator, if set, is an SRv6 locator advertised bound to this algorithm.
+	Locator string `yaml:"locator"`
 }
 
 // CircuitConfig configures one circuit.
@@ -95,6 +110,25 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 				return nil, fmt.Errorf("srv6 locator %q: %w", l, err)
 			}
 			opts = append(opts, server.WithSRv6Locator(prefix))
+		}
+	}
+	for _, fa := range c.FlexAlgo {
+		mt, err := flexAlgoMetricType(fa.MetricType)
+		if err != nil {
+			return nil, fmt.Errorf("flex-algo %d: %w", fa.Algo, err)
+		}
+		opts = append(opts, server.WithFlexAlgo(server.FlexAlgoConfig{
+			Algo:                fa.Algo,
+			MetricType:          mt,
+			Priority:            fa.Priority,
+			AdvertiseDefinition: fa.Advertise,
+		}))
+		if fa.Locator != "" {
+			prefix, err := netip.ParsePrefix(fa.Locator)
+			if err != nil {
+				return nil, fmt.Errorf("flex-algo %d locator %q: %w", fa.Algo, fa.Locator, err)
+			}
+			opts = append(opts, server.WithSRv6LocatorForAlgo(prefix, fa.Algo))
 		}
 	}
 	for _, cc := range c.Circuits {
@@ -171,6 +205,20 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 		IPv4Addrs: v4,
 		IPv6Addrs: v6,
 	}, nil
+}
+
+// flexAlgoMetricType maps the YAML metric-type name to its code point.
+func flexAlgoMetricType(s string) (uint8, error) {
+	switch strings.TrimSpace(s) {
+	case "", "igp":
+		return packet.FlexAlgoMetricIGP, nil
+	case "delay":
+		return packet.FlexAlgoMetricMinDelay, nil
+	case "te":
+		return packet.FlexAlgoMetricTE, nil
+	default:
+		return 0, fmt.Errorf("invalid metric-type %q (want igp, delay, or te)", s)
+	}
 }
 
 func levels(s string) (l1, l2 bool, err error) {

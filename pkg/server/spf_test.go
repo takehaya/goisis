@@ -62,7 +62,7 @@ func TestSPFLANPseudonode(t *testing.T) {
 	installNode(s, pn, false, []edge{{nid(1, 0), 0}, {nid(2, 0), 0}}, nil)
 	installNode(s, nid(2, 0), false, []edge{{pn, 10}}, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]
 	if !ok {
 		t.Fatalf("no route to 10.2.0.0/24; routes=%v", routes)
@@ -83,7 +83,7 @@ func TestSPFP2PChain(t *testing.T) {
 	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, nil)
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.3.0.0/24")]
 	if !ok {
 		t.Fatal("no route to 10.3.0.0/24")
@@ -103,7 +103,7 @@ func TestSPFTwoWayCheck(t *testing.T) {
 	installNode(s, nid(1, 0), false, []edge{{nid(2, 0), 10}}, nil)
 	installNode(s, nid(2, 0), false, nil, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]; ok {
 		t.Error("route installed despite failing the two-way check")
 	}
@@ -118,7 +118,7 @@ func TestSPFECMP(t *testing.T) {
 	installNode(s, nid(4, 0), false, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, nil)
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}, {nid(4, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 0)})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.3.0.0/24")]
 	if !ok {
 		t.Fatal("no route to 10.3.0.0/24")
@@ -142,7 +142,7 @@ func TestSPFNoMetricOverflow(t *testing.T) {
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 0xffffff}},
 		[]packet.ExtendedIPReachEntry{{Prefix: netip.MustParsePrefix("10.99.0.0/24"), Metric: 0xfdffffff}})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.99.0.0/24")]; ok {
 		t.Error("prefix above the reachability ceiling should be unreachable (metric overflow)")
 	}
@@ -157,7 +157,7 @@ func TestSPFOverloadNoTransit(t *testing.T) {
 	installNode(s, nid(2, 0), true, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]; !ok {
 		t.Error("overloaded node's own prefix should remain reachable")
 	}

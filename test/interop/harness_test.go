@@ -49,8 +49,9 @@ type frrNode struct {
 }
 
 // startFRR brings up an FRR isisd container wired to the host by a veth pair.
-// p2p selects point-to-point on the FRR side.
-func startFRR(t *testing.T, p2p bool) *frrNode {
+// p2p selects point-to-point on the FRR side. routerExtra lines are appended
+// inside the `router isis 1` stanza (e.g. a flex-algo definition).
+func startFRR(t *testing.T, p2p bool, routerExtra ...string) *frrNode {
 	t.Helper()
 	name := "goisis-interop-frr"
 	hostVeth := "gisisI0"
@@ -69,6 +70,10 @@ func startFRR(t *testing.T, p2p bool) *frrNode {
 	if p2p {
 		ptp = " isis network point-to-point\n"
 	}
+	extra := ""
+	if len(routerExtra) > 0 {
+		extra = strings.Join(routerExtra, "\n") + "\n"
+	}
 	conf := fmt.Sprintf(`hostname frr
 !
 interface eth0
@@ -79,8 +84,8 @@ router isis 1
  net 49.0001.0000.0000.00ff.00
  is-type level-1-2
  metric-style wide
-!
-`, ptp)
+%s!
+`, ptp, extra)
 	if err := os.WriteFile(dir+"/frr.conf", []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -152,8 +157,9 @@ func ifaceAddrs(t *testing.T, ifname string) (v4, v6 []netip.Addr) {
 	return v4, v6
 }
 
-// startGoisis builds and runs a goisis instance on the host veth end.
-func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool) *server.IsisServer {
+// startGoisis builds and runs a goisis instance on the host veth end. Extra
+// options (e.g. WithFlexAlgo) are appended after the defaults.
+func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool, extra ...server.ServerOption) *server.IsisServer {
 	t.Helper()
 	tr, err := datalink.OpenLinux(ifname)
 	if err != nil {
@@ -169,12 +175,13 @@ func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool) *se
 		IPv4Addrs: v4,
 		IPv6Addrs: v6,
 	}
-	s, err := server.NewIsisServer(
+	opts := append([]server.ServerOption{
 		server.WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		server.WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		server.WithHostname("goisis"),
 		server.WithCircuit(cfg),
-	)
+	}, extra...)
+	s, err := server.NewIsisServer(opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

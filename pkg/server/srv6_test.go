@@ -122,7 +122,7 @@ func TestSRv6LocatorSPFPreferPrefixReachability(t *testing.T) {
 		}},
 	}, now)
 
-	routes := s.computeSPF(packet.Level2, now)
+	routes := s.computeSPF(packet.Level2, 0, now)
 
 	// The mirrored prefix uses the TLV 236 metric (10 + 5), not the locator's
 	// 0; the locator entry must not be double-counted as a cheaper route.
@@ -171,7 +171,7 @@ func TestSRv6SPFMasksHostBits(t *testing.T) {
 		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Metric: 5, Prefix: noncanon}}},
 	}, now)
 
-	routes := s.computeSPF(packet.Level2, now)
+	routes := s.computeSPF(packet.Level2, 0, now)
 	if _, ok := routes[canon]; !ok {
 		t.Errorf("route key not canonicalized: want %s in %v", canon, keys(routes))
 	}

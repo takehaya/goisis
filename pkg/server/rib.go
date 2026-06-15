@@ -18,26 +18,56 @@ type NextHopInfo struct {
 
 // RouteInfo is one computed route in the RIB.
 type RouteInfo struct {
-	Prefix   netip.Prefix
-	Metric   uint32
-	Level    packet.Level
-	NextHops []NextHopInfo
+	Prefix    netip.Prefix
+	Metric    uint32
+	Level     packet.Level
+	Algorithm uint8
+	NextHops  []NextHopInfo
 }
 
-// updateRIB recomputes SPF for all levels, resolves next hops, and programs
-// the difference into the FIB. Level 1 routes are preferred over Level 2 for
-// the same prefix (ISO 10589 / RFC 1195 route preference).
+// updateRIB recomputes SPF for every level and algorithm, resolves next hops,
+// and programs the difference into the FIB. Level 1 routes are preferred over
+// Level 2 for the same prefix (ISO 10589 / RFC 1195). Algorithm 0 and each
+// Flexible Algorithm advertise disjoint prefixes (plain reachability vs.
+// per-algorithm SRv6 locators), so they do not contend for the same key.
 func (s *IsisServer) updateRIB(now time.Time) {
-	// Compute per level, then overlay L1 onto L2 so L1 wins.
 	merged := map[netip.Prefix]route{}
-	if _, ok := s.dbs[packet.Level2]; ok {
-		for p, r := range s.computeSPF(packet.Level2, now) {
-			merged[p] = r
+	algos := s.routingAlgos()
+	// L2 first so L1 overlays it (L1 preferred for the same prefix).
+	for _, level := range []packet.Level{packet.Level2, packet.Level1} {
+		if _, ok := s.dbs[level]; !ok {
+			continue
 		}
-	}
-	if _, ok := s.dbs[packet.Level1]; ok {
-		for p, r := range s.computeSPF(packet.Level1, now) {
-			merged[p] = r // L1 preferred
+		var state map[uint8]*FlexAlgoInfo
+		for _, algo := range algos {
+			if algo != 0 {
+				if state == nil {
+					state = s.flexAlgoState(level, now)
+				}
+				fi := state[algo]
+				// No-fallback (RFC 9350): compute a Flex-Algo only when a
+				// definition is elected and its metric-type is supported; an
+				// unreachable Flex-Algo prefix is simply not installed, never
+				// routed via algorithm 0.
+				if fi == nil || fi.Definition == nil {
+					continue
+				}
+				if fi.Definition.MetricType != packet.FlexAlgoMetricIGP {
+					// Edge-triggered: warn once until the metric-type becomes
+					// supported again, so a persistent misconfiguration does not
+					// re-log on every recompute.
+					if !s.algoWarned[algo] {
+						s.logger.Warn("flex-algo metric-type unsupported; not computing routes",
+							"algo", algo, "level", level, "metric_type", fi.Definition.MetricType)
+						s.algoWarned[algo] = true
+					}
+					continue
+				}
+				delete(s.algoWarned, algo) // supported again: re-arm the warning
+			}
+			for p, r := range s.computeSPF(level, algo, now) {
+				merged[p] = r
+			}
 		}
 	}
 
@@ -52,10 +82,10 @@ func (s *IsisServer) updateRIB(now time.Time) {
 			// hellos (e.g. an SRv6/IPv6 locator over a link with no IPv6
 			// interface address). Surface it rather than dropping silently.
 			s.logger.Warn("route has no resolvable next hop",
-				"prefix", p, "level", r.level, "family", addrFamily(p))
+				"prefix", p, "level", r.level, "algo", r.algo, "family", addrFamily(p))
 			continue
 		}
-		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, NextHops: nhs}
+		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, Algorithm: r.algo, NextHops: nhs}
 	}
 
 	// s.rib always holds the DESIRED route set: the diff, withdrawals, and
@@ -64,6 +94,21 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// neither loses the withdraw bookkeeping nor re-emits change events.
 	s.programFIB(next)
 	s.rib = next
+}
+
+// routingAlgos returns the algorithms to compute: algorithm 0 plus every
+// Flexible Algorithm this node participates in (deduplicated, ascending).
+func (s *IsisServer) routingAlgos() []uint8 {
+	seen := map[uint8]bool{0: true}
+	algos := []uint8{0}
+	for _, fa := range s.flexAlgos {
+		if !seen[fa.Algo] {
+			seen[fa.Algo] = true
+			algos = append(algos, fa.Algo)
+		}
+	}
+	sort.Slice(algos, func(i, j int) bool { return algos[i] < algos[j] })
+	return algos
 }
 
 // resolveNextHops maps first-hop system IDs to concrete (interface, gateway)
@@ -180,7 +225,7 @@ func addrFamily(p netip.Prefix) string {
 }
 
 func sameRoute(a, b RouteInfo) bool {
-	if a.Metric != b.Metric || len(a.NextHops) != len(b.NextHops) {
+	if a.Metric != b.Metric || a.Algorithm != b.Algorithm || len(a.NextHops) != len(b.NextHops) {
 		return false
 	}
 	for i := range a.NextHops {

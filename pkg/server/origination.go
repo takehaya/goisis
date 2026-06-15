@@ -45,13 +45,10 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		tlvs = append(tlvs, &packet.DynamicHostnameTLV{Hostname: s.hostname})
 	}
 
-	// SRv6 capability: advertise the Router Capability TLV (242) with the SRv6
-	// Capabilities sub-TLV so peers know this node supports SRv6.
-	if len(s.locators) > 0 {
-		tlvs = append(tlvs, &packet.RouterCapabilityTLV{
-			RouterID: s.routerID(),
-			SubTLVs:  []packet.SubTLV{&packet.SRv6CapabilitiesSubTLV{}},
-		})
+	// Router Capability TLV (242): SRv6 capability and/or Flex-Algo
+	// participation + definitions.
+	if caps := s.routerCapabilitySubTLVs(); len(caps) > 0 {
+		tlvs = append(tlvs, &packet.RouterCapabilityTLV{RouterID: s.routerID(), SubTLVs: caps})
 	}
 
 	// IS reachability: on a broadcast circuit point at the DIS pseudonode;
@@ -94,11 +91,15 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			v6 = append(v6, packet.IPv6ReachEntry{Metric: p.Metric, Prefix: p.Prefix})
 		}
 	}
-	// Mirror each SRv6 locator into IPv6 reachability (TLV 236, metric 0) so
-	// peers that don't parse the SRv6 Locator TLV still install a route to the
-	// locator (RFC 9352 SHOULD).
+	// Mirror algorithm-0 SRv6 locators into IPv6 reachability (TLV 236, metric
+	// 0) so peers that don't parse the SRv6 Locator TLV still install a route
+	// (RFC 9352 SHOULD). Flex-Algo locators are NOT mirrored: a 236 entry is
+	// algorithm-0 reachability and would let algorithm-0 SPF install the
+	// locator, defeating the per-algorithm path (no-fallback).
 	for _, lc := range s.locators {
-		v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
+		if lc.Algo == 0 {
+			v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
+		}
 	}
 	if len(v4) > 0 {
 		tlvs = append(tlvs, &packet.ExtendedIPReachabilityTLV{Prefixes: v4})
@@ -206,6 +207,35 @@ func (s *IsisServer) floodLSP(level packet.Level, id packet.LSPID, except *circu
 		c.setSRM(level, id, now)
 		c.clearSSN(level, id)
 	}
+}
+
+// routerCapabilitySubTLVs builds the sub-TLVs of this node's Router Capability
+// TLV (242): the SRv6 Capabilities sub-TLV when locators are configured, and —
+// when Flex-Algos are configured — the SR-Algorithm sub-TLV (algo 0 plus every
+// participated algorithm) followed by a FAD sub-TLV per advertised definition.
+func (s *IsisServer) routerCapabilitySubTLVs() []packet.SubTLV {
+	var caps []packet.SubTLV
+	if len(s.locators) > 0 {
+		caps = append(caps, &packet.SRv6CapabilitiesSubTLV{})
+	}
+	if len(s.flexAlgos) > 0 {
+		algos := []uint8{0} // algorithm 0 (normal SPF) is always supported
+		for _, fa := range s.flexAlgos {
+			algos = append(algos, fa.Algo)
+		}
+		caps = append(caps, &packet.SRAlgorithmSubTLV{Algorithms: algos})
+		for _, fa := range s.flexAlgos {
+			if fa.AdvertiseDefinition {
+				caps = append(caps, &packet.FlexAlgoDefinitionSubTLV{
+					FlexAlgo:   fa.Algo,
+					MetricType: fa.MetricType,
+					CalcType:   0,
+					Priority:   fa.Priority,
+				})
+			}
+		}
+	}
+	return caps
 }
 
 // routerID returns the IPv4 router ID advertised in the Router Capability TLV:

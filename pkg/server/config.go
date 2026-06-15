@@ -146,6 +146,11 @@ type AdvertisedPrefix struct {
 // route.
 type SRv6LocatorConfig struct {
 	Prefix netip.Prefix
+	// Algo is the algorithm the locator is advertised for: 0 (normal SPF) or a
+	// Flexible Algorithm (128-255). A non-zero algorithm makes the locator a
+	// Flex-Algo locator: it is not mirrored into IPv6 reachability and its
+	// route is computed over that algorithm's topology.
+	Algo uint8
 }
 
 // endSID returns the locator's local End SID (its base address).
@@ -180,7 +185,7 @@ func (l SRv6LocatorConfig) sidStructure() *packet.SIDStructure {
 func (l SRv6LocatorConfig) locatorEntry() packet.SRv6Locator {
 	return packet.SRv6Locator{
 		Metric:    0,
-		Algorithm: 0,
+		Algorithm: l.Algo,
 		Locator:   l.Prefix.Masked(),
 		EndSIDs: []*packet.SRv6EndSID{{
 			Behavior:  packet.SRv6BehaviorEnd,
@@ -188,6 +193,24 @@ func (l SRv6LocatorConfig) locatorEntry() packet.SRv6Locator {
 			Structure: l.sidStructure(),
 		}},
 	}
+}
+
+// FlexAlgoConfig defines a Flexible Algorithm (RFC 9350) this node
+// participates in and (optionally) advertises a definition for.
+type FlexAlgoConfig struct {
+	// Algo is the Flexible Algorithm number (128-255).
+	Algo uint8
+	// MetricType selects how path cost is measured (packet.FlexAlgoMetric*).
+	// goisis computes the IGP metric initially; others are advertised so the
+	// definition and winner election match peers.
+	MetricType uint8
+	// Priority is this node's advertised priority for the winner election
+	// (higher wins; ties broken by higher System ID).
+	Priority uint8
+	// AdvertiseDefinition controls whether this node advertises the FAD. A
+	// node may participate (compute paths for the algo) without advertising a
+	// definition; at least one node in the area must advertise it.
+	AdvertiseDefinition bool
 }
 
 type options struct {
@@ -199,6 +222,7 @@ type options struct {
 	prefixes    []AdvertisedPrefix
 	connected   []netip.Prefix
 	locators    []SRv6LocatorConfig
+	flexAlgos   []FlexAlgoConfig
 	fib         fib.FIB
 	hasSystemID bool
 }
@@ -256,4 +280,19 @@ func WithConnectedPrefix(prefix netip.Prefix) ServerOption {
 // advertises the SRv6 Capabilities sub-TLV in its Router Capability TLV (242).
 func WithSRv6Locator(prefix netip.Prefix) ServerOption {
 	return func(o *options) { o.locators = append(o.locators, SRv6LocatorConfig{Prefix: prefix}) }
+}
+
+// WithSRv6LocatorForAlgo advertises an SRv6 locator bound to a Flexible
+// Algorithm (algo 128-255). Unlike a plain locator it is not mirrored into IPv6
+// reachability, and its route is computed over the algorithm's pruned topology.
+func WithSRv6LocatorForAlgo(prefix netip.Prefix, algo uint8) ServerOption {
+	return func(o *options) { o.locators = append(o.locators, SRv6LocatorConfig{Prefix: prefix, Algo: algo}) }
+}
+
+// WithFlexAlgo makes this node participate in a Flexible Algorithm (RFC 9350):
+// the algorithm is listed in the SR-Algorithm sub-TLV (19), and — when
+// AdvertiseDefinition is set — its definition is advertised in the FAD sub-TLV
+// (26), both in the Router Capability TLV (242).
+func WithFlexAlgo(cfg FlexAlgoConfig) ServerOption {
+	return func(o *options) { o.flexAlgos = append(o.flexAlgos, cfg) }
 }

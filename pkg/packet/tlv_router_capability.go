@@ -3,6 +3,7 @@ package packet
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 )
 
 // Router Capability TLV flags (RFC 7981) and sub-TLV code points.
@@ -65,6 +66,10 @@ func decodeRouterCapabilityTLV(value []byte) (TLV, error) {
 // presence signals SRv6 support.
 type SRv6CapabilitiesSubTLV struct {
 	Flags uint16
+	// SubSubTLVs preserves any octets after the 2-byte flags (RFC 9352 reserves
+	// room for optional sub-sub-TLVs) so the sub-TLV round-trips byte-exact even
+	// when a peer advertises content goisis does not interpret.
+	SubSubTLVs []byte
 }
 
 // Type implements SubTLV.
@@ -72,14 +77,23 @@ func (s *SRv6CapabilitiesSubTLV) Type() uint8 { return subTLVSRv6Capabilities }
 
 // Serialize implements SubTLV.
 func (s *SRv6CapabilitiesSubTLV) Serialize() ([]byte, error) {
-	return []byte{subTLVSRv6Capabilities, 2, byte(s.Flags >> 8), byte(s.Flags)}, nil
+	if len(s.SubSubTLVs) > 253 {
+		return nil, fmt.Errorf("SRv6 capabilities: %w: %d octets of sub-sub-TLVs", ErrTooLong, len(s.SubSubTLVs))
+	}
+	out := make([]byte, 0, 4+len(s.SubSubTLVs))
+	out = append(out, subTLVSRv6Capabilities, byte(2+len(s.SubSubTLVs)), byte(s.Flags>>8), byte(s.Flags))
+	return append(out, s.SubSubTLVs...), nil
 }
 
 func decodeSRv6Capabilities(value []byte) (SubTLV, error) {
 	if len(value) < 2 {
 		return nil, fmt.Errorf("SRv6 capabilities: %w", ErrTruncated)
 	}
-	return &SRv6CapabilitiesSubTLV{Flags: uint16(value[0])<<8 | uint16(value[1])}, nil
+	s := &SRv6CapabilitiesSubTLV{Flags: uint16(value[0])<<8 | uint16(value[1])}
+	if len(value) > 2 {
+		s.SubSubTLVs = slices.Clone(value[2:])
+	}
+	return s, nil
 }
 
 func init() {
