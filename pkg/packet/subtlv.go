@@ -57,7 +57,7 @@ var subTLVDecoders = map[SubTLVContext]map[uint8]subTLVDecoder{}
 // registerSubTLVDecoder registers a sub-TLV decoder within a context. It is
 // meant to be called from init functions and panics on duplicate
 // registration.
-func registerSubTLVDecoder(ctx SubTLVContext, t uint8, dec subTLVDecoder) { //nolint:unused // exercised once concrete sub-TLVs land (SRv6/Flex-Algo milestones)
+func registerSubTLVDecoder(ctx SubTLVContext, t uint8, dec subTLVDecoder) {
 	m, ok := subTLVDecoders[ctx]
 	if !ok {
 		m = map[uint8]subTLVDecoder{}

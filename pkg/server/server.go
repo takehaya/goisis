@@ -29,6 +29,7 @@ type IsisServer struct {
 	areaAddrs []packet.AreaAddress
 	hostname  string
 	prefixes  []AdvertisedPrefix
+	locators  []SRv6LocatorConfig
 
 	mgmtCh  chan *mgmtOp
 	eventCh chan event
@@ -67,6 +68,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		areaAddrs:  o.areaAddrs,
 		hostname:   o.hostname,
 		prefixes:   o.prefixes,
+		locators:   o.locators,
 		mgmtCh:     make(chan *mgmtOp, 1),
 		eventCh:    make(chan event, 256),
 		done:       make(chan struct{}),
@@ -82,6 +84,11 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	}
 	for _, p := range o.connected {
 		s.connected[p] = true
+	}
+	for _, lc := range o.locators {
+		if a := lc.Prefix.Addr(); !a.Is6() || a.Is4In6() {
+			return nil, fmt.Errorf("goisis: SRv6 locator %s must be IPv6", lc.Prefix)
+		}
 	}
 	// Pseudonode octets are a single byte and must be nonzero and unique
 	// per box, so at most 255 circuits can be assigned distinct octets.
@@ -141,6 +148,11 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 		s.logger.Error("fib startup sweep", "error", err)
 	}
 
+	// Instantiate the local End SID for each advertised SRv6 locator. This is
+	// re-asserted on every housekeeping tick so a SID removed out-of-band (or
+	// one whose initial install failed) is repaired without a restart.
+	s.installLocalSIDs()
+
 	ticker := time.NewTicker(housekeepInterval)
 	defer ticker.Stop()
 
@@ -165,12 +177,38 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	}
 }
 
-// shutdown closes transports (unblocking the reader goroutines' Recv),
-// waits for the readers to exit, and fails any queued management ops.
+// installLocalSIDs (re-)programs the local End SID for every advertised SRv6
+// locator. AddLocalSID is idempotent (RouteReplace), so this is safe to call
+// repeatedly; it both retries a failed initial install and repairs a SID
+// deleted out-of-band while the daemon runs.
+func (s *IsisServer) installLocalSIDs() {
+	for _, lc := range s.locators {
+		sid := lc.endSID()
+		if err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd}); err != nil {
+			s.logger.Error("install local End SID", "sid", sid, "error", err)
+		}
+	}
+}
+
+// removeLocalSIDs withdraws every local End SID this node installed, so a clean
+// shutdown leaves no orphaned seg6local routes in the kernel.
+func (s *IsisServer) removeLocalSIDs() {
+	for _, lc := range s.locators {
+		sid := lc.endSID()
+		if err := s.fib.RemoveLocalSID(sid); err != nil {
+			s.logger.Error("remove local End SID", "sid", sid, "error", err)
+		}
+	}
+}
+
+// shutdown closes transports (unblocking the reader goroutines' Recv), removes
+// local SIDs, waits for the readers to exit, and fails any queued management
+// ops.
 func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
 	for _, c := range s.circuits {
 		_ = c.cfg.Transport.Close()
 	}
+	s.removeLocalSIDs()
 	s.closeWatchers()
 	readers.Wait()
 	for {
@@ -212,6 +250,9 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	s.ageLSPs(now)
 	s.refreshOwnLSPs(now)
 	s.floodTransmit(now)
+	if len(s.locators) > 0 {
+		s.installLocalSIDs()
+	}
 }
 
 // mgmtOperation runs f on the Serve loop and waits for its result. State

@@ -139,6 +139,57 @@ type AdvertisedPrefix struct {
 	Metric uint32
 }
 
+// SRv6LocatorConfig is an SRv6 locator advertised by this node. goisis
+// advertises it in the SRv6 Locator TLV (27), mirrors it into IPv6
+// reachability (TLV 236) for legacy interop, originates an End SID at the
+// locator's base address, and installs that End SID as a local seg6local
+// route.
+type SRv6LocatorConfig struct {
+	Prefix netip.Prefix
+}
+
+// endSID returns the locator's local End SID (its base address).
+func (l SRv6LocatorConfig) endSID() netip.Addr { return l.Prefix.Masked().Addr() }
+
+// sidStructure returns the SID structure advertised for the End SID: a 32-bit
+// locator block, the remaining locator bits as the node, and a function that
+// fills the rest of the 128-bit SID (16 bits where there is room). This
+// matches FRR's default SRv6 SID layout for a /48 (block 32, node 16, func 16)
+// while keeping block+node+function+argument <= 128 for longer locators.
+func (l SRv6LocatorConfig) sidStructure() *packet.SIDStructure {
+	bits := l.Prefix.Bits()
+	block := 32
+	if bits < block {
+		block = bits
+	}
+	node := bits - block
+	function := 16
+	if block+node+function > 128 {
+		function = 128 - block - node // never negative: block+node == bits <= 128
+	}
+	return &packet.SIDStructure{
+		LocatorBlock: uint8(block),    //nolint:gosec // 0..128
+		LocatorNode:  uint8(node),     //nolint:gosec // 0..128
+		Function:     uint8(function), //nolint:gosec // 0..128
+		Argument:     0,
+	}
+}
+
+// locatorEntry builds the SRv6 Locator TLV entry advertised for this locator,
+// including its local End SID at the locator's base address.
+func (l SRv6LocatorConfig) locatorEntry() packet.SRv6Locator {
+	return packet.SRv6Locator{
+		Metric:    0,
+		Algorithm: 0,
+		Locator:   l.Prefix.Masked(),
+		EndSIDs: []*packet.SRv6EndSID{{
+			Behavior:  packet.SRv6BehaviorEnd,
+			SID:       l.endSID(),
+			Structure: l.sidStructure(),
+		}},
+	}
+}
+
 type options struct {
 	logger      *slog.Logger
 	systemID    packet.SystemID
@@ -147,6 +198,7 @@ type options struct {
 	circuits    []CircuitConfig
 	prefixes    []AdvertisedPrefix
 	connected   []netip.Prefix
+	locators    []SRv6LocatorConfig
 	fib         fib.FIB
 	hasSystemID bool
 }
@@ -195,4 +247,13 @@ func WithFIB(f fib.FIB) ServerOption {
 // when a neighbor also advertises it.
 func WithConnectedPrefix(prefix netip.Prefix) ServerOption {
 	return func(o *options) { o.connected = append(o.connected, prefix.Masked()) }
+}
+
+// WithSRv6Locator advertises an SRv6 locator from this node. The locator is
+// announced in the SRv6 Locator TLV (27) with a local End SID, mirrored into
+// IPv6 reachability (TLV 236) for legacy interop, and — when a FIB is
+// configured — installed as a local End SID seg6local route. The node also
+// advertises the SRv6 Capabilities sub-TLV in its Router Capability TLV (242).
+func WithSRv6Locator(prefix netip.Prefix) ServerOption {
+	return func(o *options) { o.locators = append(o.locators, SRv6LocatorConfig{Prefix: prefix}) }
 }

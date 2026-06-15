@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -44,6 +45,15 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		tlvs = append(tlvs, &packet.DynamicHostnameTLV{Hostname: s.hostname})
 	}
 
+	// SRv6 capability: advertise the Router Capability TLV (242) with the SRv6
+	// Capabilities sub-TLV so peers know this node supports SRv6.
+	if len(s.locators) > 0 {
+		tlvs = append(tlvs, &packet.RouterCapabilityTLV{
+			RouterID: s.routerID(),
+			SubTLVs:  []packet.SubTLV{&packet.SRv6CapabilitiesSubTLV{}},
+		})
+	}
+
 	// IS reachability: on a broadcast circuit point at the DIS pseudonode;
 	// on p2p point directly at the neighbor.
 	var neighbors []packet.ExtendedISReachEntry
@@ -84,11 +94,26 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			v6 = append(v6, packet.IPv6ReachEntry{Metric: p.Metric, Prefix: p.Prefix})
 		}
 	}
+	// Mirror each SRv6 locator into IPv6 reachability (TLV 236, metric 0) so
+	// peers that don't parse the SRv6 Locator TLV still install a route to the
+	// locator (RFC 9352 SHOULD).
+	for _, lc := range s.locators {
+		v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
+	}
 	if len(v4) > 0 {
 		tlvs = append(tlvs, &packet.ExtendedIPReachabilityTLV{Prefixes: v4})
 	}
 	if len(v6) > 0 {
 		tlvs = append(tlvs, &packet.IPv6ReachabilityTLV{Prefixes: v6})
+	}
+
+	// SRv6 Locator TLV (27): the locators with their local End SIDs.
+	if len(s.locators) > 0 {
+		locs := make([]packet.SRv6Locator, 0, len(s.locators))
+		for _, lc := range s.locators {
+			locs = append(locs, lc.locatorEntry())
+		}
+		tlvs = append(tlvs, &packet.SRv6LocatorTLV{Locators: locs})
 	}
 
 	att := level == packet.Level1 && s.levelCap.has(packet.Level2)
@@ -181,6 +206,19 @@ func (s *IsisServer) floodLSP(level packet.Level, id packet.LSPID, except *circu
 		c.setSRM(level, id, now)
 		c.clearSSN(level, id)
 	}
+}
+
+// routerID returns the IPv4 router ID advertised in the Router Capability TLV:
+// the first configured IPv4 interface address, or the zero address if none.
+func (s *IsisServer) routerID() netip.Addr {
+	for _, c := range s.circuits {
+		for _, a := range c.cfg.IPv4Addrs {
+			if a.Is4() {
+				return a
+			}
+		}
+	}
+	return netip.Addr{}
 }
 
 // lspID builds a fragment-0 LSP ID from a system ID and pseudonode octet.

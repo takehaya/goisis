@@ -27,6 +27,13 @@ type Config struct {
 	FIB      bool            `yaml:"fib"`
 	Circuits []CircuitConfig `yaml:"circuits"`
 	Prefixes []string        `yaml:"prefixes"`
+	SRv6     *SRv6Config     `yaml:"srv6"`
+}
+
+// SRv6Config configures SRv6 locator advertisement.
+type SRv6Config struct {
+	// Locators are IPv6 locator prefixes advertised in the SRv6 Locator TLV.
+	Locators []string `yaml:"locators"`
 }
 
 // CircuitConfig configures one circuit.
@@ -80,6 +87,15 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			return nil, fmt.Errorf("prefix %q: %w", p, err)
 		}
 		opts = append(opts, server.WithAdvertisedPrefix(prefix, 10))
+	}
+	if c.SRv6 != nil {
+		for _, l := range c.SRv6.Locators {
+			prefix, err := netip.ParsePrefix(l)
+			if err != nil {
+				return nil, fmt.Errorf("srv6 locator %q: %w", l, err)
+			}
+			opts = append(opts, server.WithSRv6Locator(prefix))
+		}
 	}
 	for _, cc := range c.Circuits {
 		cfg, err := cc.circuit()

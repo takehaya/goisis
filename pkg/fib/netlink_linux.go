@@ -8,6 +8,7 @@ import (
 	"net/netip"
 
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"golang.org/x/sys/unix"
 )
 
@@ -107,6 +108,62 @@ func (n *Netlink) route(prefix netip.Prefix, nexthops []Nexthop) (*netlink.Route
 		})
 	}
 	return r, nil
+}
+
+// AddLocalSID installs a local SRv6 SID as a seg6local route.
+func (n *Netlink) AddLocalSID(sid LocalSID) error {
+	r, err := n.localSIDRoute(sid)
+	if err != nil {
+		return err
+	}
+	if err := netlink.RouteReplace(r); err != nil {
+		return fmt.Errorf("fib: install local SID %s: %w", sid.SID, err)
+	}
+	return nil
+}
+
+// RemoveLocalSID removes a local SRv6 SID.
+func (n *Netlink) RemoveLocalSID(sid netip.Addr) error {
+	r := &netlink.Route{
+		Dst:      &net.IPNet{IP: sid.AsSlice(), Mask: net.CIDRMask(128, 128)},
+		Protocol: rtprotoISIS,
+		Table:    n.table,
+	}
+	if err := netlink.RouteDel(r); err != nil && !isNotExist(err) {
+		return fmt.Errorf("fib: remove local SID %s: %w", sid, err)
+	}
+	return nil
+}
+
+func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
+	enc := &netlink.SEG6LocalEncap{Flags: [nl.SEG6_LOCAL_MAX]bool{}}
+	enc.Flags[nl.SEG6_LOCAL_ACTION] = true
+	switch sid.Behavior {
+	case BehaviorEnd:
+		enc.Action = nl.SEG6_LOCAL_ACTION_END
+	case BehaviorEndDT4:
+		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT4
+		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
+		enc.Table = sid.Table
+	case BehaviorEndDT6:
+		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT6
+		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
+		enc.Table = sid.Table
+	default:
+		return nil, fmt.Errorf("fib: unsupported SID behavior %d", sid.Behavior)
+	}
+	// seg6local routes attach to the loopback device.
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		return nil, fmt.Errorf("fib: loopback for local SID: %w", err)
+	}
+	return &netlink.Route{
+		Dst:       &net.IPNet{IP: sid.SID.AsSlice(), Mask: net.CIDRMask(128, 128)},
+		Protocol:  rtprotoISIS,
+		Table:     n.table,
+		LinkIndex: lo.Attrs().Index,
+		Encap:     enc,
+	}, nil
 }
 
 func prefixToIPNet(p netip.Prefix) *net.IPNet {

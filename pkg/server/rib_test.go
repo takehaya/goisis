@@ -12,13 +12,16 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-// recordFIB records the routes currently programmed.
+// recordFIB records the routes and local SIDs currently programmed.
 type recordFIB struct {
 	mu     sync.Mutex
 	routes map[netip.Prefix][]fib.Nexthop
+	sids   map[netip.Addr]fib.LocalSID
 }
 
-func newRecordFIB() *recordFIB { return &recordFIB{routes: map[netip.Prefix][]fib.Nexthop{}} }
+func newRecordFIB() *recordFIB {
+	return &recordFIB{routes: map[netip.Prefix][]fib.Nexthop{}, sids: map[netip.Addr]fib.LocalSID{}}
+}
 
 func (f *recordFIB) Update(p netip.Prefix, nh []fib.Nexthop) error {
 	f.mu.Lock()
@@ -36,11 +39,32 @@ func (f *recordFIB) Withdraw(p netip.Prefix) error {
 
 func (f *recordFIB) Sweep(func(netip.Prefix) bool) error { return nil }
 
+func (f *recordFIB) AddLocalSID(s fib.LocalSID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sids[s.SID] = s
+	return nil
+}
+
+func (f *recordFIB) RemoveLocalSID(sid netip.Addr) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.sids, sid)
+	return nil
+}
+
 func (f *recordFIB) get(p netip.Prefix) ([]fib.Nexthop, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	nh, ok := f.routes[p]
 	return nh, ok
+}
+
+func (f *recordFIB) getSID(sid netip.Addr) (fib.LocalSID, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sids[sid]
+	return s, ok
 }
 
 // failFIB is a single-threaded FIB stub that can be armed to fail Update and
@@ -70,6 +94,9 @@ func (f *failFIB) Withdraw(p netip.Prefix) error {
 }
 
 func (f *failFIB) Sweep(func(netip.Prefix) bool) error { return nil }
+
+func (f *failFIB) AddLocalSID(fib.LocalSID) error  { return nil }
+func (f *failFIB) RemoveLocalSID(netip.Addr) error { return nil }
 
 var errFIB = fibError("fib unavailable")
 

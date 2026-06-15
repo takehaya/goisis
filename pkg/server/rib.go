@@ -48,7 +48,12 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		}
 		nhs := s.resolveNextHops(p, r.nextHops)
 		if len(nhs) == 0 {
-			continue // unresolvable (no neighbor address of the right family)
+			// No neighbor address of the prefix's family was learned from
+			// hellos (e.g. an SRv6/IPv6 locator over a link with no IPv6
+			// interface address). Surface it rather than dropping silently.
+			s.logger.Warn("route has no resolvable next hop",
+				"prefix", p, "level", r.level, "family", addrFamily(p))
+			continue
 		}
 		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, NextHops: nhs}
 	}
@@ -164,6 +169,14 @@ func (s *IsisServer) emitRoute(r *RouteInfo, withdrawn bool) {
 	if len(s.watchers) > 0 {
 		s.emit(Event{Route: r, Withdrawn: withdrawn})
 	}
+}
+
+// addrFamily names the address family of a prefix for diagnostics.
+func addrFamily(p netip.Prefix) string {
+	if p.Addr().Is4() {
+		return "ipv4"
+	}
+	return "ipv6"
 }
 
 func sameRoute(a, b RouteInfo) bool {

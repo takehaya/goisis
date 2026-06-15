@@ -54,6 +54,15 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 			continue // only fragment 0 carries the node's edges/flags (M4)
 		}
 		n := &spfNode{id: id.NodeID(), overload: e.lsp.Overload}
+		// have tracks prefixes advertised as plain IP reachability (TLV
+		// 135/236) so an SRv6 locator (TLV 27) for the same prefix is not
+		// added twice; prefix reachability wins (RFC 9352). Prefixes are
+		// masked to their bit length so the dedup key, the RIB key, and the
+		// masked prefix the FIB installs all agree (a peer may leave host bits
+		// set in a non-byte-aligned prefix; the startup sweep keys on the
+		// masked kernel prefix and would otherwise reap our own routes).
+		have := map[netip.Prefix]bool{}
+		var locPrefixes []spfPrefix
 		for _, tlv := range e.lsp.TLVs {
 			switch t := tlv.(type) {
 			case *packet.ExtendedISReachabilityTLV:
@@ -65,15 +74,32 @@ func (s *IsisServer) buildTopology(level packet.Level, now time.Time) map[packet
 			case *packet.ExtendedIPReachabilityTLV:
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: p.Prefix, metric: p.Metric})
+						pfx := p.Prefix.Masked()
+						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
+						have[pfx] = true
 					}
 				}
 			case *packet.IPv6ReachabilityTLV:
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: p.Prefix, metric: p.Metric})
+						pfx := p.Prefix.Masked()
+						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
+						have[pfx] = true
 					}
 				}
+			case *packet.SRv6LocatorTLV:
+				for _, loc := range t.Locators {
+					if loc.Metric < maxPathMetric {
+						locPrefixes = append(locPrefixes, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric})
+					}
+				}
+			}
+		}
+		// Add SRv6 locator prefixes the node didn't also advertise as plain IP
+		// reachability (prefer-prefix-reachability rule).
+		for _, lp := range locPrefixes {
+			if !have[lp.prefix] {
+				n.prefixes = append(n.prefixes, lp)
 			}
 		}
 		nodes[id.NodeID()] = n
