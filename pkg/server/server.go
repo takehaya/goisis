@@ -47,6 +47,9 @@ type IsisServer struct {
 	spfDirty   bool                  // a topology change needs an SPF recompute
 	watchers   map[*watcher]struct{} // WatchEvent subscribers
 	algoWarned map[uint8]bool        // Flex-Algos whose unsupported metric-type was logged
+
+	overloadOnStartup time.Duration // set the OL bit this long after startup
+	overloadUntil     time.Time     // OL bit is set while now < this (zero = not set)
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -65,23 +68,24 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		opt(&o)
 	}
 	s := &IsisServer{
-		logger:     o.logger,
-		systemID:   o.systemID,
-		areaAddrs:  o.areaAddrs,
-		hostname:   o.hostname,
-		prefixes:   o.prefixes,
-		locators:   o.locators,
-		flexAlgos:  o.flexAlgos,
-		mgmtCh:     make(chan *mgmtOp, 1),
-		eventCh:    make(chan event, 256),
-		done:       make(chan struct{}),
-		dbs:        map[packet.Level]*lsdb{},
-		fib:        o.fib,
-		rib:        map[netip.Prefix]RouteInfo{},
-		connected:  map[netip.Prefix]bool{},
-		fibPending: map[netip.Prefix]bool{},
-		watchers:   map[*watcher]struct{}{},
-		algoWarned: map[uint8]bool{},
+		logger:            o.logger,
+		systemID:          o.systemID,
+		areaAddrs:         o.areaAddrs,
+		hostname:          o.hostname,
+		prefixes:          o.prefixes,
+		locators:          o.locators,
+		flexAlgos:         o.flexAlgos,
+		mgmtCh:            make(chan *mgmtOp, 1),
+		eventCh:           make(chan event, 256),
+		done:              make(chan struct{}),
+		dbs:               map[packet.Level]*lsdb{},
+		fib:               o.fib,
+		rib:               map[netip.Prefix]RouteInfo{},
+		connected:         map[netip.Prefix]bool{},
+		fibPending:        map[netip.Prefix]bool{},
+		watchers:          map[*watcher]struct{}{},
+		algoWarned:        map[uint8]bool{},
+		overloadOnStartup: o.overloadOnStartup,
 	}
 	if s.fib == nil {
 		s.fib = fib.Noop{}
@@ -158,6 +162,9 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	// Send an initial hello burst and originate our LSPs so neighbors and
 	// their databases learn about us promptly.
 	now := time.Now()
+	if s.overloadOnStartup > 0 {
+		s.overloadUntil = now.Add(s.overloadOnStartup)
+	}
 	for _, c := range s.circuits {
 		s.sendHellos(c, now)
 	}
@@ -222,10 +229,32 @@ func (s *IsisServer) removeLocalSIDs() {
 	}
 }
 
-// shutdown closes transports (unblocking the reader goroutines' Recv), removes
-// local SIDs, waits for the readers to exit, and fails any queued management
-// ops.
+// overloaded reports whether the overload bit should be set in our own LSP.
+func (s *IsisServer) overloaded(now time.Time) bool {
+	return !s.overloadUntil.IsZero() && now.Before(s.overloadUntil)
+}
+
+// purgeOwnLSPs floods a purge for every LSP this node originated, so neighbors
+// drop us immediately on a clean shutdown instead of waiting out the lifetime.
+func (s *IsisServer) purgeOwnLSPs(now time.Time) {
+	for level, db := range s.dbs {
+		for id, e := range db.entries {
+			if e.own && e.purgedAt.IsZero() {
+				s.purgeOwn(level, id, now)
+			}
+		}
+	}
+}
+
+// shutdown purges our own LSPs and flushes them, closes transports (unblocking
+// the reader goroutines' Recv), removes local SIDs, waits for the readers to
+// exit, and fails any queued management ops.
 func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
+	// Purge our own LSPs and flush the purges on the wire before the transports
+	// close, so neighbors reconverge without us promptly (clean shutdown).
+	now := time.Now()
+	s.purgeOwnLSPs(now)
+	s.floodTransmit(now)
 	for _, c := range s.circuits {
 		_ = c.cfg.Transport.Close()
 	}
@@ -267,6 +296,13 @@ func (s *IsisServer) housekeeping(now time.Time) {
 			s.sendHellos(c, now)
 		}
 		s.expireAdjacencies(c, now)
+	}
+	// Clear the startup overload bit once its timer elapses (one re-origination
+	// drops the OL flag and floods the change).
+	if !s.overloadUntil.IsZero() && !now.Before(s.overloadUntil) {
+		s.overloadUntil = time.Time{}
+		s.logger.Info("clearing startup overload bit")
+		s.regenerateLSPs(false, now)
 	}
 	s.ageLSPs(now)
 	s.refreshOwnLSPs(now)

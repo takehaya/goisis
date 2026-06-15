@@ -59,6 +59,21 @@ flex-algo:
 	}
 }
 
+func TestLoadOverloadOnStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := "net: 49.0001.0000.0000.0001.00\noverload-on-startup: 30s\ncircuits:\n  - interface: eth0\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OverloadOnStartup != "30s" {
+		t.Errorf("overload-on-startup = %q, want 30s", c.OverloadOnStartup)
+	}
+}
+
 func TestFlexAlgoMetricType(t *testing.T) {
 	for _, tc := range []struct {
 		in   string

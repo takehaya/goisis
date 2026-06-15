@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -29,6 +30,9 @@ type Config struct {
 	Prefixes []string         `yaml:"prefixes"`
 	SRv6     *SRv6Config      `yaml:"srv6"`
 	FlexAlgo []FlexAlgoConfig `yaml:"flex-algo"`
+	// OverloadOnStartup, if set (a Go duration like "30s"), sets the overload
+	// bit for that long after startup.
+	OverloadOnStartup string `yaml:"overload-on-startup"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
@@ -130,6 +134,13 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			}
 			opts = append(opts, server.WithSRv6LocatorForAlgo(prefix, fa.Algo))
 		}
+	}
+	if c.OverloadOnStartup != "" {
+		d, err := time.ParseDuration(c.OverloadOnStartup)
+		if err != nil {
+			return nil, fmt.Errorf("overload-on-startup %q: %w", c.OverloadOnStartup, err)
+		}
+		opts = append(opts, server.WithOverloadOnStartup(d))
 	}
 	for _, cc := range c.Circuits {
 		cfg, err := cc.circuit()

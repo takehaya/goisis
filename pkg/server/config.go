@@ -214,17 +214,18 @@ type FlexAlgoConfig struct {
 }
 
 type options struct {
-	logger      *slog.Logger
-	systemID    packet.SystemID
-	areaAddrs   []packet.AreaAddress
-	hostname    string
-	circuits    []CircuitConfig
-	prefixes    []AdvertisedPrefix
-	connected   []netip.Prefix
-	locators    []SRv6LocatorConfig
-	flexAlgos   []FlexAlgoConfig
-	fib         fib.FIB
-	hasSystemID bool
+	logger            *slog.Logger
+	systemID          packet.SystemID
+	areaAddrs         []packet.AreaAddress
+	hostname          string
+	circuits          []CircuitConfig
+	prefixes          []AdvertisedPrefix
+	connected         []netip.Prefix
+	locators          []SRv6LocatorConfig
+	flexAlgos         []FlexAlgoConfig
+	fib               fib.FIB
+	overloadOnStartup time.Duration
+	hasSystemID       bool
 }
 
 // WithLogger sets the logger used by the server. Defaults to slog.Default().
@@ -295,4 +296,13 @@ func WithSRv6LocatorForAlgo(prefix netip.Prefix, algo uint8) ServerOption {
 // (26), both in the Router Capability TLV (242).
 func WithFlexAlgo(cfg FlexAlgoConfig) ServerOption {
 	return func(o *options) { o.flexAlgos = append(o.flexAlgos, cfg) }
+}
+
+// WithOverloadOnStartup sets the overload bit (ISO 10589) in this node's own
+// LSP for the given duration after startup, then clears it. While set, peers
+// keep the node reachable for its own prefixes but route no transit traffic
+// through it — giving routes time to settle (e.g. a BGP load) before the node
+// carries transit. A zero or negative duration disables the behavior.
+func WithOverloadOnStartup(d time.Duration) ServerOption {
+	return func(o *options) { o.overloadOnStartup = d }
 }
