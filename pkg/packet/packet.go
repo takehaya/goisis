@@ -112,6 +112,9 @@ func (l LSPID) NodeID() NodeID { return NodeID(l[:7]) }
 // FragmentID returns the LSP fragment number.
 func (l LSPID) FragmentID() byte { return l[7] }
 
+// IsNodeLSP reports whether this is a node (non-pseudonode) LSP.
+func (l LSPID) IsNodeLSP() bool { return l.NodeID().PseudonodeID() == 0 }
+
 func (l LSPID) String() string {
 	return fmt.Sprintf("%s-%02x", l.NodeID(), l[7])
 }

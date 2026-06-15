@@ -158,9 +158,8 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packet.TLV, att, forceRefresh bool, now time.Time) {
 	db := s.dbs[level]
 	ex := db.get(id)
-	// The overload bit applies to this node's own LSP (pseudonode octet 0), not
-	// to pseudonode LSPs.
-	overload := id[6] == 0 && s.overloaded(now)
+	// The overload bit applies to this node's own LSP, not to pseudonode LSPs.
+	overload := id.IsNodeLSP() && s.overloaded(now)
 
 	newBody, err := packet.MarshalTLVs(tlvs)
 	if err != nil {

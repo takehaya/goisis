@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"connectrpc.com/connect"
@@ -217,7 +218,7 @@ func newFlexAlgoCmd(addr *string) *cobra.Command {
 					adv = d.GetAdvertiser()
 				}
 				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
-					fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, joinStrings(fa.GetParticipants()))
+					fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, strings.Join(fa.GetParticipants(), ", "))
 			}
 			return w.Flush()
 		},
@@ -235,17 +236,6 @@ func metricTypeStr(mt uint32) string {
 	default:
 		return fmt.Sprintf("%d", mt)
 	}
-}
-
-func joinStrings(s []string) string {
-	out := ""
-	for i, v := range s {
-		if i > 0 {
-			out += ", "
-		}
-		out += v
-	}
-	return out
 }
 
 func nextHops(r *goisisv1alpha1.Route) string {

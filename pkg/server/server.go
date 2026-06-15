@@ -180,8 +180,8 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	// statically derived from config and reinstalled below, so deleting them
 	// here would needlessly withdraw seg6local forwarding mid-startup.
 	ownSIDs := map[netip.Prefix]bool{}
-	for _, lc := range s.locators {
-		ownSIDs[netip.PrefixFrom(lc.endSID(), 128)] = true
+	for _, sid := range s.localSIDs() {
+		ownSIDs[netip.PrefixFrom(sid, 128)] = true
 	}
 	if err := s.fib.Sweep(func(p netip.Prefix) bool {
 		if _, ok := s.rib[p]; ok {
@@ -221,13 +221,21 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	}
 }
 
+// localSIDs returns the local End SID address for each advertised SRv6 locator.
+func (s *IsisServer) localSIDs() []netip.Addr {
+	out := make([]netip.Addr, 0, len(s.locators))
+	for _, lc := range s.locators {
+		out = append(out, lc.endSID())
+	}
+	return out
+}
+
 // installLocalSIDs (re-)programs the local End SID for every advertised SRv6
 // locator. AddLocalSID is idempotent (RouteReplace), so this is safe to call
 // repeatedly; it both retries a failed initial install and repairs a SID
 // deleted out-of-band while the daemon runs.
 func (s *IsisServer) installLocalSIDs() {
-	for _, lc := range s.locators {
-		sid := lc.endSID()
+	for _, sid := range s.localSIDs() {
 		if err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd}); err != nil {
 			s.logger.Error("install local End SID", "sid", sid, "error", err)
 		}
@@ -237,8 +245,7 @@ func (s *IsisServer) installLocalSIDs() {
 // removeLocalSIDs withdraws every local End SID this node installed, so a clean
 // shutdown leaves no orphaned seg6local routes in the kernel.
 func (s *IsisServer) removeLocalSIDs() {
-	for _, lc := range s.locators {
-		sid := lc.endSID()
+	for _, sid := range s.localSIDs() {
 		if err := s.fib.RemoveLocalSID(sid); err != nil {
 			s.logger.Error("remove local End SID", "sid", sid, "error", err)
 		}
