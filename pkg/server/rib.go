@@ -53,12 +53,11 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, NextHops: nhs}
 	}
 
-	failed := s.programFIB(next)
-	// Do not record a prefix whose FIB Update failed as installed, so the
-	// next recompute re-attempts it instead of skipping it as unchanged.
-	for p := range failed {
-		delete(next, p)
-	}
+	// s.rib always holds the DESIRED route set: the diff, withdrawals, and
+	// change-events are computed against it. FIB-install failures are tracked
+	// separately in s.fibPending and retried, so a transient netlink error
+	// neither loses the withdraw bookkeeping nor re-emits change events.
+	s.programFIB(next)
 	s.rib = next
 }
 
@@ -120,15 +119,23 @@ func (s *IsisServer) findAdjacency(id packet.SystemID) (*adjacency, *circuit) {
 	return nil, nil
 }
 
-// programFIB applies the difference between the new route set and the current
-// RIB to the FIB and returns the set of prefixes whose Update failed (so the
-// caller can leave them out of the committed RIB and retry next recompute).
-func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) map[netip.Prefix]bool {
-	var failed map[netip.Prefix]bool
+// programFIB applies the difference between the desired route set and the
+// current RIB to the FIB. A route whose change is new emits a watch event and
+// is written; a route whose previous write failed (in s.fibPending) is
+// re-written without re-emitting; withdrawn routes are removed.
+func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 	for p, r := range next {
 		old, ok := s.rib[p]
-		if ok && sameRoute(old, r) {
-			continue
+		changed := !ok || !sameRoute(old, r)
+		if changed {
+			// Notify watchers of the routing decision regardless of whether
+			// the kernel write succeeds (watch-only consumers program their
+			// own dataplane).
+			r := r
+			s.emitRoute(&r, false)
+		}
+		if !changed && !s.fibPending[p] {
+			continue // unchanged and previously installed
 		}
 		nhs := make([]fib.Nexthop, len(r.NextHops))
 		for i, nh := range r.NextHops {
@@ -136,20 +143,27 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) map[netip.Prefi
 		}
 		if err := s.fib.Update(p, nhs); err != nil {
 			s.logger.Error("fib update", "prefix", p, "error", err)
-			if failed == nil {
-				failed = map[netip.Prefix]bool{}
-			}
-			failed[p] = true
+			s.fibPending[p] = true // retry next recompute
+		} else {
+			delete(s.fibPending, p)
 		}
 	}
 	for p := range s.rib {
 		if _, ok := next[p]; !ok {
+			old := s.rib[p]
+			s.emitRoute(&old, true)
 			if err := s.fib.Withdraw(p); err != nil {
 				s.logger.Error("fib withdraw", "prefix", p, "error", err)
 			}
+			delete(s.fibPending, p)
 		}
 	}
-	return failed
+}
+
+func (s *IsisServer) emitRoute(r *RouteInfo, withdrawn bool) {
+	if len(s.watchers) > 0 {
+		s.emit(Event{Route: r, Withdrawn: withdrawn})
+	}
 }
 
 func sameRoute(a, b RouteInfo) bool {

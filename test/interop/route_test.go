@@ -141,4 +141,14 @@ router isis 1
 	if out, err := exec.Command("docker", "exec", "fr", "ping", "-c", "2", "-W", "2", "10.1.1.1").CombinedOutput(); err != nil {
 		t.Fatalf("FRR -> goisis loopback ping failed: %v\n%s", err, out)
 	}
+
+	// The goisis CLI (in-container) must show the adjacency and the route.
+	nbr := run(t, "docker", "exec", "gi", "/usr/local/bin/goisis", "neighbor")
+	if !strings.Contains(nbr, "0000.0000.00ff") || !strings.Contains(nbr, "Up") {
+		t.Errorf("goisis neighbor did not show FRR Up:\n%s", nbr)
+	}
+	rt := run(t, "docker", "exec", "gi", "/usr/local/bin/goisis", "route")
+	if !strings.Contains(rt, "10.2.2.2/32") {
+		t.Errorf("goisis route did not show FRR's loopback:\n%s", rt)
+	}
 }

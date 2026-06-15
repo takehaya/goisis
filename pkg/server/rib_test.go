@@ -43,6 +43,122 @@ func (f *recordFIB) get(p netip.Prefix) ([]fib.Nexthop, bool) {
 	return nh, ok
 }
 
+// failFIB is a single-threaded FIB stub that can be armed to fail Update and
+// records installed routes and withdraw calls (for white-box programFIB tests).
+type failFIB struct {
+	installed map[netip.Prefix]bool
+	withdrawn map[netip.Prefix]bool
+	failNext  bool
+}
+
+func newFailFIB() *failFIB {
+	return &failFIB{installed: map[netip.Prefix]bool{}, withdrawn: map[netip.Prefix]bool{}}
+}
+
+func (f *failFIB) Update(p netip.Prefix, _ []fib.Nexthop) error {
+	if f.failNext {
+		return errFIB
+	}
+	f.installed[p] = true
+	return nil
+}
+
+func (f *failFIB) Withdraw(p netip.Prefix) error {
+	delete(f.installed, p)
+	f.withdrawn[p] = true
+	return nil
+}
+
+func (f *failFIB) Sweep(func(netip.Prefix) bool) error { return nil }
+
+var errFIB = fibError("fib unavailable")
+
+type fibError string
+
+func (e fibError) Error() string { return string(e) }
+
+// TestProgramFIBFailureThenWithdraw drives programFIB through the failed-update
+// then become-undesired sequence and asserts the stale route is still
+// withdrawn (regression for the M4 "delete from rib" bug).
+func TestProgramFIBFailureThenWithdraw(t *testing.T) {
+	ff := newFailFIB()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+		WithFIB(ff),
+	)
+	p := netip.MustParsePrefix("10.9.9.0/24")
+	r1 := RouteInfo{Prefix: p, Metric: 10, NextHops: []NextHopInfo{{Interface: "c", Gateway: netip.MustParseAddr("10.0.0.2")}}}
+	r2 := RouteInfo{Prefix: p, Metric: 20, NextHops: []NextHopInfo{{Interface: "c", Gateway: netip.MustParseAddr("10.0.0.3")}}}
+
+	commit := func(next map[netip.Prefix]RouteInfo) {
+		s.programFIB(next)
+		s.rib = next
+	}
+
+	commit(map[netip.Prefix]RouteInfo{p: r1}) // cycle 0: install
+	if !ff.installed[p] {
+		t.Fatal("route not installed on cycle 0")
+	}
+	ff.failNext = true
+	commit(map[netip.Prefix]RouteInfo{p: r2}) // cycle 1: change, Update fails
+	if !s.fibPending[p] {
+		t.Fatal("failed prefix not marked pending for retry")
+	}
+	ff.failNext = false
+	commit(map[netip.Prefix]RouteInfo{}) // cycle 2: prefix becomes undesired
+	if !ff.withdrawn[p] {
+		t.Fatal("stale route was not withdrawn after a failed update (leak)")
+	}
+	if s.fibPending[p] {
+		t.Error("withdrawn prefix should be cleared from the pending set")
+	}
+}
+
+// TestProgramFIBRetryNoDuplicateEmit asserts a failed update is retried
+// without re-emitting a watch event for the unchanged route.
+func TestProgramFIBRetryNoDuplicateEmit(t *testing.T) {
+	ff := newFailFIB()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+		WithFIB(ff),
+	)
+	// Add a watcher directly (no Serve loop in this white-box test).
+	w := &watcher{ch: make(chan Event, 64)}
+	s.watchers[w] = struct{}{}
+
+	p := netip.MustParsePrefix("10.9.9.0/24")
+	r := RouteInfo{Prefix: p, Metric: 10, NextHops: []NextHopInfo{{Interface: "c", Gateway: netip.MustParseAddr("10.0.0.2")}}}
+	commit := func(next map[netip.Prefix]RouteInfo) { s.programFIB(next); s.rib = next }
+
+	ff.failNext = true
+	commit(map[netip.Prefix]RouteInfo{p: r}) // add (emit) + Update fails -> pending
+	ff.failNext = false
+	commit(map[netip.Prefix]RouteInfo{p: r}) // unchanged: retry Update, must NOT re-emit
+
+	adds := 0
+	for {
+		select {
+		case ev := <-w.ch:
+			if ev.Route != nil && !ev.Withdrawn {
+				adds++
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if adds != 1 {
+		t.Errorf("got %d add events for an unchanged route, want 1", adds)
+	}
+	if !ff.installed[p] {
+		t.Error("route not installed after retry")
+	}
+}
+
 func TestRIBRouteWithResolvedNextHop(t *testing.T) {
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)

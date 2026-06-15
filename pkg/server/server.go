@@ -35,13 +35,15 @@ type IsisServer struct {
 	done    chan struct{}
 
 	// The following are owned by the Serve loop after Serve starts.
-	circuits  []*circuit
-	dbs       map[packet.Level]*lsdb
-	levelCap  levelSet // union of circuit levels, for the LSP IS-Type field
-	fib       fib.FIB
-	rib       map[netip.Prefix]RouteInfo
-	connected map[netip.Prefix]bool // directly-connected prefixes (never installed)
-	spfDirty  bool                  // a topology change needs an SPF recompute
+	circuits   []*circuit
+	dbs        map[packet.Level]*lsdb
+	levelCap   levelSet // union of circuit levels, for the LSP IS-Type field
+	fib        fib.FIB
+	rib        map[netip.Prefix]RouteInfo
+	connected  map[netip.Prefix]bool // directly-connected prefixes (never installed)
+	fibPending map[netip.Prefix]bool // routes whose last FIB write failed; retried
+	spfDirty   bool                  // a topology change needs an SPF recompute
+	watchers   map[*watcher]struct{} // WatchEvent subscribers
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -60,18 +62,20 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		opt(&o)
 	}
 	s := &IsisServer{
-		logger:    o.logger,
-		systemID:  o.systemID,
-		areaAddrs: o.areaAddrs,
-		hostname:  o.hostname,
-		prefixes:  o.prefixes,
-		mgmtCh:    make(chan *mgmtOp, 1),
-		eventCh:   make(chan event, 256),
-		done:      make(chan struct{}),
-		dbs:       map[packet.Level]*lsdb{},
-		fib:       o.fib,
-		rib:       map[netip.Prefix]RouteInfo{},
-		connected: map[netip.Prefix]bool{},
+		logger:     o.logger,
+		systemID:   o.systemID,
+		areaAddrs:  o.areaAddrs,
+		hostname:   o.hostname,
+		prefixes:   o.prefixes,
+		mgmtCh:     make(chan *mgmtOp, 1),
+		eventCh:    make(chan event, 256),
+		done:       make(chan struct{}),
+		dbs:        map[packet.Level]*lsdb{},
+		fib:        o.fib,
+		rib:        map[netip.Prefix]RouteInfo{},
+		connected:  map[netip.Prefix]bool{},
+		fibPending: map[netip.Prefix]bool{},
+		watchers:   map[*watcher]struct{}{},
 	}
 	if s.fib == nil {
 		s.fib = fib.Noop{}
@@ -167,6 +171,7 @@ func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
 	for _, c := range s.circuits {
 		_ = c.cfg.Transport.Close()
 	}
+	s.closeWatchers()
 	readers.Wait()
 	for {
 		select {
@@ -252,6 +257,18 @@ func (s *IsisServer) GetGlobal(ctx context.Context) (Global, error) {
 		return nil
 	})
 	return g, err
+}
+
+// ListCircuits returns a snapshot of the configured circuits.
+func (s *IsisServer) ListCircuits(ctx context.Context) ([]CircuitInfo, error) {
+	var out []CircuitInfo
+	err := s.mgmtOperation(ctx, func() error {
+		for _, c := range s.circuits {
+			out = append(out, c.info())
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ListLSDB returns a snapshot of the link-state database for every level.

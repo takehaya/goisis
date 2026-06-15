@@ -27,6 +27,21 @@ $ make build test lint
 
 Protobuf codegen is reproducible offline: plugins are pinned via `go.mod` tool directives and driven by `go tool buf generate` (`make proto`).
 
+## Running
+
+```console
+$ sudo goisisd -f examples/goisisd.yaml      # the daemon (needs CAP_NET_RAW, +CAP_NET_ADMIN for the FIB)
+$ goisis neighbor                            # adjacencies
+$ goisis database                            # the link-state database
+$ goisis route                               # computed routes
+$ goisis monitor                             # stream adjacency/route changes
+```
+
+The daemon exposes a [Connect RPC](https://connectrpc.com/) API (Connect,
+gRPC, and gRPC-Web on one port), so `grpcurl` and `buf curl` work against it
+too. To embed goisis as a library and consume routes directly (e.g. to program
+an eBPF dataplane), see [`examples/watchroutes`](examples/watchroutes).
+
 ## Naming
 
 This project is unrelated to [choppsv1/goisis](https://github.com/choppsv1/goisis). The module path is `github.com/takehaya/goisis`.

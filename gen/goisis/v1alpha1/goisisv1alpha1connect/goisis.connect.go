@@ -35,12 +35,34 @@ const (
 const (
 	// IsisServiceGetIsisProcedure is the fully-qualified name of the IsisService's GetIsis RPC.
 	IsisServiceGetIsisProcedure = "/goisis.v1alpha1.IsisService/GetIsis"
+	// IsisServiceListCircuitsProcedure is the fully-qualified name of the IsisService's ListCircuits
+	// RPC.
+	IsisServiceListCircuitsProcedure = "/goisis.v1alpha1.IsisService/ListCircuits"
+	// IsisServiceListAdjacenciesProcedure is the fully-qualified name of the IsisService's
+	// ListAdjacencies RPC.
+	IsisServiceListAdjacenciesProcedure = "/goisis.v1alpha1.IsisService/ListAdjacencies"
+	// IsisServiceGetLsdbProcedure is the fully-qualified name of the IsisService's GetLsdb RPC.
+	IsisServiceGetLsdbProcedure = "/goisis.v1alpha1.IsisService/GetLsdb"
+	// IsisServiceListRoutesProcedure is the fully-qualified name of the IsisService's ListRoutes RPC.
+	IsisServiceListRoutesProcedure = "/goisis.v1alpha1.IsisService/ListRoutes"
+	// IsisServiceWatchEventProcedure is the fully-qualified name of the IsisService's WatchEvent RPC.
+	IsisServiceWatchEventProcedure = "/goisis.v1alpha1.IsisService/WatchEvent"
 )
 
 // IsisServiceClient is a client for the goisis.v1alpha1.IsisService service.
 type IsisServiceClient interface {
 	// GetIsis returns instance-wide daemon state.
 	GetIsis(context.Context, *connect.Request[v1alpha1.GetIsisRequest]) (*connect.Response[v1alpha1.GetIsisResponse], error)
+	// ListCircuits lists the configured circuits.
+	ListCircuits(context.Context, *connect.Request[v1alpha1.ListCircuitsRequest]) (*connect.Response[v1alpha1.ListCircuitsResponse], error)
+	// ListAdjacencies lists IS-IS adjacencies across all circuits.
+	ListAdjacencies(context.Context, *connect.Request[v1alpha1.ListAdjacenciesRequest]) (*connect.Response[v1alpha1.ListAdjacenciesResponse], error)
+	// GetLsdb returns the link-state database.
+	GetLsdb(context.Context, *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error)
+	// ListRoutes returns the computed routes (the RIB).
+	ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error)
+	// WatchEvent streams adjacency and route changes as they happen.
+	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error)
 }
 
 // NewIsisServiceClient constructs a client for the goisis.v1alpha1.IsisService service. By default,
@@ -60,12 +82,47 @@ func NewIsisServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(isisServiceMethods.ByName("GetIsis")),
 			connect.WithClientOptions(opts...),
 		),
+		listCircuits: connect.NewClient[v1alpha1.ListCircuitsRequest, v1alpha1.ListCircuitsResponse](
+			httpClient,
+			baseURL+IsisServiceListCircuitsProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ListCircuits")),
+			connect.WithClientOptions(opts...),
+		),
+		listAdjacencies: connect.NewClient[v1alpha1.ListAdjacenciesRequest, v1alpha1.ListAdjacenciesResponse](
+			httpClient,
+			baseURL+IsisServiceListAdjacenciesProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ListAdjacencies")),
+			connect.WithClientOptions(opts...),
+		),
+		getLsdb: connect.NewClient[v1alpha1.GetLsdbRequest, v1alpha1.GetLsdbResponse](
+			httpClient,
+			baseURL+IsisServiceGetLsdbProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("GetLsdb")),
+			connect.WithClientOptions(opts...),
+		),
+		listRoutes: connect.NewClient[v1alpha1.ListRoutesRequest, v1alpha1.ListRoutesResponse](
+			httpClient,
+			baseURL+IsisServiceListRoutesProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ListRoutes")),
+			connect.WithClientOptions(opts...),
+		),
+		watchEvent: connect.NewClient[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse](
+			httpClient,
+			baseURL+IsisServiceWatchEventProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("WatchEvent")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // isisServiceClient implements IsisServiceClient.
 type isisServiceClient struct {
-	getIsis *connect.Client[v1alpha1.GetIsisRequest, v1alpha1.GetIsisResponse]
+	getIsis         *connect.Client[v1alpha1.GetIsisRequest, v1alpha1.GetIsisResponse]
+	listCircuits    *connect.Client[v1alpha1.ListCircuitsRequest, v1alpha1.ListCircuitsResponse]
+	listAdjacencies *connect.Client[v1alpha1.ListAdjacenciesRequest, v1alpha1.ListAdjacenciesResponse]
+	getLsdb         *connect.Client[v1alpha1.GetLsdbRequest, v1alpha1.GetLsdbResponse]
+	listRoutes      *connect.Client[v1alpha1.ListRoutesRequest, v1alpha1.ListRoutesResponse]
+	watchEvent      *connect.Client[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse]
 }
 
 // GetIsis calls goisis.v1alpha1.IsisService.GetIsis.
@@ -73,10 +130,45 @@ func (c *isisServiceClient) GetIsis(ctx context.Context, req *connect.Request[v1
 	return c.getIsis.CallUnary(ctx, req)
 }
 
+// ListCircuits calls goisis.v1alpha1.IsisService.ListCircuits.
+func (c *isisServiceClient) ListCircuits(ctx context.Context, req *connect.Request[v1alpha1.ListCircuitsRequest]) (*connect.Response[v1alpha1.ListCircuitsResponse], error) {
+	return c.listCircuits.CallUnary(ctx, req)
+}
+
+// ListAdjacencies calls goisis.v1alpha1.IsisService.ListAdjacencies.
+func (c *isisServiceClient) ListAdjacencies(ctx context.Context, req *connect.Request[v1alpha1.ListAdjacenciesRequest]) (*connect.Response[v1alpha1.ListAdjacenciesResponse], error) {
+	return c.listAdjacencies.CallUnary(ctx, req)
+}
+
+// GetLsdb calls goisis.v1alpha1.IsisService.GetLsdb.
+func (c *isisServiceClient) GetLsdb(ctx context.Context, req *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error) {
+	return c.getLsdb.CallUnary(ctx, req)
+}
+
+// ListRoutes calls goisis.v1alpha1.IsisService.ListRoutes.
+func (c *isisServiceClient) ListRoutes(ctx context.Context, req *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error) {
+	return c.listRoutes.CallUnary(ctx, req)
+}
+
+// WatchEvent calls goisis.v1alpha1.IsisService.WatchEvent.
+func (c *isisServiceClient) WatchEvent(ctx context.Context, req *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error) {
+	return c.watchEvent.CallServerStream(ctx, req)
+}
+
 // IsisServiceHandler is an implementation of the goisis.v1alpha1.IsisService service.
 type IsisServiceHandler interface {
 	// GetIsis returns instance-wide daemon state.
 	GetIsis(context.Context, *connect.Request[v1alpha1.GetIsisRequest]) (*connect.Response[v1alpha1.GetIsisResponse], error)
+	// ListCircuits lists the configured circuits.
+	ListCircuits(context.Context, *connect.Request[v1alpha1.ListCircuitsRequest]) (*connect.Response[v1alpha1.ListCircuitsResponse], error)
+	// ListAdjacencies lists IS-IS adjacencies across all circuits.
+	ListAdjacencies(context.Context, *connect.Request[v1alpha1.ListAdjacenciesRequest]) (*connect.Response[v1alpha1.ListAdjacenciesResponse], error)
+	// GetLsdb returns the link-state database.
+	GetLsdb(context.Context, *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error)
+	// ListRoutes returns the computed routes (the RIB).
+	ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error)
+	// WatchEvent streams adjacency and route changes as they happen.
+	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error
 }
 
 // NewIsisServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -92,10 +184,50 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(isisServiceMethods.ByName("GetIsis")),
 		connect.WithHandlerOptions(opts...),
 	)
+	isisServiceListCircuitsHandler := connect.NewUnaryHandler(
+		IsisServiceListCircuitsProcedure,
+		svc.ListCircuits,
+		connect.WithSchema(isisServiceMethods.ByName("ListCircuits")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceListAdjacenciesHandler := connect.NewUnaryHandler(
+		IsisServiceListAdjacenciesProcedure,
+		svc.ListAdjacencies,
+		connect.WithSchema(isisServiceMethods.ByName("ListAdjacencies")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceGetLsdbHandler := connect.NewUnaryHandler(
+		IsisServiceGetLsdbProcedure,
+		svc.GetLsdb,
+		connect.WithSchema(isisServiceMethods.ByName("GetLsdb")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceListRoutesHandler := connect.NewUnaryHandler(
+		IsisServiceListRoutesProcedure,
+		svc.ListRoutes,
+		connect.WithSchema(isisServiceMethods.ByName("ListRoutes")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceWatchEventHandler := connect.NewServerStreamHandler(
+		IsisServiceWatchEventProcedure,
+		svc.WatchEvent,
+		connect.WithSchema(isisServiceMethods.ByName("WatchEvent")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/goisis.v1alpha1.IsisService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case IsisServiceGetIsisProcedure:
 			isisServiceGetIsisHandler.ServeHTTP(w, r)
+		case IsisServiceListCircuitsProcedure:
+			isisServiceListCircuitsHandler.ServeHTTP(w, r)
+		case IsisServiceListAdjacenciesProcedure:
+			isisServiceListAdjacenciesHandler.ServeHTTP(w, r)
+		case IsisServiceGetLsdbProcedure:
+			isisServiceGetLsdbHandler.ServeHTTP(w, r)
+		case IsisServiceListRoutesProcedure:
+			isisServiceListRoutesHandler.ServeHTTP(w, r)
+		case IsisServiceWatchEventProcedure:
+			isisServiceWatchEventHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -107,4 +239,24 @@ type UnimplementedIsisServiceHandler struct{}
 
 func (UnimplementedIsisServiceHandler) GetIsis(context.Context, *connect.Request[v1alpha1.GetIsisRequest]) (*connect.Response[v1alpha1.GetIsisResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.GetIsis is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ListCircuits(context.Context, *connect.Request[v1alpha1.ListCircuitsRequest]) (*connect.Response[v1alpha1.ListCircuitsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListCircuits is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ListAdjacencies(context.Context, *connect.Request[v1alpha1.ListAdjacenciesRequest]) (*connect.Response[v1alpha1.ListAdjacenciesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListAdjacencies is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) GetLsdb(context.Context, *connect.Request[v1alpha1.GetLsdbRequest]) (*connect.Response[v1alpha1.GetLsdbResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.GetLsdb is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ListRoutes(context.Context, *connect.Request[v1alpha1.ListRoutesRequest]) (*connect.Response[v1alpha1.ListRoutesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListRoutes is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.WatchEvent is not implemented"))
 }

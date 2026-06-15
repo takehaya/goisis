@@ -7,6 +7,16 @@ package goisis.v1alpha1;
 service IsisService {
   // GetIsis returns instance-wide daemon state.
   rpc GetIsis(GetIsisRequest) returns (GetIsisResponse);
+  // ListCircuits lists the configured circuits.
+  rpc ListCircuits(ListCircuitsRequest) returns (ListCircuitsResponse);
+  // ListAdjacencies lists IS-IS adjacencies across all circuits.
+  rpc ListAdjacencies(ListAdjacenciesRequest) returns (ListAdjacenciesResponse);
+  // GetLsdb returns the link-state database.
+  rpc GetLsdb(GetLsdbRequest) returns (GetLsdbResponse);
+  // ListRoutes returns the computed routes (the RIB).
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  // WatchEvent streams adjacency and route changes as they happen.
+  rpc WatchEvent(WatchEventRequest) returns (stream WatchEventResponse);
 }
 
 message GetIsisRequest {}
@@ -19,4 +29,99 @@ message GetIsisResponse {
 message Global {
   // version is the goisisd build version.
   string version = 1;
+  // system_id is the IS-IS system identifier, dotted (e.g. 0000.0000.0001).
+  string system_id = 2;
+}
+
+// Level is an IS-IS level.
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  LEVEL_1 = 1;
+  LEVEL_2 = 2;
+}
+
+// Circuit is one configured IS-IS circuit.
+message Circuit {
+  string interface = 1;
+  bool point_to_point = 2;
+  bool level1 = 3;
+  bool level2 = 4;
+  uint32 priority = 5;
+  uint32 metric = 6;
+}
+
+// Adjacency is one IS-IS adjacency.
+message Adjacency {
+  string interface = 1;
+  Level level = 2;
+  string system_id = 3;
+  string snpa = 4;
+  string state = 5; // Down, Init, Up
+  uint32 priority = 6;
+  uint32 holding_time = 7;
+}
+
+// Lsp is one entry in the link-state database.
+message Lsp {
+  Level level = 1;
+  string lsp_id = 2;
+  uint32 sequence_number = 3;
+  uint32 remaining_lifetime = 4;
+  uint32 checksum = 5;
+  bool own = 6;
+}
+
+// NextHop is one resolved next hop for a route.
+message NextHop {
+  string interface = 1;
+  string gateway = 2;
+}
+
+// Route is one computed route.
+message Route {
+  string prefix = 1;
+  uint32 metric = 2;
+  Level level = 3;
+  repeated NextHop next_hops = 4;
+}
+
+message ListCircuitsRequest {}
+message ListCircuitsResponse {
+  repeated Circuit circuits = 1;
+}
+
+message ListAdjacenciesRequest {}
+message ListAdjacenciesResponse {
+  repeated Adjacency adjacencies = 1;
+}
+
+message GetLsdbRequest {}
+message GetLsdbResponse {
+  repeated Lsp lsps = 1;
+}
+
+message ListRoutesRequest {}
+message ListRoutesResponse {
+  repeated Route routes = 1;
+}
+
+message WatchEventRequest {}
+
+message WatchEventResponse {
+  oneof event {
+    AdjacencyEvent adjacency = 1;
+    RouteEvent route = 2;
+  }
+}
+
+// AdjacencyEvent reports an adjacency state change.
+message AdjacencyEvent {
+  Adjacency adjacency = 1;
+}
+
+// RouteEvent reports a route addition/change (withdrawn=false) or removal
+// (withdrawn=true).
+message RouteEvent {
+  Route route = 1;
+  bool withdrawn = 2;
 }

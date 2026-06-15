@@ -21,6 +21,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Level is an IS-IS level.
+type Level int32
+
+const (
+	Level_LEVEL_UNSPECIFIED Level = 0
+	Level_LEVEL_1           Level = 1
+	Level_LEVEL_2           Level = 2
+)
+
+// Enum value maps for Level.
+var (
+	Level_name = map[int32]string{
+		0: "LEVEL_UNSPECIFIED",
+		1: "LEVEL_1",
+		2: "LEVEL_2",
+	}
+	Level_value = map[string]int32{
+		"LEVEL_UNSPECIFIED": 0,
+		"LEVEL_1":           1,
+		"LEVEL_2":           2,
+	}
+)
+
+func (x Level) Enum() *Level {
+	p := new(Level)
+	*p = x
+	return p
+}
+
+func (x Level) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Level) Descriptor() protoreflect.EnumDescriptor {
+	return file_goisis_v1alpha1_goisis_proto_enumTypes[0].Descriptor()
+}
+
+func (Level) Type() protoreflect.EnumType {
+	return &file_goisis_v1alpha1_goisis_proto_enumTypes[0]
+}
+
+func (x Level) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Level.Descriptor instead.
+func (Level) EnumDescriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{0}
+}
+
 type GetIsisRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -105,7 +155,9 @@ func (x *GetIsisResponse) GetGlobal() *Global {
 type Global struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// version is the goisisd build version.
-	Version       string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	// system_id is the IS-IS system identifier, dotted (e.g. 0000.0000.0001).
+	SystemId      string `protobuf:"bytes,2,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -147,6 +199,935 @@ func (x *Global) GetVersion() string {
 	return ""
 }
 
+func (x *Global) GetSystemId() string {
+	if x != nil {
+		return x.SystemId
+	}
+	return ""
+}
+
+// Circuit is one configured IS-IS circuit.
+type Circuit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Interface     string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	PointToPoint  bool                   `protobuf:"varint,2,opt,name=point_to_point,json=pointToPoint,proto3" json:"point_to_point,omitempty"`
+	Level1        bool                   `protobuf:"varint,3,opt,name=level1,proto3" json:"level1,omitempty"`
+	Level2        bool                   `protobuf:"varint,4,opt,name=level2,proto3" json:"level2,omitempty"`
+	Priority      uint32                 `protobuf:"varint,5,opt,name=priority,proto3" json:"priority,omitempty"`
+	Metric        uint32                 `protobuf:"varint,6,opt,name=metric,proto3" json:"metric,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Circuit) Reset() {
+	*x = Circuit{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Circuit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Circuit) ProtoMessage() {}
+
+func (x *Circuit) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Circuit.ProtoReflect.Descriptor instead.
+func (*Circuit) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Circuit) GetInterface() string {
+	if x != nil {
+		return x.Interface
+	}
+	return ""
+}
+
+func (x *Circuit) GetPointToPoint() bool {
+	if x != nil {
+		return x.PointToPoint
+	}
+	return false
+}
+
+func (x *Circuit) GetLevel1() bool {
+	if x != nil {
+		return x.Level1
+	}
+	return false
+}
+
+func (x *Circuit) GetLevel2() bool {
+	if x != nil {
+		return x.Level2
+	}
+	return false
+}
+
+func (x *Circuit) GetPriority() uint32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *Circuit) GetMetric() uint32 {
+	if x != nil {
+		return x.Metric
+	}
+	return 0
+}
+
+// Adjacency is one IS-IS adjacency.
+type Adjacency struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Interface     string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	Level         Level                  `protobuf:"varint,2,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
+	SystemId      string                 `protobuf:"bytes,3,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
+	Snpa          string                 `protobuf:"bytes,4,opt,name=snpa,proto3" json:"snpa,omitempty"`
+	State         string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"` // Down, Init, Up
+	Priority      uint32                 `protobuf:"varint,6,opt,name=priority,proto3" json:"priority,omitempty"`
+	HoldingTime   uint32                 `protobuf:"varint,7,opt,name=holding_time,json=holdingTime,proto3" json:"holding_time,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Adjacency) Reset() {
+	*x = Adjacency{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Adjacency) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Adjacency) ProtoMessage() {}
+
+func (x *Adjacency) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Adjacency.ProtoReflect.Descriptor instead.
+func (*Adjacency) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Adjacency) GetInterface() string {
+	if x != nil {
+		return x.Interface
+	}
+	return ""
+}
+
+func (x *Adjacency) GetLevel() Level {
+	if x != nil {
+		return x.Level
+	}
+	return Level_LEVEL_UNSPECIFIED
+}
+
+func (x *Adjacency) GetSystemId() string {
+	if x != nil {
+		return x.SystemId
+	}
+	return ""
+}
+
+func (x *Adjacency) GetSnpa() string {
+	if x != nil {
+		return x.Snpa
+	}
+	return ""
+}
+
+func (x *Adjacency) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *Adjacency) GetPriority() uint32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
+func (x *Adjacency) GetHoldingTime() uint32 {
+	if x != nil {
+		return x.HoldingTime
+	}
+	return 0
+}
+
+// Lsp is one entry in the link-state database.
+type Lsp struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Level             Level                  `protobuf:"varint,1,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
+	LspId             string                 `protobuf:"bytes,2,opt,name=lsp_id,json=lspId,proto3" json:"lsp_id,omitempty"`
+	SequenceNumber    uint32                 `protobuf:"varint,3,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
+	RemainingLifetime uint32                 `protobuf:"varint,4,opt,name=remaining_lifetime,json=remainingLifetime,proto3" json:"remaining_lifetime,omitempty"`
+	Checksum          uint32                 `protobuf:"varint,5,opt,name=checksum,proto3" json:"checksum,omitempty"`
+	Own               bool                   `protobuf:"varint,6,opt,name=own,proto3" json:"own,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *Lsp) Reset() {
+	*x = Lsp{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Lsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Lsp) ProtoMessage() {}
+
+func (x *Lsp) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Lsp.ProtoReflect.Descriptor instead.
+func (*Lsp) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Lsp) GetLevel() Level {
+	if x != nil {
+		return x.Level
+	}
+	return Level_LEVEL_UNSPECIFIED
+}
+
+func (x *Lsp) GetLspId() string {
+	if x != nil {
+		return x.LspId
+	}
+	return ""
+}
+
+func (x *Lsp) GetSequenceNumber() uint32 {
+	if x != nil {
+		return x.SequenceNumber
+	}
+	return 0
+}
+
+func (x *Lsp) GetRemainingLifetime() uint32 {
+	if x != nil {
+		return x.RemainingLifetime
+	}
+	return 0
+}
+
+func (x *Lsp) GetChecksum() uint32 {
+	if x != nil {
+		return x.Checksum
+	}
+	return 0
+}
+
+func (x *Lsp) GetOwn() bool {
+	if x != nil {
+		return x.Own
+	}
+	return false
+}
+
+// NextHop is one resolved next hop for a route.
+type NextHop struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Interface     string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	Gateway       string                 `protobuf:"bytes,2,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NextHop) Reset() {
+	*x = NextHop{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NextHop) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NextHop) ProtoMessage() {}
+
+func (x *NextHop) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NextHop.ProtoReflect.Descriptor instead.
+func (*NextHop) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *NextHop) GetInterface() string {
+	if x != nil {
+		return x.Interface
+	}
+	return ""
+}
+
+func (x *NextHop) GetGateway() string {
+	if x != nil {
+		return x.Gateway
+	}
+	return ""
+}
+
+// Route is one computed route.
+type Route struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Prefix        string                 `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	Metric        uint32                 `protobuf:"varint,2,opt,name=metric,proto3" json:"metric,omitempty"`
+	Level         Level                  `protobuf:"varint,3,opt,name=level,proto3,enum=goisis.v1alpha1.Level" json:"level,omitempty"`
+	NextHops      []*NextHop             `protobuf:"bytes,4,rep,name=next_hops,json=nextHops,proto3" json:"next_hops,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Route) Reset() {
+	*x = Route{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Route) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Route) ProtoMessage() {}
+
+func (x *Route) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Route.ProtoReflect.Descriptor instead.
+func (*Route) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *Route) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *Route) GetMetric() uint32 {
+	if x != nil {
+		return x.Metric
+	}
+	return 0
+}
+
+func (x *Route) GetLevel() Level {
+	if x != nil {
+		return x.Level
+	}
+	return Level_LEVEL_UNSPECIFIED
+}
+
+func (x *Route) GetNextHops() []*NextHop {
+	if x != nil {
+		return x.NextHops
+	}
+	return nil
+}
+
+type ListCircuitsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCircuitsRequest) Reset() {
+	*x = ListCircuitsRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCircuitsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCircuitsRequest) ProtoMessage() {}
+
+func (x *ListCircuitsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCircuitsRequest.ProtoReflect.Descriptor instead.
+func (*ListCircuitsRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{8}
+}
+
+type ListCircuitsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Circuits      []*Circuit             `protobuf:"bytes,1,rep,name=circuits,proto3" json:"circuits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCircuitsResponse) Reset() {
+	*x = ListCircuitsResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCircuitsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCircuitsResponse) ProtoMessage() {}
+
+func (x *ListCircuitsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCircuitsResponse.ProtoReflect.Descriptor instead.
+func (*ListCircuitsResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ListCircuitsResponse) GetCircuits() []*Circuit {
+	if x != nil {
+		return x.Circuits
+	}
+	return nil
+}
+
+type ListAdjacenciesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAdjacenciesRequest) Reset() {
+	*x = ListAdjacenciesRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAdjacenciesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAdjacenciesRequest) ProtoMessage() {}
+
+func (x *ListAdjacenciesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAdjacenciesRequest.ProtoReflect.Descriptor instead.
+func (*ListAdjacenciesRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{10}
+}
+
+type ListAdjacenciesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Adjacencies   []*Adjacency           `protobuf:"bytes,1,rep,name=adjacencies,proto3" json:"adjacencies,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAdjacenciesResponse) Reset() {
+	*x = ListAdjacenciesResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAdjacenciesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAdjacenciesResponse) ProtoMessage() {}
+
+func (x *ListAdjacenciesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAdjacenciesResponse.ProtoReflect.Descriptor instead.
+func (*ListAdjacenciesResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ListAdjacenciesResponse) GetAdjacencies() []*Adjacency {
+	if x != nil {
+		return x.Adjacencies
+	}
+	return nil
+}
+
+type GetLsdbRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLsdbRequest) Reset() {
+	*x = GetLsdbRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLsdbRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLsdbRequest) ProtoMessage() {}
+
+func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLsdbRequest.ProtoReflect.Descriptor instead.
+func (*GetLsdbRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{12}
+}
+
+type GetLsdbResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Lsps          []*Lsp                 `protobuf:"bytes,1,rep,name=lsps,proto3" json:"lsps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetLsdbResponse) Reset() {
+	*x = GetLsdbResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetLsdbResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetLsdbResponse) ProtoMessage() {}
+
+func (x *GetLsdbResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetLsdbResponse.ProtoReflect.Descriptor instead.
+func (*GetLsdbResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetLsdbResponse) GetLsps() []*Lsp {
+	if x != nil {
+		return x.Lsps
+	}
+	return nil
+}
+
+type ListRoutesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRoutesRequest) Reset() {
+	*x = ListRoutesRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRoutesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRoutesRequest) ProtoMessage() {}
+
+func (x *ListRoutesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRoutesRequest.ProtoReflect.Descriptor instead.
+func (*ListRoutesRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{14}
+}
+
+type ListRoutesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Routes        []*Route               `protobuf:"bytes,1,rep,name=routes,proto3" json:"routes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListRoutesResponse) Reset() {
+	*x = ListRoutesResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListRoutesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListRoutesResponse) ProtoMessage() {}
+
+func (x *ListRoutesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListRoutesResponse.ProtoReflect.Descriptor instead.
+func (*ListRoutesResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ListRoutesResponse) GetRoutes() []*Route {
+	if x != nil {
+		return x.Routes
+	}
+	return nil
+}
+
+type WatchEventRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchEventRequest) Reset() {
+	*x = WatchEventRequest{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEventRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEventRequest) ProtoMessage() {}
+
+func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEventRequest.ProtoReflect.Descriptor instead.
+func (*WatchEventRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{16}
+}
+
+type WatchEventResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*WatchEventResponse_Adjacency
+	//	*WatchEventResponse_Route
+	Event         isWatchEventResponse_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchEventResponse) Reset() {
+	*x = WatchEventResponse{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEventResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEventResponse) ProtoMessage() {}
+
+func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEventResponse.ProtoReflect.Descriptor instead.
+func (*WatchEventResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *WatchEventResponse) GetEvent() isWatchEventResponse_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *WatchEventResponse) GetAdjacency() *AdjacencyEvent {
+	if x != nil {
+		if x, ok := x.Event.(*WatchEventResponse_Adjacency); ok {
+			return x.Adjacency
+		}
+	}
+	return nil
+}
+
+func (x *WatchEventResponse) GetRoute() *RouteEvent {
+	if x != nil {
+		if x, ok := x.Event.(*WatchEventResponse_Route); ok {
+			return x.Route
+		}
+	}
+	return nil
+}
+
+type isWatchEventResponse_Event interface {
+	isWatchEventResponse_Event()
+}
+
+type WatchEventResponse_Adjacency struct {
+	Adjacency *AdjacencyEvent `protobuf:"bytes,1,opt,name=adjacency,proto3,oneof"`
+}
+
+type WatchEventResponse_Route struct {
+	Route *RouteEvent `protobuf:"bytes,2,opt,name=route,proto3,oneof"`
+}
+
+func (*WatchEventResponse_Adjacency) isWatchEventResponse_Event() {}
+
+func (*WatchEventResponse_Route) isWatchEventResponse_Event() {}
+
+// AdjacencyEvent reports an adjacency state change.
+type AdjacencyEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Adjacency     *Adjacency             `protobuf:"bytes,1,opt,name=adjacency,proto3" json:"adjacency,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdjacencyEvent) Reset() {
+	*x = AdjacencyEvent{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdjacencyEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdjacencyEvent) ProtoMessage() {}
+
+func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdjacencyEvent.ProtoReflect.Descriptor instead.
+func (*AdjacencyEvent) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *AdjacencyEvent) GetAdjacency() *Adjacency {
+	if x != nil {
+		return x.Adjacency
+	}
+	return nil
+}
+
+// RouteEvent reports a route addition/change (withdrawn=false) or removal
+// (withdrawn=true).
+type RouteEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Route         *Route                 `protobuf:"bytes,1,opt,name=route,proto3" json:"route,omitempty"`
+	Withdrawn     bool                   `protobuf:"varint,2,opt,name=withdrawn,proto3" json:"withdrawn,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RouteEvent) Reset() {
+	*x = RouteEvent{}
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RouteEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RouteEvent) ProtoMessage() {}
+
+func (x *RouteEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1alpha1_goisis_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RouteEvent.ProtoReflect.Descriptor instead.
+func (*RouteEvent) Descriptor() ([]byte, []int) {
+	return file_goisis_v1alpha1_goisis_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RouteEvent) GetRoute() *Route {
+	if x != nil {
+		return x.Route
+	}
+	return nil
+}
+
+func (x *RouteEvent) GetWithdrawn() bool {
+	if x != nil {
+		return x.Withdrawn
+	}
+	return false
+}
+
 var File_goisis_v1alpha1_goisis_proto protoreflect.FileDescriptor
 
 const file_goisis_v1alpha1_goisis_proto_rawDesc = "" +
@@ -154,11 +1135,76 @@ const file_goisis_v1alpha1_goisis_proto_rawDesc = "" +
 	"\x1cgoisis/v1alpha1/goisis.proto\x12\x0fgoisis.v1alpha1\"\x10\n" +
 	"\x0eGetIsisRequest\"B\n" +
 	"\x0fGetIsisResponse\x12/\n" +
-	"\x06global\x18\x01 \x01(\v2\x17.goisis.v1alpha1.GlobalR\x06global\"\"\n" +
+	"\x06global\x18\x01 \x01(\v2\x17.goisis.v1alpha1.GlobalR\x06global\"?\n" +
 	"\x06Global\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion2[\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12\x1b\n" +
+	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\"\xb1\x01\n" +
+	"\aCircuit\x12\x1c\n" +
+	"\tinterface\x18\x01 \x01(\tR\tinterface\x12$\n" +
+	"\x0epoint_to_point\x18\x02 \x01(\bR\fpointToPoint\x12\x16\n" +
+	"\x06level1\x18\x03 \x01(\bR\x06level1\x12\x16\n" +
+	"\x06level2\x18\x04 \x01(\bR\x06level2\x12\x1a\n" +
+	"\bpriority\x18\x05 \x01(\rR\bpriority\x12\x16\n" +
+	"\x06metric\x18\x06 \x01(\rR\x06metric\"\xdd\x01\n" +
+	"\tAdjacency\x12\x1c\n" +
+	"\tinterface\x18\x01 \x01(\tR\tinterface\x12,\n" +
+	"\x05level\x18\x02 \x01(\x0e2\x16.goisis.v1alpha1.LevelR\x05level\x12\x1b\n" +
+	"\tsystem_id\x18\x03 \x01(\tR\bsystemId\x12\x12\n" +
+	"\x04snpa\x18\x04 \x01(\tR\x04snpa\x12\x14\n" +
+	"\x05state\x18\x05 \x01(\tR\x05state\x12\x1a\n" +
+	"\bpriority\x18\x06 \x01(\rR\bpriority\x12!\n" +
+	"\fholding_time\x18\a \x01(\rR\vholdingTime\"\xd0\x01\n" +
+	"\x03Lsp\x12,\n" +
+	"\x05level\x18\x01 \x01(\x0e2\x16.goisis.v1alpha1.LevelR\x05level\x12\x15\n" +
+	"\x06lsp_id\x18\x02 \x01(\tR\x05lspId\x12'\n" +
+	"\x0fsequence_number\x18\x03 \x01(\rR\x0esequenceNumber\x12-\n" +
+	"\x12remaining_lifetime\x18\x04 \x01(\rR\x11remainingLifetime\x12\x1a\n" +
+	"\bchecksum\x18\x05 \x01(\rR\bchecksum\x12\x10\n" +
+	"\x03own\x18\x06 \x01(\bR\x03own\"A\n" +
+	"\aNextHop\x12\x1c\n" +
+	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x18\n" +
+	"\agateway\x18\x02 \x01(\tR\agateway\"\x9c\x01\n" +
+	"\x05Route\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x16\n" +
+	"\x06metric\x18\x02 \x01(\rR\x06metric\x12,\n" +
+	"\x05level\x18\x03 \x01(\x0e2\x16.goisis.v1alpha1.LevelR\x05level\x125\n" +
+	"\tnext_hops\x18\x04 \x03(\v2\x18.goisis.v1alpha1.NextHopR\bnextHops\"\x15\n" +
+	"\x13ListCircuitsRequest\"L\n" +
+	"\x14ListCircuitsResponse\x124\n" +
+	"\bcircuits\x18\x01 \x03(\v2\x18.goisis.v1alpha1.CircuitR\bcircuits\"\x18\n" +
+	"\x16ListAdjacenciesRequest\"W\n" +
+	"\x17ListAdjacenciesResponse\x12<\n" +
+	"\vadjacencies\x18\x01 \x03(\v2\x1a.goisis.v1alpha1.AdjacencyR\vadjacencies\"\x10\n" +
+	"\x0eGetLsdbRequest\";\n" +
+	"\x0fGetLsdbResponse\x12(\n" +
+	"\x04lsps\x18\x01 \x03(\v2\x14.goisis.v1alpha1.LspR\x04lsps\"\x13\n" +
+	"\x11ListRoutesRequest\"D\n" +
+	"\x12ListRoutesResponse\x12.\n" +
+	"\x06routes\x18\x01 \x03(\v2\x16.goisis.v1alpha1.RouteR\x06routes\"\x13\n" +
+	"\x11WatchEventRequest\"\x93\x01\n" +
+	"\x12WatchEventResponse\x12?\n" +
+	"\tadjacency\x18\x01 \x01(\v2\x1f.goisis.v1alpha1.AdjacencyEventH\x00R\tadjacency\x123\n" +
+	"\x05route\x18\x02 \x01(\v2\x1b.goisis.v1alpha1.RouteEventH\x00R\x05routeB\a\n" +
+	"\x05event\"J\n" +
+	"\x0eAdjacencyEvent\x128\n" +
+	"\tadjacency\x18\x01 \x01(\v2\x1a.goisis.v1alpha1.AdjacencyR\tadjacency\"X\n" +
+	"\n" +
+	"RouteEvent\x12,\n" +
+	"\x05route\x18\x01 \x01(\v2\x16.goisis.v1alpha1.RouteR\x05route\x12\x1c\n" +
+	"\twithdrawn\x18\x02 \x01(\bR\twithdrawn*8\n" +
+	"\x05Level\x12\x15\n" +
+	"\x11LEVEL_UNSPECIFIED\x10\x00\x12\v\n" +
+	"\aLEVEL_1\x10\x01\x12\v\n" +
+	"\aLEVEL_2\x10\x022\x9c\x04\n" +
 	"\vIsisService\x12L\n" +
-	"\aGetIsis\x12\x1f.goisis.v1alpha1.GetIsisRequest\x1a .goisis.v1alpha1.GetIsisResponseB\xbe\x01\n" +
+	"\aGetIsis\x12\x1f.goisis.v1alpha1.GetIsisRequest\x1a .goisis.v1alpha1.GetIsisResponse\x12[\n" +
+	"\fListCircuits\x12$.goisis.v1alpha1.ListCircuitsRequest\x1a%.goisis.v1alpha1.ListCircuitsResponse\x12d\n" +
+	"\x0fListAdjacencies\x12'.goisis.v1alpha1.ListAdjacenciesRequest\x1a(.goisis.v1alpha1.ListAdjacenciesResponse\x12L\n" +
+	"\aGetLsdb\x12\x1f.goisis.v1alpha1.GetLsdbRequest\x1a .goisis.v1alpha1.GetLsdbResponse\x12U\n" +
+	"\n" +
+	"ListRoutes\x12\".goisis.v1alpha1.ListRoutesRequest\x1a#.goisis.v1alpha1.ListRoutesResponse\x12W\n" +
+	"\n" +
+	"WatchEvent\x12\".goisis.v1alpha1.WatchEventRequest\x1a#.goisis.v1alpha1.WatchEventResponse0\x01B\xbe\x01\n" +
 	"\x13com.goisis.v1alpha1B\vGoisisProtoP\x01Z=github.com/takehaya/goisis/gen/goisis/v1alpha1;goisisv1alpha1\xa2\x02\x03GXX\xaa\x02\x0fGoisis.V1alpha1\xca\x02\x0fGoisis\\V1alpha1\xe2\x02\x1bGoisis\\V1alpha1\\GPBMetadata\xea\x02\x10Goisis::V1alpha1b\x06proto3"
 
 var (
@@ -173,21 +1219,62 @@ func file_goisis_v1alpha1_goisis_proto_rawDescGZIP() []byte {
 	return file_goisis_v1alpha1_goisis_proto_rawDescData
 }
 
-var file_goisis_v1alpha1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_goisis_v1alpha1_goisis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_goisis_v1alpha1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_goisis_v1alpha1_goisis_proto_goTypes = []any{
-	(*GetIsisRequest)(nil),  // 0: goisis.v1alpha1.GetIsisRequest
-	(*GetIsisResponse)(nil), // 1: goisis.v1alpha1.GetIsisResponse
-	(*Global)(nil),          // 2: goisis.v1alpha1.Global
+	(Level)(0),                      // 0: goisis.v1alpha1.Level
+	(*GetIsisRequest)(nil),          // 1: goisis.v1alpha1.GetIsisRequest
+	(*GetIsisResponse)(nil),         // 2: goisis.v1alpha1.GetIsisResponse
+	(*Global)(nil),                  // 3: goisis.v1alpha1.Global
+	(*Circuit)(nil),                 // 4: goisis.v1alpha1.Circuit
+	(*Adjacency)(nil),               // 5: goisis.v1alpha1.Adjacency
+	(*Lsp)(nil),                     // 6: goisis.v1alpha1.Lsp
+	(*NextHop)(nil),                 // 7: goisis.v1alpha1.NextHop
+	(*Route)(nil),                   // 8: goisis.v1alpha1.Route
+	(*ListCircuitsRequest)(nil),     // 9: goisis.v1alpha1.ListCircuitsRequest
+	(*ListCircuitsResponse)(nil),    // 10: goisis.v1alpha1.ListCircuitsResponse
+	(*ListAdjacenciesRequest)(nil),  // 11: goisis.v1alpha1.ListAdjacenciesRequest
+	(*ListAdjacenciesResponse)(nil), // 12: goisis.v1alpha1.ListAdjacenciesResponse
+	(*GetLsdbRequest)(nil),          // 13: goisis.v1alpha1.GetLsdbRequest
+	(*GetLsdbResponse)(nil),         // 14: goisis.v1alpha1.GetLsdbResponse
+	(*ListRoutesRequest)(nil),       // 15: goisis.v1alpha1.ListRoutesRequest
+	(*ListRoutesResponse)(nil),      // 16: goisis.v1alpha1.ListRoutesResponse
+	(*WatchEventRequest)(nil),       // 17: goisis.v1alpha1.WatchEventRequest
+	(*WatchEventResponse)(nil),      // 18: goisis.v1alpha1.WatchEventResponse
+	(*AdjacencyEvent)(nil),          // 19: goisis.v1alpha1.AdjacencyEvent
+	(*RouteEvent)(nil),              // 20: goisis.v1alpha1.RouteEvent
 }
 var file_goisis_v1alpha1_goisis_proto_depIdxs = []int32{
-	2, // 0: goisis.v1alpha1.GetIsisResponse.global:type_name -> goisis.v1alpha1.Global
-	0, // 1: goisis.v1alpha1.IsisService.GetIsis:input_type -> goisis.v1alpha1.GetIsisRequest
-	1, // 2: goisis.v1alpha1.IsisService.GetIsis:output_type -> goisis.v1alpha1.GetIsisResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3,  // 0: goisis.v1alpha1.GetIsisResponse.global:type_name -> goisis.v1alpha1.Global
+	0,  // 1: goisis.v1alpha1.Adjacency.level:type_name -> goisis.v1alpha1.Level
+	0,  // 2: goisis.v1alpha1.Lsp.level:type_name -> goisis.v1alpha1.Level
+	0,  // 3: goisis.v1alpha1.Route.level:type_name -> goisis.v1alpha1.Level
+	7,  // 4: goisis.v1alpha1.Route.next_hops:type_name -> goisis.v1alpha1.NextHop
+	4,  // 5: goisis.v1alpha1.ListCircuitsResponse.circuits:type_name -> goisis.v1alpha1.Circuit
+	5,  // 6: goisis.v1alpha1.ListAdjacenciesResponse.adjacencies:type_name -> goisis.v1alpha1.Adjacency
+	6,  // 7: goisis.v1alpha1.GetLsdbResponse.lsps:type_name -> goisis.v1alpha1.Lsp
+	8,  // 8: goisis.v1alpha1.ListRoutesResponse.routes:type_name -> goisis.v1alpha1.Route
+	19, // 9: goisis.v1alpha1.WatchEventResponse.adjacency:type_name -> goisis.v1alpha1.AdjacencyEvent
+	20, // 10: goisis.v1alpha1.WatchEventResponse.route:type_name -> goisis.v1alpha1.RouteEvent
+	5,  // 11: goisis.v1alpha1.AdjacencyEvent.adjacency:type_name -> goisis.v1alpha1.Adjacency
+	8,  // 12: goisis.v1alpha1.RouteEvent.route:type_name -> goisis.v1alpha1.Route
+	1,  // 13: goisis.v1alpha1.IsisService.GetIsis:input_type -> goisis.v1alpha1.GetIsisRequest
+	9,  // 14: goisis.v1alpha1.IsisService.ListCircuits:input_type -> goisis.v1alpha1.ListCircuitsRequest
+	11, // 15: goisis.v1alpha1.IsisService.ListAdjacencies:input_type -> goisis.v1alpha1.ListAdjacenciesRequest
+	13, // 16: goisis.v1alpha1.IsisService.GetLsdb:input_type -> goisis.v1alpha1.GetLsdbRequest
+	15, // 17: goisis.v1alpha1.IsisService.ListRoutes:input_type -> goisis.v1alpha1.ListRoutesRequest
+	17, // 18: goisis.v1alpha1.IsisService.WatchEvent:input_type -> goisis.v1alpha1.WatchEventRequest
+	2,  // 19: goisis.v1alpha1.IsisService.GetIsis:output_type -> goisis.v1alpha1.GetIsisResponse
+	10, // 20: goisis.v1alpha1.IsisService.ListCircuits:output_type -> goisis.v1alpha1.ListCircuitsResponse
+	12, // 21: goisis.v1alpha1.IsisService.ListAdjacencies:output_type -> goisis.v1alpha1.ListAdjacenciesResponse
+	14, // 22: goisis.v1alpha1.IsisService.GetLsdb:output_type -> goisis.v1alpha1.GetLsdbResponse
+	16, // 23: goisis.v1alpha1.IsisService.ListRoutes:output_type -> goisis.v1alpha1.ListRoutesResponse
+	18, // 24: goisis.v1alpha1.IsisService.WatchEvent:output_type -> goisis.v1alpha1.WatchEventResponse
+	19, // [19:25] is the sub-list for method output_type
+	13, // [13:19] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_goisis_v1alpha1_goisis_proto_init() }
@@ -195,18 +1282,23 @@ func file_goisis_v1alpha1_goisis_proto_init() {
 	if File_goisis_v1alpha1_goisis_proto != nil {
 		return
 	}
+	file_goisis_v1alpha1_goisis_proto_msgTypes[17].OneofWrappers = []any{
+		(*WatchEventResponse_Adjacency)(nil),
+		(*WatchEventResponse_Route)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_goisis_v1alpha1_goisis_proto_rawDesc), len(file_goisis_v1alpha1_goisis_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   3,
+			NumEnums:      1,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_goisis_v1alpha1_goisis_proto_goTypes,
 		DependencyIndexes: file_goisis_v1alpha1_goisis_proto_depIdxs,
+		EnumInfos:         file_goisis_v1alpha1_goisis_proto_enumTypes,
 		MessageInfos:      file_goisis_v1alpha1_goisis_proto_msgTypes,
 	}.Build()
 	File_goisis_v1alpha1_goisis_proto = out.File

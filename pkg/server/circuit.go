@@ -81,6 +81,27 @@ func (c *circuit) isDIS(level packet.Level, self packet.SystemID) bool {
 	return !c.cfg.P2P && c.dis[level].SystemID() == self && c.dis[level].PseudonodeID() != 0
 }
 
+// CircuitInfo is an exported snapshot of a circuit's configuration.
+type CircuitInfo struct {
+	Interface string
+	P2P       bool
+	Level1    bool
+	Level2    bool
+	Priority  uint8
+	Metric    uint32
+}
+
+func (c *circuit) info() CircuitInfo {
+	return CircuitInfo{
+		Interface: c.cfg.Name,
+		P2P:       c.cfg.P2P,
+		Level1:    c.cfg.Level1,
+		Level2:    c.cfg.Level2,
+		Priority:  c.cfg.priority(),
+		Metric:    c.cfg.Metric,
+	}
+}
+
 // adjacencyInfos returns snapshots of all adjacencies on the circuit.
 func (c *circuit) adjacencyInfos() []AdjacencyInfo {
 	var out []AdjacencyInfo

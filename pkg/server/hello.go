@@ -222,6 +222,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
+		s.emitAdjacency(c.infoFor(adj, level))
 		// Triggered hello so the neighbor sees our echo promptly (speeds the
 		// three-way handshake); harmless even when no DIS decision changes.
 		s.sendOne(c, datalink.DestForLevel(level), s.buildLANHello(c, level))
@@ -284,6 +285,9 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	if prev != newState {
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
+		for _, l := range adj.levels.levels() {
+			s.emitAdjacency(c.infoFor(adj, l))
+		}
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
 		s.regenerateLSPs(false, time.Now())
 	}
@@ -294,6 +298,9 @@ func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 	if c.cfg.P2P {
 		if adj := c.p2pAdj; adj != nil && expired(adj, now) {
 			s.logger.Info("p2p adjacency expired", "circuit", c.cfg.Name, "neighbor", adj.systemID)
+			for _, l := range adj.levels.levels() {
+				s.emitAdjacencyDown(c, adj, l)
+			}
 			c.p2pAdj = nil
 			s.regenerateLSPs(false, now)
 		}
@@ -304,6 +311,7 @@ func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 		for id, adj := range c.adjs[level] {
 			if expired(adj, now) {
 				s.logger.Info("adjacency expired", "circuit", c.cfg.Name, "level", level, "neighbor", id)
+				s.emitAdjacencyDown(c, adj, level)
 				delete(c.adjs[level], id)
 				s.electDIS(c, level)
 				changed = true

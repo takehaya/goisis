@@ -1,0 +1,24 @@
+# Example goisisd configuration. Run: goisisd -f goisisd.yaml
+#
+# The NET encodes the area address and 6-octet system ID (last octet, the
+# NSEL, must be 00).
+net: 49.0001.0000.0000.0001.00
+hostname: r1
+
+# Program computed routes into the Linux kernel FIB (proto isis). Requires
+# CAP_NET_ADMIN. Omit or set false to run control-plane only (e.g. when
+# consuming routes via the WatchEvent API into your own dataplane).
+fib: true
+
+circuits:
+  - interface: eth0
+    level: "12"     # "1", "2", or "12"
+    # p2p: true     # point-to-point instead of broadcast/LAN
+    # priority: 64  # DIS election priority (0-127)
+    # metric: 10
+
+# Static prefixes to originate (connected subnets of the circuits above are
+# advertised automatically).
+prefixes:
+  - 10.1.1.1/32
+  - 2001:db8:1::1/128
