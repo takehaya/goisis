@@ -59,7 +59,7 @@ pkg/fib/       FIB interface + netlink implementation
 pkg/config/    YAML config -> server options
 pkg/metrics/   Prometheus adapter for server.Metrics
 cmd/goisisd/   daemon   cmd/goisis/  CLI
-proto/ gen/    Connect RPC API (v1alpha1) and generated code
+proto/ gen/    Connect RPC API (v1) and generated code
 test/interop/  containerized FRR interop (root + docker; skips otherwise)
 test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
 ```
@@ -97,5 +97,6 @@ RIB + netlink FIB, Connect API + CLI, SRv6 locators, Flex-Algo, plus hardening
 authentication of hellos and LSPs/SNPs — MD5 per RFC 5304 and SHA-1/256/384/512
 per RFC 5310). All interop tests pass against FRR 10.6.1 (run with docker +
 root); FRR's IS-IS auth is MD5-only so the SHA variants are validated
-goisis↔goisis. Remaining: the mutable-config RPCs needed before promoting the
-API from `v1alpha1` to `v1`.
+goisis↔goisis. The management API is promoted to `v1` with runtime
+Add/Delete RPCs for SRv6 locators and Flex-Algos; buf breaking-change
+detection gates further schema changes.

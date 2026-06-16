@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/takehaya/goisis/gen/goisis/v1alpha1/goisisv1alpha1connect"
+	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
 	"github.com/takehaya/goisis/internal/version"
 	"github.com/takehaya/goisis/pkg/config"
 	"github.com/takehaya/goisis/pkg/metrics"
@@ -70,11 +70,11 @@ func run(logger *slog.Logger, apiListen, configFile string) error {
 
 	mux := http.NewServeMux()
 	mux.Handle(server.NewConnectHandler(isis))
-	reflector := grpcreflect.NewStaticReflector(goisisv1alpha1connect.IsisServiceName)
+	reflector := grpcreflect.NewStaticReflector(goisisv1connect.IsisServiceName)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	// Many tools (grpcurl among them) still speak the v1alpha reflection API.
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
-	mux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(goisisv1alpha1connect.IsisServiceName)))
+	mux.Handle(grpchealth.NewHandler(grpchealth.NewStaticChecker(goisisv1connect.IsisServiceName)))
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 
 	// Plaintext HTTP/2 (h2c) so gRPC clients work without TLS.

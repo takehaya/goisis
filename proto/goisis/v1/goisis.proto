@@ -1,9 +1,9 @@
 syntax = "proto3";
 
-package goisis.v1alpha1;
+package goisis.v1;
 
-// IsisService is the management API for goisisd. It stays in v1alpha1 until
-// the TLV/LSDB data model stabilizes; expect breaking changes before v1.
+// IsisService is the management API for goisisd. The wire schema is stable;
+// breaking changes are gated by buf breaking-change detection.
 service IsisService {
   // GetIsis returns instance-wide daemon state.
   rpc GetIsis(GetIsisRequest) returns (GetIsisResponse);

@@ -9,49 +9,49 @@ import (
 
 	"connectrpc.com/connect"
 
-	goisisv1alpha1 "github.com/takehaya/goisis/gen/goisis/v1alpha1"
-	"github.com/takehaya/goisis/gen/goisis/v1alpha1/goisisv1alpha1connect"
+	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
+	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-// connectHandler adapts IsisServer to goisis.v1alpha1.IsisService. It only
+// connectHandler adapts IsisServer to goisis.v1.IsisService. It only
 // converts types; logic lives on IsisServer so library consumers and RPC
 // clients share one implementation.
 type connectHandler struct {
-	goisisv1alpha1connect.UnimplementedIsisServiceHandler
+	goisisv1connect.UnimplementedIsisServiceHandler
 	s *IsisServer
 }
 
 // NewConnectHandler returns the HTTP mount path and handler exposing s over
 // Connect RPC (which also serves the gRPC and gRPC-Web protocols).
 func NewConnectHandler(s *IsisServer, opts ...connect.HandlerOption) (string, http.Handler) {
-	return goisisv1alpha1connect.NewIsisServiceHandler(&connectHandler{s: s}, opts...)
+	return goisisv1connect.NewIsisServiceHandler(&connectHandler{s: s}, opts...)
 }
 
 func (h *connectHandler) GetIsis(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.GetIsisRequest],
-) (*connect.Response[goisisv1alpha1.GetIsisResponse], error) {
+	_ *connect.Request[goisisv1.GetIsisRequest],
+) (*connect.Response[goisisv1.GetIsisResponse], error) {
 	g, err := h.s.GetGlobal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&goisisv1alpha1.GetIsisResponse{
-		Global: &goisisv1alpha1.Global{Version: g.Version, SystemId: g.SystemID.String()},
+	return connect.NewResponse(&goisisv1.GetIsisResponse{
+		Global: &goisisv1.Global{Version: g.Version, SystemId: g.SystemID.String()},
 	}), nil
 }
 
 func (h *connectHandler) ListCircuits(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.ListCircuitsRequest],
-) (*connect.Response[goisisv1alpha1.ListCircuitsResponse], error) {
+	_ *connect.Request[goisisv1.ListCircuitsRequest],
+) (*connect.Response[goisisv1.ListCircuitsResponse], error) {
 	cs, err := h.s.ListCircuits(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.Circuit, 0, len(cs))
+	out := make([]*goisisv1.Circuit, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, &goisisv1alpha1.Circuit{
+		out = append(out, &goisisv1.Circuit{
 			Interface:    c.Interface,
 			PointToPoint: c.P2P,
 			Level1:       c.Level1,
@@ -60,35 +60,35 @@ func (h *connectHandler) ListCircuits(
 			Metric:       c.Metric,
 		})
 	}
-	return connect.NewResponse(&goisisv1alpha1.ListCircuitsResponse{Circuits: out}), nil
+	return connect.NewResponse(&goisisv1.ListCircuitsResponse{Circuits: out}), nil
 }
 
 func (h *connectHandler) ListAdjacencies(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.ListAdjacenciesRequest],
-) (*connect.Response[goisisv1alpha1.ListAdjacenciesResponse], error) {
+	_ *connect.Request[goisisv1.ListAdjacenciesRequest],
+) (*connect.Response[goisisv1.ListAdjacenciesResponse], error) {
 	adjs, err := h.s.ListAdjacencies(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.Adjacency, 0, len(adjs))
+	out := make([]*goisisv1.Adjacency, 0, len(adjs))
 	for _, a := range adjs {
 		out = append(out, adjacencyToProto(a))
 	}
-	return connect.NewResponse(&goisisv1alpha1.ListAdjacenciesResponse{Adjacencies: out}), nil
+	return connect.NewResponse(&goisisv1.ListAdjacenciesResponse{Adjacencies: out}), nil
 }
 
 func (h *connectHandler) GetLsdb(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.GetLsdbRequest],
-) (*connect.Response[goisisv1alpha1.GetLsdbResponse], error) {
+	_ *connect.Request[goisisv1.GetLsdbRequest],
+) (*connect.Response[goisisv1.GetLsdbResponse], error) {
 	lsps, err := h.s.ListLSDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.Lsp, 0, len(lsps))
+	out := make([]*goisisv1.Lsp, 0, len(lsps))
 	for _, l := range lsps {
-		out = append(out, &goisisv1alpha1.Lsp{
+		out = append(out, &goisisv1.Lsp{
 			Level:             levelToProto(l.Level),
 			LspId:             l.LSPID.String(),
 			SequenceNumber:    l.SequenceNumber,
@@ -97,59 +97,59 @@ func (h *connectHandler) GetLsdb(
 			Own:               l.Own,
 		})
 	}
-	return connect.NewResponse(&goisisv1alpha1.GetLsdbResponse{Lsps: out}), nil
+	return connect.NewResponse(&goisisv1.GetLsdbResponse{Lsps: out}), nil
 }
 
 func (h *connectHandler) ListRoutes(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.ListRoutesRequest],
-) (*connect.Response[goisisv1alpha1.ListRoutesResponse], error) {
+	_ *connect.Request[goisisv1.ListRoutesRequest],
+) (*connect.Response[goisisv1.ListRoutesResponse], error) {
 	routes, err := h.s.ListRoutes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.Route, 0, len(routes))
+	out := make([]*goisisv1.Route, 0, len(routes))
 	for _, r := range routes {
 		out = append(out, routeToProto(r))
 	}
-	return connect.NewResponse(&goisisv1alpha1.ListRoutesResponse{Routes: out}), nil
+	return connect.NewResponse(&goisisv1.ListRoutesResponse{Routes: out}), nil
 }
 
 func (h *connectHandler) ListLocators(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.ListLocatorsRequest],
-) (*connect.Response[goisisv1alpha1.ListLocatorsResponse], error) {
+	_ *connect.Request[goisisv1.ListLocatorsRequest],
+) (*connect.Response[goisisv1.ListLocatorsResponse], error) {
 	locs, err := h.s.ListLocators(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.Locator, 0, len(locs))
+	out := make([]*goisisv1.Locator, 0, len(locs))
 	for _, l := range locs {
-		out = append(out, &goisisv1alpha1.Locator{
+		out = append(out, &goisisv1.Locator{
 			Prefix:    l.Prefix.String(),
 			Algorithm: uint32(l.Algorithm),
 			EndSid:    l.EndSID.String(),
 		})
 	}
-	return connect.NewResponse(&goisisv1alpha1.ListLocatorsResponse{Locators: out}), nil
+	return connect.NewResponse(&goisisv1.ListLocatorsResponse{Locators: out}), nil
 }
 
 func (h *connectHandler) ListFlexAlgos(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.ListFlexAlgosRequest],
-) (*connect.Response[goisisv1alpha1.ListFlexAlgosResponse], error) {
+	_ *connect.Request[goisisv1.ListFlexAlgosRequest],
+) (*connect.Response[goisisv1.ListFlexAlgosResponse], error) {
 	infos, err := h.s.ListFlexAlgos(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*goisisv1alpha1.FlexAlgo, 0, len(infos))
+	out := make([]*goisisv1.FlexAlgo, 0, len(infos))
 	for _, fi := range infos {
-		fa := &goisisv1alpha1.FlexAlgo{
+		fa := &goisisv1.FlexAlgo{
 			Algorithm: uint32(fi.Algo),
 			Level:     levelToProto(fi.Level),
 		}
 		if fi.Definition != nil {
-			fa.Definition = &goisisv1alpha1.FlexAlgoDefinition{
+			fa.Definition = &goisisv1.FlexAlgoDefinition{
 				MetricType: uint32(fi.Definition.MetricType),
 				CalcType:   uint32(fi.Definition.CalcType),
 				Priority:   uint32(fi.Definition.Priority),
@@ -161,13 +161,13 @@ func (h *connectHandler) ListFlexAlgos(
 		}
 		out = append(out, fa)
 	}
-	return connect.NewResponse(&goisisv1alpha1.ListFlexAlgosResponse{FlexAlgos: out}), nil
+	return connect.NewResponse(&goisisv1.ListFlexAlgosResponse{FlexAlgos: out}), nil
 }
 
 func (h *connectHandler) AddLocator(
 	ctx context.Context,
-	req *connect.Request[goisisv1alpha1.AddLocatorRequest],
-) (*connect.Response[goisisv1alpha1.AddLocatorResponse], error) {
+	req *connect.Request[goisisv1.AddLocatorRequest],
+) (*connect.Response[goisisv1.AddLocatorResponse], error) {
 	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -179,13 +179,13 @@ func (h *connectHandler) AddLocator(
 	if err := h.s.AddLocator(ctx, SRv6LocatorConfig{Prefix: prefix, Algo: algo}); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	return connect.NewResponse(&goisisv1alpha1.AddLocatorResponse{}), nil
+	return connect.NewResponse(&goisisv1.AddLocatorResponse{}), nil
 }
 
 func (h *connectHandler) DeleteLocator(
 	ctx context.Context,
-	req *connect.Request[goisisv1alpha1.DeleteLocatorRequest],
-) (*connect.Response[goisisv1alpha1.DeleteLocatorResponse], error) {
+	req *connect.Request[goisisv1.DeleteLocatorRequest],
+) (*connect.Response[goisisv1.DeleteLocatorResponse], error) {
 	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
@@ -193,13 +193,13 @@ func (h *connectHandler) DeleteLocator(
 	if err := h.s.DeleteLocator(ctx, prefix); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	return connect.NewResponse(&goisisv1alpha1.DeleteLocatorResponse{}), nil
+	return connect.NewResponse(&goisisv1.DeleteLocatorResponse{}), nil
 }
 
 func (h *connectHandler) AddFlexAlgo(
 	ctx context.Context,
-	req *connect.Request[goisisv1alpha1.AddFlexAlgoRequest],
-) (*connect.Response[goisisv1alpha1.AddFlexAlgoResponse], error) {
+	req *connect.Request[goisisv1.AddFlexAlgoRequest],
+) (*connect.Response[goisisv1.AddFlexAlgoResponse], error) {
 	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
 	if err != nil {
 		return nil, err
@@ -221,13 +221,13 @@ func (h *connectHandler) AddFlexAlgo(
 	if err := h.s.AddFlexAlgo(ctx, cfg); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	return connect.NewResponse(&goisisv1alpha1.AddFlexAlgoResponse{}), nil
+	return connect.NewResponse(&goisisv1.AddFlexAlgoResponse{}), nil
 }
 
 func (h *connectHandler) DeleteFlexAlgo(
 	ctx context.Context,
-	req *connect.Request[goisisv1alpha1.DeleteFlexAlgoRequest],
-) (*connect.Response[goisisv1alpha1.DeleteFlexAlgoResponse], error) {
+	req *connect.Request[goisisv1.DeleteFlexAlgoRequest],
+) (*connect.Response[goisisv1.DeleteFlexAlgoResponse], error) {
 	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
 	if err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func (h *connectHandler) DeleteFlexAlgo(
 	if err := h.s.DeleteFlexAlgo(ctx, algo); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	return connect.NewResponse(&goisisv1alpha1.DeleteFlexAlgoResponse{}), nil
+	return connect.NewResponse(&goisisv1.DeleteFlexAlgoResponse{}), nil
 }
 
 // flexAlgoNumber validates that a wire algorithm number fits the Flex-Algo
@@ -259,8 +259,8 @@ func uint8FromProto(v uint32, field string) (uint8, error) {
 
 func (h *connectHandler) WatchEvent(
 	ctx context.Context,
-	_ *connect.Request[goisisv1alpha1.WatchEventRequest],
-	stream *connect.ServerStream[goisisv1alpha1.WatchEventResponse],
+	_ *connect.Request[goisisv1.WatchEventRequest],
+	stream *connect.ServerStream[goisisv1.WatchEventResponse],
 ) error {
 	sub, err := h.s.Subscribe(ctx)
 	if err != nil {
@@ -288,27 +288,27 @@ func (h *connectHandler) WatchEvent(
 	}
 }
 
-func eventToProto(ev Event) *goisisv1alpha1.WatchEventResponse {
+func eventToProto(ev Event) *goisisv1.WatchEventResponse {
 	switch {
 	case ev.Adjacency != nil:
-		return &goisisv1alpha1.WatchEventResponse{
-			Event: &goisisv1alpha1.WatchEventResponse_Adjacency{
-				Adjacency: &goisisv1alpha1.AdjacencyEvent{Adjacency: adjacencyToProto(*ev.Adjacency)},
+		return &goisisv1.WatchEventResponse{
+			Event: &goisisv1.WatchEventResponse_Adjacency{
+				Adjacency: &goisisv1.AdjacencyEvent{Adjacency: adjacencyToProto(*ev.Adjacency)},
 			},
 		}
 	case ev.Route != nil:
-		return &goisisv1alpha1.WatchEventResponse{
-			Event: &goisisv1alpha1.WatchEventResponse_Route{
-				Route: &goisisv1alpha1.RouteEvent{Route: routeToProto(*ev.Route), Withdrawn: ev.Withdrawn},
+		return &goisisv1.WatchEventResponse{
+			Event: &goisisv1.WatchEventResponse_Route{
+				Route: &goisisv1.RouteEvent{Route: routeToProto(*ev.Route), Withdrawn: ev.Withdrawn},
 			},
 		}
 	default:
-		return &goisisv1alpha1.WatchEventResponse{}
+		return &goisisv1.WatchEventResponse{}
 	}
 }
 
-func adjacencyToProto(a AdjacencyInfo) *goisisv1alpha1.Adjacency {
-	return &goisisv1alpha1.Adjacency{
+func adjacencyToProto(a AdjacencyInfo) *goisisv1.Adjacency {
+	return &goisisv1.Adjacency{
 		Interface:   a.Interface,
 		Level:       levelToProto(a.Level),
 		SystemId:    a.SystemID.String(),
@@ -319,12 +319,12 @@ func adjacencyToProto(a AdjacencyInfo) *goisisv1alpha1.Adjacency {
 	}
 }
 
-func routeToProto(r RouteInfo) *goisisv1alpha1.Route {
-	nhs := make([]*goisisv1alpha1.NextHop, 0, len(r.NextHops))
+func routeToProto(r RouteInfo) *goisisv1.Route {
+	nhs := make([]*goisisv1.NextHop, 0, len(r.NextHops))
 	for _, nh := range r.NextHops {
-		nhs = append(nhs, &goisisv1alpha1.NextHop{Interface: nh.Interface, Gateway: nh.Gateway.String()})
+		nhs = append(nhs, &goisisv1.NextHop{Interface: nh.Interface, Gateway: nh.Gateway.String()})
 	}
-	return &goisisv1alpha1.Route{
+	return &goisisv1.Route{
 		Prefix:    r.Prefix.String(),
 		Metric:    r.Metric,
 		Level:     levelToProto(r.Level),
@@ -333,13 +333,13 @@ func routeToProto(r RouteInfo) *goisisv1alpha1.Route {
 	}
 }
 
-func levelToProto(l packet.Level) goisisv1alpha1.Level {
+func levelToProto(l packet.Level) goisisv1.Level {
 	switch l {
 	case packet.Level1:
-		return goisisv1alpha1.Level_LEVEL_1
+		return goisisv1.Level_LEVEL_1
 	case packet.Level2:
-		return goisisv1alpha1.Level_LEVEL_2
+		return goisisv1.Level_LEVEL_2
 	default:
-		return goisisv1alpha1.Level_LEVEL_UNSPECIFIED
+		return goisisv1.Level_LEVEL_UNSPECIFIED
 	}
 }

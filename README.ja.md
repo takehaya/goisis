@@ -141,8 +141,10 @@ FRR 相互運用と golden フィクスチャ採取(`test/interop`、`test/fixtu
 | M6 | SRv6 locator の広報・学習・End SID 設置 |
 | M7 | Flex-Algo 定義・選出・アルゴリズム別 SPF |
 | M8 | 起動時オーバーロード、クリーンシャットダウン purge、Prometheus メトリクス、HMAC-MD5/SHA 認証(hello + LSP/SNP) |
+| M9 | SRv6 locator / Flex-Algo の実行時 Add/Delete(RPC + CLI)、`v1` API |
 
-残り: API を `v1alpha1` から `v1` へ昇格する前提となる設定変更系 RPC。
+管理 API は `v1` です: 参照系 RPC に加え、SRv6 locator と Flexible Algorithm の
+実行時 Add/Delete に対応し、スキーマ変更は buf の breaking 検出でゲートされます。
 
 ## 名前について
 

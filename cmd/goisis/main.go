@@ -12,8 +12,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	goisisv1alpha1 "github.com/takehaya/goisis/gen/goisis/v1alpha1"
-	"github.com/takehaya/goisis/gen/goisis/v1alpha1/goisisv1alpha1connect"
+	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
+	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
 	"github.com/takehaya/goisis/internal/version"
 )
 
@@ -46,15 +46,15 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
-func newClient(addr string) goisisv1alpha1connect.IsisServiceClient {
-	return goisisv1alpha1connect.NewIsisServiceClient(http.DefaultClient, addr)
+func newClient(addr string) goisisv1connect.IsisServiceClient {
+	return goisisv1connect.NewIsisServiceClient(http.DefaultClient, addr)
 }
 
-func levelStr(l goisisv1alpha1.Level) string {
+func levelStr(l goisisv1.Level) string {
 	switch l {
-	case goisisv1alpha1.Level_LEVEL_1:
+	case goisisv1.Level_LEVEL_1:
 		return "L1"
-	case goisisv1alpha1.Level_LEVEL_2:
+	case goisisv1.Level_LEVEL_2:
 		return "L2"
 	default:
 		return "-"
@@ -66,7 +66,7 @@ func newGlobalCmd(addr *string) *cobra.Command {
 		Use:   "global",
 		Short: "Show instance-wide daemon state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).GetIsis(cmd.Context(), connect.NewRequest(&goisisv1alpha1.GetIsisRequest{}))
+			res, err := newClient(*addr).GetIsis(cmd.Context(), connect.NewRequest(&goisisv1.GetIsisRequest{}))
 			if err != nil {
 				return err
 			}
@@ -83,7 +83,7 @@ func newCircuitCmd(addr *string) *cobra.Command {
 		Aliases: []string{"circuits", "interface"},
 		Short:   "List circuits",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).ListCircuits(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListCircuitsRequest{}))
+			res, err := newClient(*addr).ListCircuits(cmd.Context(), connect.NewRequest(&goisisv1.ListCircuitsRequest{}))
 			if err != nil {
 				return err
 			}
@@ -97,14 +97,14 @@ func newCircuitCmd(addr *string) *cobra.Command {
 	}
 }
 
-func circuitType(c *goisisv1alpha1.Circuit) string {
+func circuitType(c *goisisv1.Circuit) string {
 	if c.GetPointToPoint() {
 		return "p2p"
 	}
 	return "lan"
 }
 
-func circuitLevels(c *goisisv1alpha1.Circuit) string {
+func circuitLevels(c *goisisv1.Circuit) string {
 	switch {
 	case c.GetLevel1() && c.GetLevel2():
 		return "L1L2"
@@ -121,7 +121,7 @@ func newNeighborCmd(addr *string) *cobra.Command {
 		Aliases: []string{"neighbors", "adjacency"},
 		Short:   "List IS-IS adjacencies",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).ListAdjacencies(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListAdjacenciesRequest{}))
+			res, err := newClient(*addr).ListAdjacencies(cmd.Context(), connect.NewRequest(&goisisv1.ListAdjacenciesRequest{}))
 			if err != nil {
 				return err
 			}
@@ -142,7 +142,7 @@ func newDatabaseCmd(addr *string) *cobra.Command {
 		Aliases: []string{"lsdb"},
 		Short:   "Show the link-state database",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).GetLsdb(cmd.Context(), connect.NewRequest(&goisisv1alpha1.GetLsdbRequest{}))
+			res, err := newClient(*addr).GetLsdb(cmd.Context(), connect.NewRequest(&goisisv1.GetLsdbRequest{}))
 			if err != nil {
 				return err
 			}
@@ -166,7 +166,7 @@ func newRouteCmd(addr *string) *cobra.Command {
 		Use:   "route",
 		Short: "List computed routes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).ListRoutes(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListRoutesRequest{}))
+			res, err := newClient(*addr).ListRoutes(cmd.Context(), connect.NewRequest(&goisisv1.ListRoutesRequest{}))
 			if err != nil {
 				return err
 			}
@@ -185,7 +185,7 @@ func newLocatorCmd(addr *string) *cobra.Command {
 		Use:   "locator",
 		Short: "List or configure advertised SRv6 locators",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).ListLocators(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListLocatorsRequest{}))
+			res, err := newClient(*addr).ListLocators(cmd.Context(), connect.NewRequest(&goisisv1.ListLocatorsRequest{}))
 			if err != nil {
 				return err
 			}
@@ -208,7 +208,7 @@ func newLocatorAddCmd(addr *string) *cobra.Command {
 		Short: "Advertise a new SRv6 locator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := newClient(*addr).AddLocator(cmd.Context(), connect.NewRequest(&goisisv1alpha1.AddLocatorRequest{
+			_, err := newClient(*addr).AddLocator(cmd.Context(), connect.NewRequest(&goisisv1.AddLocatorRequest{
 				Prefix:    args[0],
 				Algorithm: algo,
 			}))
@@ -226,7 +226,7 @@ func newLocatorDeleteCmd(addr *string) *cobra.Command {
 		Short:   "Withdraw an advertised SRv6 locator",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := newClient(*addr).DeleteLocator(cmd.Context(), connect.NewRequest(&goisisv1alpha1.DeleteLocatorRequest{
+			_, err := newClient(*addr).DeleteLocator(cmd.Context(), connect.NewRequest(&goisisv1.DeleteLocatorRequest{
 				Prefix: args[0],
 			}))
 			return err
@@ -240,7 +240,7 @@ func newFlexAlgoCmd(addr *string) *cobra.Command {
 		Aliases: []string{"flexalgo"},
 		Short:   "List or configure Flexible Algorithms",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).ListFlexAlgos(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListFlexAlgosRequest{}))
+			res, err := newClient(*addr).ListFlexAlgos(cmd.Context(), connect.NewRequest(&goisisv1.ListFlexAlgosRequest{}))
 			if err != nil {
 				return err
 			}
@@ -282,7 +282,7 @@ func newFlexAlgoAddCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = newClient(*addr).AddFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1alpha1.AddFlexAlgoRequest{
+			_, err = newClient(*addr).AddFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1.AddFlexAlgoRequest{
 				Algorithm:           uint32(algo),
 				MetricType:          uint32(mt),
 				Priority:            priority,
@@ -308,7 +308,7 @@ func newFlexAlgoDeleteCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("algo: %w", err)
 			}
-			_, err = newClient(*addr).DeleteFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1alpha1.DeleteFlexAlgoRequest{
+			_, err = newClient(*addr).DeleteFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1.DeleteFlexAlgoRequest{
 				Algorithm: uint32(algo),
 			}))
 			return err
@@ -350,7 +350,7 @@ func metricTypeStr(mt uint32) string {
 	}
 }
 
-func nextHops(r *goisisv1alpha1.Route) string {
+func nextHops(r *goisisv1.Route) string {
 	out := ""
 	for i, nh := range r.GetNextHops() {
 		if i > 0 {
@@ -366,16 +366,16 @@ func newMonitorCmd(addr *string) *cobra.Command {
 		Use:   "monitor",
 		Short: "Stream adjacency and route changes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			stream, err := newClient(*addr).WatchEvent(cmd.Context(), connect.NewRequest(&goisisv1alpha1.WatchEventRequest{}))
+			stream, err := newClient(*addr).WatchEvent(cmd.Context(), connect.NewRequest(&goisisv1.WatchEventRequest{}))
 			if err != nil {
 				return err
 			}
 			for stream.Receive() {
 				switch ev := stream.Msg().GetEvent().(type) {
-				case *goisisv1alpha1.WatchEventResponse_Adjacency:
+				case *goisisv1.WatchEventResponse_Adjacency:
 					a := ev.Adjacency.GetAdjacency()
 					cmd.Printf("ADJ  %s %s %s %s\n", a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState())
-				case *goisisv1alpha1.WatchEventResponse_Route:
+				case *goisisv1.WatchEventResponse_Route:
 					r := ev.Route.GetRoute()
 					verb := "ROUTE+"
 					if ev.Route.GetWithdrawn() {

@@ -141,9 +141,10 @@ architecture and contributor notes.
 | M6 | SRv6 locator advertisement, learning, End SID programming |
 | M7 | Flex-Algo definition, election, per-algorithm SPF |
 | M8 | Overload-on-startup, clean-shutdown purge, Prometheus metrics, HMAC-MD5/SHA authentication (hellos + LSPs/SNPs) |
+| M9 | Runtime Add/Delete of SRv6 locators & Flex-Algos (RPC + CLI), `v1` API |
 
-Remaining: mutable-config RPCs (before promoting the API from `v1alpha1`
-to `v1`).
+The management API is `v1`: read RPCs plus runtime Add/Delete of SRv6 locators
+and Flexible Algorithms, with buf breaking-change detection gating the schema.
 
 ## Naming
 
