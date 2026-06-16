@@ -96,16 +96,21 @@ router isis 1
 	run(t, "docker", "exec", "-d", "gi", "sh", "-c", "/usr/local/bin/goisisd -f /etc/goisis.yaml > /var/log/goisisd.log 2>&1")
 
 	// goisis instantiates its own End SID (the locator base) as a seg6local
-	// route on the loopback.
-	waitUp(t, "goisis installs its End SID seg6local route", func() bool {
-		out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show").CombinedOutput()
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "fc00:0:1::") && strings.Contains(line, "seg6local") && strings.Contains(line, "End") {
-				return true
+	// route on the loopback — only checkable where the kernel supports
+	// seg6local encapsulation.
+	if seg6localSupported(t) {
+		waitUp(t, "goisis installs its End SID seg6local route", func() bool {
+			out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show").CombinedOutput()
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "fc00:0:1::") && strings.Contains(line, "seg6local") && strings.Contains(line, "End") {
+					return true
+				}
 			}
-		}
-		return false
-	})
+			return false
+		})
+	} else {
+		t.Log("kernel lacks seg6local (CONFIG_IPV6_SEG6_LWTUNNEL); skipping End SID dataplane assertion")
+	}
 
 	// goisis must install FRR's locator into its kernel FIB (proto isis).
 	waitUp(t, "goisis installs FRR locator fc00:0:2::/48", func() bool {

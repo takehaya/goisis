@@ -230,6 +230,21 @@ func (n *frrNode) databaseContains(t *testing.T, substr string) bool {
 	return strings.Contains(string(out), substr)
 }
 
+// seg6localSupported reports whether the host kernel honors seg6local route
+// encapsulation (CONFIG_IPV6_SEG6_LWTUNNEL). Containers share the host kernel,
+// so this gates SRv6 End SID dataplane assertions. It probes by adding a
+// temporary End route on lo and checking the encap survives readback.
+func seg6localSupported(t *testing.T) bool {
+	t.Helper()
+	const probe = "fc00:6109:ca1::/128"
+	if err := exec.Command("ip", "-6", "route", "add", probe, "encap", "seg6local", "action", "End", "dev", "lo").Run(); err != nil {
+		return false
+	}
+	out, _ := exec.Command("ip", "-6", "route", "show", probe).CombinedOutput()
+	_ = exec.Command("ip", "-6", "route", "del", probe).Run()
+	return strings.Contains(string(out), "seg6local")
+}
+
 func waitUp(t *testing.T, what string, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(40 * time.Second)
@@ -240,4 +255,18 @@ func waitUp(t *testing.T, what string, fn func() bool) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// waitUpSoft polls fn up to maxSeconds and reports whether it became true,
+// without failing the test (the caller decides how to report).
+func waitUpSoft(t *testing.T, maxSeconds int, fn func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(time.Duration(maxSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
 }

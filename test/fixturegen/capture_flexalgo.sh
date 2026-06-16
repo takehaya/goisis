@@ -26,8 +26,11 @@ router isis 1
  net 49.0001.0000.0000.000$2.00
  is-type level-1-2
  metric-style wide
+ segment-routing on
+ segment-routing global-block 16000 23999
  flex-algo 128
   advertise-definition
+  dataplane sr-mpls
   priority $3
  exit
 !

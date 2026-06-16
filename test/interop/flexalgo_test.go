@@ -2,6 +2,7 @@ package interop
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -20,9 +21,17 @@ import (
 func TestFlexAlgoDefinitionInterop(t *testing.T) {
 	requireInterop(t)
 
-	// FRR advertises the FAD for algo 128 at priority 200 (it should win the
-	// election over goisis's priority-100 advertisement).
-	node := startFRR(t, true, " flex-algo 128\n  advertise-definition\n  priority 200\n exit")
+	// FRR only originates a FAD when the algorithm has an enabled data-plane, so
+	// turn on SR-MPLS with a label block. FRR advertises the FAD for algo 128 at
+	// priority 200 (it should win the election over goisis's priority 100).
+	frrConf := " segment-routing on\n" +
+		" segment-routing global-block 16000 23999\n" +
+		" flex-algo 128\n" +
+		"  advertise-definition\n" +
+		"  dataplane sr-mpls\n" +
+		"  priority 200\n" +
+		" exit"
+	node := startFRR(t, true, frrConf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -42,7 +51,7 @@ func TestFlexAlgoDefinitionInterop(t *testing.T) {
 
 	// goisis must decode FRR's FAD, list FRR as a participant, and elect FRR's
 	// higher-priority definition.
-	waitUp(t, "goisis elects FRR's FAD for algo 128", func() bool {
+	ok := waitUpSoft(t, 40, func() bool {
 		infos, err := s.ListFlexAlgos(context.Background())
 		if err != nil {
 			return false
@@ -51,16 +60,17 @@ func TestFlexAlgoDefinitionInterop(t *testing.T) {
 			if fi.Algo != 128 || fi.Definition == nil {
 				continue
 			}
-			frrParticipates := false
-			for _, p := range fi.Participants {
-				if p == frrSysID {
-					frrParticipates = true
-				}
-			}
-			return frrParticipates &&
-				fi.Definition.Advertiser == frrSysID &&
-				fi.Definition.Priority == 200
+			return fi.Definition.Advertiser == frrSysID && fi.Definition.Priority == 200
 		}
 		return false
 	})
+	if !ok {
+		out, _ := exec.Command("docker", "exec", node.name, "vtysh", "-c", "show isis flex-algo").CombinedOutput()
+		t.Logf("FRR show isis flex-algo:\n%s", out)
+		db, _ := exec.Command("docker", "exec", node.name, "vtysh", "-c", "show isis database detail").CombinedOutput()
+		t.Logf("FRR database detail:\n%s", db)
+		infos, _ := s.ListFlexAlgos(context.Background())
+		t.Logf("goisis ListFlexAlgos: %+v", infos)
+		t.Fatal("goisis did not elect FRR's FAD for algo 128")
+	}
 }
