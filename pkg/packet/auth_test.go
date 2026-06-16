@@ -36,6 +36,36 @@ func TestHMACMD5PatchVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyHMACMD5IgnoresDataLinkPadding(t *testing.T) {
+	// A small authenticated PDU is padded by the NIC to the 60-octet Ethernet
+	// minimum on receive. Verification must hash the declared-length PDU, not
+	// the padded frame, so callers trim with TrimToPDULength first.
+	h := &LANHello{
+		Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
+		TLVs: []TLV{
+			&AreaAddressesTLV{Addresses: []AreaAddress{{0x49, 0x00, 0x01}}},
+			&AuthenticationTLV{AuthType: AuthTypeHMACMD5, Value: make([]byte, hmacMD5DigestLen)},
+		},
+	}
+	raw, err := h.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	off := HeaderLen(h.PDUType())
+	key := []byte("k")
+	if err := PatchHMACMD5(raw, off, key, false); err != nil {
+		t.Fatalf("PatchHMACMD5: %v", err)
+	}
+
+	padded := append(append([]byte{}, raw...), make([]byte, 12)...) // NIC padding
+	if VerifyHMACMD5(padded, off, key, false) {
+		t.Error("verify must not pass over the padded buffer (the digest covers fewer bytes)")
+	}
+	if !VerifyHMACMD5(TrimToPDULength(padded), off, key, false) {
+		t.Error("verify must pass after trimming data-link padding")
+	}
+}
+
 func TestHMACMD5LSPZeroesVolatileFields(t *testing.T) {
 	lsp := &LSP{
 		Level: Level2, RemainingTime: 1000, LSPID: LSPID{0, 0, 0, 0, 0, 1, 0, 0}, SequenceNumber: 5, ISType: 2,

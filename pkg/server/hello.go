@@ -190,30 +190,34 @@ func (s *IsisServer) handleEvent(ev event) {
 // handleRx decodes and processes a received frame. Decode failures are
 // logged and dropped (the malformed-PDU policy for M2).
 func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
-	pdu, err := packet.DecodePDU(frame.PDU)
+	// Trim any data-link padding to the declared PDU length first: authentication
+	// must hash the exact PDU the sender signed, and a stored/re-flooded LSP must
+	// not carry padding.
+	raw := packet.TrimToPDULength(frame.PDU)
+	pdu, err := packet.DecodePDU(raw)
 	if err != nil {
 		s.logger.Debug("drop undecodable PDU", "circuit", c.cfg.Name, "src", frame.Src, "error", err)
 		return
 	}
 	switch h := pdu.(type) {
 	case *packet.LANHello:
-		if s.helloAuthOK(c, frame.PDU, h.PDUType()) {
+		if s.helloAuthOK(c, raw, h.PDUType()) {
 			s.processLANHello(c, frame.Src, h)
 		}
 	case *packet.P2PHello:
-		if s.helloAuthOK(c, frame.PDU, h.PDUType()) {
+		if s.helloAuthOK(c, raw, h.PDUType()) {
 			s.processP2PHello(c, frame.Src, h)
 		}
 	case *packet.LSP:
-		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, true) {
-			s.processLSP(c, frame.PDU, h, time.Now())
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, true) {
+			s.processLSP(c, raw, h, time.Now())
 		}
 	case *packet.CSNP:
-		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, false) {
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) {
 			s.processCSNP(c, h, time.Now())
 		}
 	case *packet.PSNP:
-		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, false) {
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) {
 			s.processPSNP(c, h, time.Now())
 		}
 	}

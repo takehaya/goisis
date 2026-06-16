@@ -222,6 +222,41 @@ func checkFixedHeader(h commonHeader, b []byte, minLen, pduLenOff int) ([]byte, 
 	return b[:pduLen], nil
 }
 
+// pduLenOffset returns the offset of the 2-octet PDU-length field for a PDU
+// type (it differs between the hello and LSP/SNP families).
+func pduLenOffset(t PDUType) (int, bool) {
+	switch t {
+	case PDUTypeL1LANHello, PDUTypeL2LANHello, PDUTypeP2PHello:
+		return 17, true
+	case PDUTypeL1LSP, PDUTypeL2LSP,
+		PDUTypeL1CSNP, PDUTypeL2CSNP, PDUTypeL1PSNP, PDUTypeL2PSNP:
+		return 8, true
+	default:
+		return 0, false
+	}
+}
+
+// TrimToPDULength returns b trimmed to the PDU's declared length, dropping any
+// trailing data-link padding (802.3/Ethernet pads frames to a 60-octet
+// minimum). It returns b unchanged if the header or length cannot be read (the
+// decoder then rejects it). This matters for authentication, which must hash
+// the exact PDU the sender signed rather than the padded frame.
+func TrimToPDULength(b []byte) []byte {
+	h, err := decodeCommonHeader(b)
+	if err != nil {
+		return b
+	}
+	off, ok := pduLenOffset(h.PDUType)
+	if !ok || len(b) < off+2 {
+		return b
+	}
+	n := int(binary.BigEndian.Uint16(b[off : off+2]))
+	if n < commonHeaderLen || n > len(b) {
+		return b
+	}
+	return b[:n]
+}
+
 func (t PDUType) String() string {
 	switch t {
 	case PDUTypeL1LANHello:
