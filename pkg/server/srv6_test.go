@@ -61,7 +61,7 @@ func TestSRv6LocatorAdvertisedAndLearned(t *testing.T) {
 	// SRv6 Locator TLV.
 	waitFor(t, "a LSP advertises SRv6 TLVs", func() bool {
 		caps, locTLV := false, false
-		for _, tlv := range ownLSPTLVs(t, a, packet.Level2) {
+		for _, tlv := range ownLSPTLVs(t, a) {
 			switch tlv.(type) {
 			case *packet.RouterCapabilityTLV:
 				caps = true
@@ -75,11 +75,11 @@ func TestSRv6LocatorAdvertisedAndLearned(t *testing.T) {
 
 // ownLSPTLVs returns the decoded TLVs of this server's own fragment-0 LSP at a
 // level (white-box access to the LSDB on the Serve goroutine).
-func ownLSPTLVs(t *testing.T, s *IsisServer, level packet.Level) []packet.TLV {
+func ownLSPTLVs(t *testing.T, s *IsisServer) []packet.TLV {
 	t.Helper()
 	var tlvs []packet.TLV
 	if err := s.mgmtOperation(context.Background(), func() error {
-		if e := s.dbs[level].get(lspID(s.systemID, 0)); e != nil {
+		if e := s.dbs[packet.Level2].get(lspID(s.systemID, 0)); e != nil {
 			tlvs = e.lsp.TLVs
 		}
 		return nil

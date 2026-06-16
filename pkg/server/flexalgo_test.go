@@ -29,7 +29,7 @@ func TestFlexAlgoAdvertised(t *testing.T) {
 	waitFor(t, "own LSP carries SR-Algorithm + FAD", func() bool {
 		var sa *packet.SRAlgorithmSubTLV
 		var fads []*packet.FlexAlgoDefinitionSubTLV
-		for _, tlv := range ownLSPTLVs(t, s, packet.Level2) {
+		for _, tlv := range ownLSPTLVs(t, s) {
 			rc, ok := tlv.(*packet.RouterCapabilityTLV)
 			if !ok {
 				continue
