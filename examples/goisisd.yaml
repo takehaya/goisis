@@ -20,6 +20,7 @@ circuits:
     # p2p: true     # point-to-point instead of broadcast/LAN
     # priority: 64  # DIS election priority on a LAN (0-127)
     # metric: 10    # circuit wide metric
+    # hello-password: s3cret   # HMAC-MD5 hello authentication (RFC 5304)
 
 # Static prefixes to originate (connected subnets of the circuits above are
 # advertised automatically).

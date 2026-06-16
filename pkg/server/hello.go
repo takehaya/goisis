@@ -27,9 +27,42 @@ func (s *IsisServer) sendOne(c *circuit, dst packet.SNPA, pdu packet.PDU) {
 		s.logger.Error("serialize hello", "circuit", c.cfg.Name, "error", err)
 		return
 	}
+	if c.cfg.HelloPassword != "" {
+		if err := packet.PatchHMACMD5(wire, packet.HeaderLen(pdu.PDUType()), []byte(c.cfg.HelloPassword), false); err != nil {
+			s.logger.Error("authenticate hello", "circuit", c.cfg.Name, "error", err)
+			return
+		}
+	}
 	if err := c.cfg.Transport.Send(dst, wire); err != nil {
 		s.logger.Error("send hello", "circuit", c.cfg.Name, "error", err)
 	}
+}
+
+// finalizeHello appends an HMAC-MD5 authentication TLV when a hello password is
+// configured (padding is skipped then; the digest is filled at send time),
+// otherwise pads the hello toward the MTU.
+func (s *IsisServer) finalizeHello(c *circuit, pdu packet.PDU, tlvs *[]packet.TLV) {
+	if c.cfg.HelloPassword != "" {
+		*tlvs = append(*tlvs, &packet.AuthenticationTLV{
+			AuthType: packet.AuthTypeHMACMD5,
+			Value:    make([]byte, 16),
+		})
+		return
+	}
+	s.padHello(c, pdu, tlvs)
+}
+
+// helloAuthOK reports whether a received hello satisfies this circuit's hello
+// authentication. With no password configured every hello passes.
+func (s *IsisServer) helloAuthOK(c *circuit, raw []byte, pt packet.PDUType) bool {
+	if c.cfg.HelloPassword == "" {
+		return true
+	}
+	if !packet.VerifyHMACMD5(raw, packet.HeaderLen(pt), []byte(c.cfg.HelloPassword), false) {
+		s.logger.Debug("drop hello failing authentication", "circuit", c.cfg.Name)
+		return false
+	}
+	return true
 }
 
 // commonHelloTLVs are the area/protocol/address TLVs shared by LAN and p2p
@@ -75,7 +108,7 @@ func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHe
 		LANID:       c.dis[level], // zero until a DIS is elected
 		TLVs:        tlvs,
 	}
-	s.padHello(c, h, &h.TLVs)
+	s.finalizeHello(c, h, &h.TLVs)
 	return h
 }
 
@@ -105,7 +138,7 @@ func (s *IsisServer) buildP2PHello(c *circuit) *packet.P2PHello {
 		LocalCircuitID: c.pseudonodeID,
 		TLVs:           tlvs,
 	}
-	s.padHello(c, h, &h.TLVs)
+	s.finalizeHello(c, h, &h.TLVs)
 	return h
 }
 
@@ -164,9 +197,13 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 	}
 	switch h := pdu.(type) {
 	case *packet.LANHello:
-		s.processLANHello(c, frame.Src, h)
+		if s.helloAuthOK(c, frame.PDU, h.PDUType()) {
+			s.processLANHello(c, frame.Src, h)
+		}
 	case *packet.P2PHello:
-		s.processP2PHello(c, frame.Src, h)
+		if s.helloAuthOK(c, frame.PDU, h.PDUType()) {
+			s.processP2PHello(c, frame.Src, h)
+		}
 	case *packet.LSP:
 		s.processLSP(c, frame.PDU, h, time.Now())
 	case *packet.CSNP:

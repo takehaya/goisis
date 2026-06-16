@@ -21,6 +21,8 @@ A `goisis` CLI talks to the daemon over [Connect RPC](https://connectrpc.com/)
   per-algorithm SPF over a pruned topology (IGP metric)
 - **Connect RPC API + CLI** — inspect circuits, adjacencies, the LSDB, routes,
   SRv6 locators, and Flex-Algo state; stream changes with `WatchEvent`
+- **HMAC-MD5 hello authentication** (RFC 5304), wire-compatible with FRR's
+  `isis password md5`
 - **Prometheus metrics** at `/metrics`
 - **Continuous FRR interop** — every PR runs containerized topologies against
   FRR isisd
@@ -137,10 +139,11 @@ architecture and contributor notes.
 | M5 | Connect RPC API + CLI + `WatchEvent` |
 | M6 | SRv6 locator advertisement, learning, End SID programming |
 | M7 | Flex-Algo definition, election, per-algorithm SPF |
-| M8 | Overload-on-startup, clean-shutdown purge, Prometheus metrics |
+| M8 | Overload-on-startup, clean-shutdown purge, Prometheus metrics, HMAC-MD5 hello auth |
 
-Remaining: HMAC authentication (RFC 5304/5310) and mutable-config RPCs (before
-promoting the API from `v1alpha1` to `v1`).
+Remaining: LSP/SNP authentication (area/domain password) and HMAC-SHA
+(RFC 5310), plus mutable-config RPCs (before promoting the API from
+`v1alpha1` to `v1`).
 
 ## Naming
 

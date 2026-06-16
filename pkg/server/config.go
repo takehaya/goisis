@@ -54,6 +54,11 @@ type CircuitConfig struct {
 	IPv6Addrs []netip.Addr
 	// Padding pads hellos toward the MTU (ISO 10589); default true.
 	Padding *bool
+	// HelloPassword, if set, enables HMAC-MD5 authentication of hellos on this
+	// circuit (RFC 5304): hellos are signed with it and received hellos must
+	// carry a matching digest or they are dropped (no adjacency). It is the
+	// shared key used directly as the HMAC key (FRR's `isis password md5`).
+	HelloPassword string
 }
 
 func (c *CircuitConfig) levels() []packet.Level {

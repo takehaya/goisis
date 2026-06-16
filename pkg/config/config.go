@@ -62,6 +62,8 @@ type CircuitConfig struct {
 	P2P       bool   `yaml:"p2p"`
 	Priority  *uint8 `yaml:"priority"`
 	Metric    uint32 `yaml:"metric"`
+	// HelloPassword enables HMAC-MD5 authentication of hellos (RFC 5304).
+	HelloPassword string `yaml:"hello-password"`
 }
 
 // Load reads and parses a configuration file.
@@ -206,15 +208,16 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 	}
 	v4, v6 := interfaceAddrs(cc.Interface)
 	return server.CircuitConfig{
-		Name:      cc.Interface,
-		Transport: tr,
-		P2P:       cc.P2P,
-		Level1:    l1,
-		Level2:    l2,
-		Priority:  cc.Priority,
-		Metric:    cc.Metric,
-		IPv4Addrs: v4,
-		IPv6Addrs: v6,
+		Name:          cc.Interface,
+		Transport:     tr,
+		P2P:           cc.P2P,
+		Level1:        l1,
+		Level2:        l2,
+		Priority:      cc.Priority,
+		Metric:        cc.Metric,
+		IPv4Addrs:     v4,
+		IPv6Addrs:     v6,
+		HelloPassword: cc.HelloPassword,
 	}, nil
 }
 

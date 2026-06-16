@@ -25,6 +25,7 @@
 | `p2p` | bool | ブロードキャスト/DIS の代わりにポイントツーポイント手順(RFC 5303 three-way)。 |
 | `priority` | uint8 | LAN での DIS 選出プライオリティ、0–127(デフォルト 64)。 |
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
+| `hello-password` | string | HMAC-MD5 による hello 認証(RFC 5304)を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。FRR の `isis password md5` と相互運用可能。 |
 
 インターフェースに設定された IPv4 アドレスとリンクローカル IPv6 アドレスは
 hello(TLV 132/232)で広報され、ネクストホップに使われます。その接続サブネットは

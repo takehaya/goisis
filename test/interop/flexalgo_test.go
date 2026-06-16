@@ -31,11 +31,11 @@ func TestFlexAlgoDefinitionInterop(t *testing.T) {
 		"  dataplane sr-mpls\n" +
 		"  priority 200\n" +
 		" exit"
-	node := startFRR(t, true, frrConf)
+	node := startFRR(t, true, "", frrConf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := startGoisis(t, ctx, node.hostVeth, true,
+	s := startGoisis(t, ctx, node.hostVeth, true, "",
 		server.WithFlexAlgo(server.FlexAlgoConfig{
 			Algo: 128, MetricType: packet.FlexAlgoMetricIGP, Priority: 100, AdvertiseDefinition: true,
 		}),

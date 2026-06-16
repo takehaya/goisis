@@ -49,9 +49,10 @@ type frrNode struct {
 }
 
 // startFRR brings up an FRR isisd container wired to the host by a veth pair.
-// p2p selects point-to-point on the FRR side. routerExtra lines are appended
-// inside the `router isis 1` stanza (e.g. a flex-algo definition).
-func startFRR(t *testing.T, p2p bool, routerExtra ...string) *frrNode {
+// p2p selects point-to-point on the FRR side. ifaceExtra lines are appended
+// inside the `interface eth0` stanza (e.g. an interface password); routerExtra
+// lines are appended inside the `router isis 1` stanza (e.g. a flex-algo def).
+func startFRR(t *testing.T, p2p bool, ifaceExtra string, routerExtra ...string) *frrNode {
 	t.Helper()
 	name := "goisis-interop-frr"
 	hostVeth := "gisisI0"
@@ -66,9 +67,12 @@ func startFRR(t *testing.T, p2p bool, routerExtra ...string) *frrNode {
 	if err := os.WriteFile(dir+"/daemons", []byte(daemons), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ptp := ""
+	iface := ""
 	if p2p {
-		ptp = " isis network point-to-point\n"
+		iface = " isis network point-to-point\n"
+	}
+	if ifaceExtra != "" {
+		iface += ifaceExtra + "\n"
 	}
 	extra := ""
 	if len(routerExtra) > 0 {
@@ -85,7 +89,7 @@ router isis 1
  is-type level-1-2
  metric-style wide
 %s!
-`, ptp, extra)
+`, iface, extra)
 	if err := os.WriteFile(dir+"/frr.conf", []byte(conf), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +163,7 @@ func ifaceAddrs(t *testing.T, ifname string) (v4, v6 []netip.Addr) {
 
 // startGoisis builds and runs a goisis instance on the host veth end. Extra
 // options (e.g. WithFlexAlgo) are appended after the defaults.
-func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool, extra ...server.ServerOption) *server.IsisServer {
+func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool, helloPassword string, extra ...server.ServerOption) *server.IsisServer {
 	t.Helper()
 	tr, err := datalink.OpenLinux(ifname)
 	if err != nil {
@@ -167,13 +171,14 @@ func startGoisis(t *testing.T, ctx context.Context, ifname string, p2p bool, ext
 	}
 	v4, v6 := ifaceAddrs(t, ifname)
 	cfg := server.CircuitConfig{
-		Name:      ifname,
-		Transport: tr,
-		P2P:       p2p,
-		Level1:    true,
-		Level2:    true,
-		IPv4Addrs: v4,
-		IPv6Addrs: v6,
+		Name:          ifname,
+		Transport:     tr,
+		P2P:           p2p,
+		Level1:        true,
+		Level2:        true,
+		IPv4Addrs:     v4,
+		IPv6Addrs:     v6,
+		HelloPassword: helloPassword,
 	}
 	opts := append([]server.ServerOption{
 		server.WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),

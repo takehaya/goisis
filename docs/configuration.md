@@ -25,6 +25,7 @@ options. ([日本語](configuration.ja.md))
 | `p2p` | bool | Point-to-point procedures (RFC 5303 three-way) instead of broadcast/DIS. |
 | `priority` | uint8 | DIS election priority on a LAN, 0–127 (default 64). |
 | `metric` | uint32 | Circuit wide metric (default 10). |
+| `hello-password` | string | Enables HMAC-MD5 hello authentication (RFC 5304). Hellos are signed with it and received hellos must carry a matching digest or they are dropped. Interops with FRR's `isis password md5`. |
 
 IPv4 and link-local IPv6 addresses configured on the interface are advertised in
 hellos (TLV 132/232) and used as next hops; their connected subnets are

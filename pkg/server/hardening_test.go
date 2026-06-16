@@ -60,6 +60,48 @@ func TestOverloadOnStartup(t *testing.T) {
 	})
 }
 
+// helloAuthPair links two p2p servers whose circuits use the given hello
+// passwords and starts them; it returns both servers.
+func helloAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer) {
+	t.Helper()
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	mk := func(name string, tr datalink.Transport, pw string) CircuitConfig {
+		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse(), HelloPassword: pw}
+		fastHello(&c)
+		return c
+	}
+	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta, passA)))
+	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb, passB)))
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	return a, b
+}
+
+// TestHelloAuthMatchingFormsAdjacency: matching HMAC-MD5 hello passwords let the
+// adjacency come up.
+func TestHelloAuthMatchingFormsAdjacency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, b := helloAuthPair(t, ctx, "s3cret", "s3cret")
+	waitFor(t, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitFor(t, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+}
+
+// TestHelloAuthMismatchNoAdjacency: a mismatched hello password drops the peer's
+// hellos so no adjacency forms.
+func TestHelloAuthMismatchNoAdjacency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, _ := helloAuthPair(t, ctx, "s3cret", "different")
+	time.Sleep(1500 * time.Millisecond) // ample time for a fast-hello adjacency
+	if st, ok := adjState(t, a, packet.Level2); ok && st == AdjUp {
+		t.Errorf("adjacency reached %v despite mismatched hello passwords", st)
+	}
+}
+
 // TestProcessLSPRefloodsPurgeOverSameSeqLive: when we hold a purge and a peer
 // floods a live copy at the same sequence number, we re-flood our purge (a
 // purge supersedes a live LSP at equal seq, ISO 10589 7.3.16.2).
