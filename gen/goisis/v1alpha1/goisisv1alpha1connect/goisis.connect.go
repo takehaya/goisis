@@ -51,6 +51,16 @@ const (
 	// IsisServiceListFlexAlgosProcedure is the fully-qualified name of the IsisService's ListFlexAlgos
 	// RPC.
 	IsisServiceListFlexAlgosProcedure = "/goisis.v1alpha1.IsisService/ListFlexAlgos"
+	// IsisServiceAddLocatorProcedure is the fully-qualified name of the IsisService's AddLocator RPC.
+	IsisServiceAddLocatorProcedure = "/goisis.v1alpha1.IsisService/AddLocator"
+	// IsisServiceDeleteLocatorProcedure is the fully-qualified name of the IsisService's DeleteLocator
+	// RPC.
+	IsisServiceDeleteLocatorProcedure = "/goisis.v1alpha1.IsisService/DeleteLocator"
+	// IsisServiceAddFlexAlgoProcedure is the fully-qualified name of the IsisService's AddFlexAlgo RPC.
+	IsisServiceAddFlexAlgoProcedure = "/goisis.v1alpha1.IsisService/AddFlexAlgo"
+	// IsisServiceDeleteFlexAlgoProcedure is the fully-qualified name of the IsisService's
+	// DeleteFlexAlgo RPC.
+	IsisServiceDeleteFlexAlgoProcedure = "/goisis.v1alpha1.IsisService/DeleteFlexAlgo"
 	// IsisServiceWatchEventProcedure is the fully-qualified name of the IsisService's WatchEvent RPC.
 	IsisServiceWatchEventProcedure = "/goisis.v1alpha1.IsisService/WatchEvent"
 )
@@ -72,6 +82,14 @@ type IsisServiceClient interface {
 	// ListFlexAlgos lists Flexible Algorithm state (elected definitions and
 	// participating nodes) per level.
 	ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error)
+	// AddLocator advertises a new SRv6 locator at runtime.
+	AddLocator(context.Context, *connect.Request[v1alpha1.AddLocatorRequest]) (*connect.Response[v1alpha1.AddLocatorResponse], error)
+	// DeleteLocator withdraws a previously advertised SRv6 locator.
+	DeleteLocator(context.Context, *connect.Request[v1alpha1.DeleteLocatorRequest]) (*connect.Response[v1alpha1.DeleteLocatorResponse], error)
+	// AddFlexAlgo makes this node participate in a Flexible Algorithm at runtime.
+	AddFlexAlgo(context.Context, *connect.Request[v1alpha1.AddFlexAlgoRequest]) (*connect.Response[v1alpha1.AddFlexAlgoResponse], error)
+	// DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
+	DeleteFlexAlgo(context.Context, *connect.Request[v1alpha1.DeleteFlexAlgoRequest]) (*connect.Response[v1alpha1.DeleteFlexAlgoResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error)
 }
@@ -129,6 +147,30 @@ func NewIsisServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(isisServiceMethods.ByName("ListFlexAlgos")),
 			connect.WithClientOptions(opts...),
 		),
+		addLocator: connect.NewClient[v1alpha1.AddLocatorRequest, v1alpha1.AddLocatorResponse](
+			httpClient,
+			baseURL+IsisServiceAddLocatorProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("AddLocator")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteLocator: connect.NewClient[v1alpha1.DeleteLocatorRequest, v1alpha1.DeleteLocatorResponse](
+			httpClient,
+			baseURL+IsisServiceDeleteLocatorProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("DeleteLocator")),
+			connect.WithClientOptions(opts...),
+		),
+		addFlexAlgo: connect.NewClient[v1alpha1.AddFlexAlgoRequest, v1alpha1.AddFlexAlgoResponse](
+			httpClient,
+			baseURL+IsisServiceAddFlexAlgoProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("AddFlexAlgo")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteFlexAlgo: connect.NewClient[v1alpha1.DeleteFlexAlgoRequest, v1alpha1.DeleteFlexAlgoResponse](
+			httpClient,
+			baseURL+IsisServiceDeleteFlexAlgoProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("DeleteFlexAlgo")),
+			connect.WithClientOptions(opts...),
+		),
 		watchEvent: connect.NewClient[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse](
 			httpClient,
 			baseURL+IsisServiceWatchEventProcedure,
@@ -147,6 +189,10 @@ type isisServiceClient struct {
 	listRoutes      *connect.Client[v1alpha1.ListRoutesRequest, v1alpha1.ListRoutesResponse]
 	listLocators    *connect.Client[v1alpha1.ListLocatorsRequest, v1alpha1.ListLocatorsResponse]
 	listFlexAlgos   *connect.Client[v1alpha1.ListFlexAlgosRequest, v1alpha1.ListFlexAlgosResponse]
+	addLocator      *connect.Client[v1alpha1.AddLocatorRequest, v1alpha1.AddLocatorResponse]
+	deleteLocator   *connect.Client[v1alpha1.DeleteLocatorRequest, v1alpha1.DeleteLocatorResponse]
+	addFlexAlgo     *connect.Client[v1alpha1.AddFlexAlgoRequest, v1alpha1.AddFlexAlgoResponse]
+	deleteFlexAlgo  *connect.Client[v1alpha1.DeleteFlexAlgoRequest, v1alpha1.DeleteFlexAlgoResponse]
 	watchEvent      *connect.Client[v1alpha1.WatchEventRequest, v1alpha1.WatchEventResponse]
 }
 
@@ -185,6 +231,26 @@ func (c *isisServiceClient) ListFlexAlgos(ctx context.Context, req *connect.Requ
 	return c.listFlexAlgos.CallUnary(ctx, req)
 }
 
+// AddLocator calls goisis.v1alpha1.IsisService.AddLocator.
+func (c *isisServiceClient) AddLocator(ctx context.Context, req *connect.Request[v1alpha1.AddLocatorRequest]) (*connect.Response[v1alpha1.AddLocatorResponse], error) {
+	return c.addLocator.CallUnary(ctx, req)
+}
+
+// DeleteLocator calls goisis.v1alpha1.IsisService.DeleteLocator.
+func (c *isisServiceClient) DeleteLocator(ctx context.Context, req *connect.Request[v1alpha1.DeleteLocatorRequest]) (*connect.Response[v1alpha1.DeleteLocatorResponse], error) {
+	return c.deleteLocator.CallUnary(ctx, req)
+}
+
+// AddFlexAlgo calls goisis.v1alpha1.IsisService.AddFlexAlgo.
+func (c *isisServiceClient) AddFlexAlgo(ctx context.Context, req *connect.Request[v1alpha1.AddFlexAlgoRequest]) (*connect.Response[v1alpha1.AddFlexAlgoResponse], error) {
+	return c.addFlexAlgo.CallUnary(ctx, req)
+}
+
+// DeleteFlexAlgo calls goisis.v1alpha1.IsisService.DeleteFlexAlgo.
+func (c *isisServiceClient) DeleteFlexAlgo(ctx context.Context, req *connect.Request[v1alpha1.DeleteFlexAlgoRequest]) (*connect.Response[v1alpha1.DeleteFlexAlgoResponse], error) {
+	return c.deleteFlexAlgo.CallUnary(ctx, req)
+}
+
 // WatchEvent calls goisis.v1alpha1.IsisService.WatchEvent.
 func (c *isisServiceClient) WatchEvent(ctx context.Context, req *connect.Request[v1alpha1.WatchEventRequest]) (*connect.ServerStreamForClient[v1alpha1.WatchEventResponse], error) {
 	return c.watchEvent.CallServerStream(ctx, req)
@@ -207,6 +273,14 @@ type IsisServiceHandler interface {
 	// ListFlexAlgos lists Flexible Algorithm state (elected definitions and
 	// participating nodes) per level.
 	ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error)
+	// AddLocator advertises a new SRv6 locator at runtime.
+	AddLocator(context.Context, *connect.Request[v1alpha1.AddLocatorRequest]) (*connect.Response[v1alpha1.AddLocatorResponse], error)
+	// DeleteLocator withdraws a previously advertised SRv6 locator.
+	DeleteLocator(context.Context, *connect.Request[v1alpha1.DeleteLocatorRequest]) (*connect.Response[v1alpha1.DeleteLocatorResponse], error)
+	// AddFlexAlgo makes this node participate in a Flexible Algorithm at runtime.
+	AddFlexAlgo(context.Context, *connect.Request[v1alpha1.AddFlexAlgoRequest]) (*connect.Response[v1alpha1.AddFlexAlgoResponse], error)
+	// DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
+	DeleteFlexAlgo(context.Context, *connect.Request[v1alpha1.DeleteFlexAlgoRequest]) (*connect.Response[v1alpha1.DeleteFlexAlgoResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error
 }
@@ -260,6 +334,30 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(isisServiceMethods.ByName("ListFlexAlgos")),
 		connect.WithHandlerOptions(opts...),
 	)
+	isisServiceAddLocatorHandler := connect.NewUnaryHandler(
+		IsisServiceAddLocatorProcedure,
+		svc.AddLocator,
+		connect.WithSchema(isisServiceMethods.ByName("AddLocator")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceDeleteLocatorHandler := connect.NewUnaryHandler(
+		IsisServiceDeleteLocatorProcedure,
+		svc.DeleteLocator,
+		connect.WithSchema(isisServiceMethods.ByName("DeleteLocator")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceAddFlexAlgoHandler := connect.NewUnaryHandler(
+		IsisServiceAddFlexAlgoProcedure,
+		svc.AddFlexAlgo,
+		connect.WithSchema(isisServiceMethods.ByName("AddFlexAlgo")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceDeleteFlexAlgoHandler := connect.NewUnaryHandler(
+		IsisServiceDeleteFlexAlgoProcedure,
+		svc.DeleteFlexAlgo,
+		connect.WithSchema(isisServiceMethods.ByName("DeleteFlexAlgo")),
+		connect.WithHandlerOptions(opts...),
+	)
 	isisServiceWatchEventHandler := connect.NewServerStreamHandler(
 		IsisServiceWatchEventProcedure,
 		svc.WatchEvent,
@@ -282,6 +380,14 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 			isisServiceListLocatorsHandler.ServeHTTP(w, r)
 		case IsisServiceListFlexAlgosProcedure:
 			isisServiceListFlexAlgosHandler.ServeHTTP(w, r)
+		case IsisServiceAddLocatorProcedure:
+			isisServiceAddLocatorHandler.ServeHTTP(w, r)
+		case IsisServiceDeleteLocatorProcedure:
+			isisServiceDeleteLocatorHandler.ServeHTTP(w, r)
+		case IsisServiceAddFlexAlgoProcedure:
+			isisServiceAddFlexAlgoHandler.ServeHTTP(w, r)
+		case IsisServiceDeleteFlexAlgoProcedure:
+			isisServiceDeleteFlexAlgoHandler.ServeHTTP(w, r)
 		case IsisServiceWatchEventProcedure:
 			isisServiceWatchEventHandler.ServeHTTP(w, r)
 		default:
@@ -319,6 +425,22 @@ func (UnimplementedIsisServiceHandler) ListLocators(context.Context, *connect.Re
 
 func (UnimplementedIsisServiceHandler) ListFlexAlgos(context.Context, *connect.Request[v1alpha1.ListFlexAlgosRequest]) (*connect.Response[v1alpha1.ListFlexAlgosResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.ListFlexAlgos is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) AddLocator(context.Context, *connect.Request[v1alpha1.AddLocatorRequest]) (*connect.Response[v1alpha1.AddLocatorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.AddLocator is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) DeleteLocator(context.Context, *connect.Request[v1alpha1.DeleteLocatorRequest]) (*connect.Response[v1alpha1.DeleteLocatorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.DeleteLocator is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) AddFlexAlgo(context.Context, *connect.Request[v1alpha1.AddFlexAlgoRequest]) (*connect.Response[v1alpha1.AddFlexAlgoResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.AddFlexAlgo is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) DeleteFlexAlgo(context.Context, *connect.Request[v1alpha1.DeleteFlexAlgoRequest]) (*connect.Response[v1alpha1.DeleteFlexAlgoResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1alpha1.IsisService.DeleteFlexAlgo is not implemented"))
 }
 
 func (UnimplementedIsisServiceHandler) WatchEvent(context.Context, *connect.Request[v1alpha1.WatchEventRequest], *connect.ServerStream[v1alpha1.WatchEventResponse]) error {

@@ -44,6 +44,24 @@ All take a `context.Context` and return typed snapshots:
 `GetGlobal`, `ListCircuits`, `ListAdjacencies`, `ListLSDB`, `ListRoutes`,
 `ListLocators`, `ListFlexAlgos`.
 
+## Reconfiguring at runtime
+
+SRv6 locators and Flexible Algorithms can be added and removed without a
+restart; each call is serialized onto the `Serve` loop, re-originates this
+node's LSPs, and (for locators) installs or removes the local End SID:
+
+```go
+s.AddFlexAlgo(ctx, server.FlexAlgoConfig{Algo: 128, Priority: 100, AdvertiseDefinition: true})
+s.AddLocator(ctx, server.SRv6LocatorConfig{Prefix: netip.MustParsePrefix("fc00:0:128::/48"), Algo: 128})
+s.DeleteLocator(ctx, netip.MustParsePrefix("fc00:0:128::/48"))
+s.DeleteFlexAlgo(ctx, 128)
+```
+
+They apply the same validation as the constructor (IPv6-only locators,
+Flex-Algo range 128-255, a non-zero locator algorithm must be participated in,
+no duplicates). `DeleteFlexAlgo` is refused while a locator is still bound to
+the algorithm — delete the locator first.
+
 ## Watching changes
 
 ```go

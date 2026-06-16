@@ -97,6 +97,15 @@ The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 `global`, `circuit`, `neighbor`, `database`, `route`, `locator`, `flex-algo`,
 and `monitor` (streams `WatchEvent`).
 
+`locator` and `flex-algo` also reconfigure the daemon at runtime:
+
+```console
+$ goisis flex-algo add 128 --priority 100 --advertise
+$ goisis locator add fc00:0:128::/48 --algo 128
+$ goisis locator delete fc00:0:128::/48
+$ goisis flex-algo delete 128
+```
+
 ## Metrics
 
 `goisisd` serves Prometheus metrics at `/metrics`:

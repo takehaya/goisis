@@ -96,6 +96,15 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 `global` / `circuit` / `neighbor` / `database` / `route` / `locator` /
 `flex-algo` / `monitor`(`WatchEvent` をストリーミング)。
 
+`locator` と `flex-algo` は実行時にデーモンを再構成もできます:
+
+```console
+$ goisis flex-algo add 128 --priority 100 --advertise
+$ goisis locator add fc00:0:128::/48 --algo 128
+$ goisis locator delete fc00:0:128::/48
+$ goisis flex-algo delete 128
+```
+
 ## メトリクス
 
 `goisisd` は `/metrics` で Prometheus メトリクスを公開します:

@@ -110,6 +110,74 @@ func TestListLocatorsAndFlexAlgosOverConnect(t *testing.T) {
 	}
 }
 
+func TestMutatorsOverConnect(t *testing.T) {
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	mux := http.NewServeMux()
+	mux.Handle(NewConnectHandler(s))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := goisisv1alpha1connect.NewIsisServiceClient(ts.Client(), ts.URL)
+
+	// Participate in a Flex-Algo, then bind a locator to it.
+	if _, err := client.AddFlexAlgo(ctx, connect.NewRequest(&goisisv1alpha1.AddFlexAlgoRequest{
+		Algorithm: 128, Priority: 100, AdvertiseDefinition: true,
+	})); err != nil {
+		t.Fatalf("AddFlexAlgo: %v", err)
+	}
+	if _, err := client.AddLocator(ctx, connect.NewRequest(&goisisv1alpha1.AddLocatorRequest{
+		Prefix: "fc00:0:128::/48", Algorithm: 128,
+	})); err != nil {
+		t.Fatalf("AddLocator: %v", err)
+	}
+
+	lres, err := client.ListLocators(ctx, connect.NewRequest(&goisisv1alpha1.ListLocatorsRequest{}))
+	if err != nil {
+		t.Fatalf("ListLocators: %v", err)
+	}
+	if locs := lres.Msg.GetLocators(); len(locs) != 1 || locs[0].GetAlgorithm() != 128 {
+		t.Errorf("locators = %+v", locs)
+	}
+
+	// A reserved algorithm number is rejected with InvalidArgument.
+	_, err = client.AddFlexAlgo(ctx, connect.NewRequest(&goisisv1alpha1.AddFlexAlgoRequest{Algorithm: 5}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("AddFlexAlgo(5) error = %v, want InvalidArgument", err)
+	}
+	// A malformed prefix is rejected with InvalidArgument.
+	_, err = client.AddLocator(ctx, connect.NewRequest(&goisisv1alpha1.AddLocatorRequest{Prefix: "not-a-prefix"}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("AddLocator(bad) error = %v, want InvalidArgument", err)
+	}
+	// Deleting the Flex-Algo is rejected while the locator is bound.
+	_, err = client.DeleteFlexAlgo(ctx, connect.NewRequest(&goisisv1alpha1.DeleteFlexAlgoRequest{Algorithm: 128}))
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("DeleteFlexAlgo(bound) error = %v, want InvalidArgument", err)
+	}
+
+	// Withdraw the locator, then the Flex-Algo.
+	if _, err := client.DeleteLocator(ctx, connect.NewRequest(&goisisv1alpha1.DeleteLocatorRequest{Prefix: "fc00:0:128::/48"})); err != nil {
+		t.Fatalf("DeleteLocator: %v", err)
+	}
+	if _, err := client.DeleteFlexAlgo(ctx, connect.NewRequest(&goisisv1alpha1.DeleteFlexAlgoRequest{Algorithm: 128})); err != nil {
+		t.Fatalf("DeleteFlexAlgo: %v", err)
+	}
+	lres, err = client.ListLocators(ctx, connect.NewRequest(&goisisv1alpha1.ListLocatorsRequest{}))
+	if err != nil {
+		t.Fatalf("ListLocators: %v", err)
+	}
+	if locs := lres.Msg.GetLocators(); len(locs) != 0 {
+		t.Errorf("locators after delete = %+v, want empty", locs)
+	}
+}
+
 func TestMgmtOperationAfterServeStopped(t *testing.T) {
 	s := mustServer(t)
 	ctx, cancel := context.WithCancel(t.Context())

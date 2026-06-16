@@ -20,6 +20,14 @@ service IsisService {
   // ListFlexAlgos lists Flexible Algorithm state (elected definitions and
   // participating nodes) per level.
   rpc ListFlexAlgos(ListFlexAlgosRequest) returns (ListFlexAlgosResponse);
+  // AddLocator advertises a new SRv6 locator at runtime.
+  rpc AddLocator(AddLocatorRequest) returns (AddLocatorResponse);
+  // DeleteLocator withdraws a previously advertised SRv6 locator.
+  rpc DeleteLocator(DeleteLocatorRequest) returns (DeleteLocatorResponse);
+  // AddFlexAlgo makes this node participate in a Flexible Algorithm at runtime.
+  rpc AddFlexAlgo(AddFlexAlgoRequest) returns (AddFlexAlgoResponse);
+  // DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
+  rpc DeleteFlexAlgo(DeleteFlexAlgoRequest) returns (DeleteFlexAlgoResponse);
   // WatchEvent streams adjacency and route changes as they happen.
   rpc WatchEvent(WatchEventRequest) returns (stream WatchEventResponse);
 }
@@ -151,6 +159,39 @@ message ListFlexAlgosRequest {}
 message ListFlexAlgosResponse {
   repeated FlexAlgo flex_algos = 1;
 }
+
+message AddLocatorRequest {
+  // prefix is the IPv6 locator prefix (e.g. fc00:0:1::/48).
+  string prefix = 1;
+  // algorithm is 0 (normal SPF) or a Flexible Algorithm (128-255) the node must
+  // already participate in.
+  uint32 algorithm = 2;
+}
+message AddLocatorResponse {}
+
+message DeleteLocatorRequest {
+  // prefix identifies the advertised locator to withdraw (matched masked).
+  string prefix = 1;
+}
+message DeleteLocatorResponse {}
+
+message AddFlexAlgoRequest {
+  // algorithm is the Flexible Algorithm number (128-255).
+  uint32 algorithm = 1;
+  // metric_type: 0 = IGP, 1 = min unidirectional link delay, 2 = TE.
+  uint32 metric_type = 2;
+  // priority is this node's advertised priority for the winner election.
+  uint32 priority = 3;
+  // advertise_definition controls whether this node advertises the FAD.
+  bool advertise_definition = 4;
+}
+message AddFlexAlgoResponse {}
+
+message DeleteFlexAlgoRequest {
+  // algorithm is the Flexible Algorithm number to stop participating in.
+  uint32 algorithm = 1;
+}
+message DeleteFlexAlgoResponse {}
 
 message WatchEventRequest {}
 

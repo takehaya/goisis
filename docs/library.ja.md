@@ -44,6 +44,24 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 `GetGlobal` / `ListCircuits` / `ListAdjacencies` / `ListLSDB` / `ListRoutes` /
 `ListLocators` / `ListFlexAlgos`。
 
+## 実行時の再構成
+
+SRv6 locator と Flexible Algorithm は再起動なしで追加・削除できます。各呼び出しは
+`Serve` ループ上で直列化され、自ノードの LSP を再生成し、(locator の場合は)
+ローカル End SID をインストール/削除します:
+
+```go
+s.AddFlexAlgo(ctx, server.FlexAlgoConfig{Algo: 128, Priority: 100, AdvertiseDefinition: true})
+s.AddLocator(ctx, server.SRv6LocatorConfig{Prefix: netip.MustParsePrefix("fc00:0:128::/48"), Algo: 128})
+s.DeleteLocator(ctx, netip.MustParsePrefix("fc00:0:128::/48"))
+s.DeleteFlexAlgo(ctx, 128)
+```
+
+検証はコンストラクタと同じです(locator は IPv6 のみ、Flex-Algo は 128-255、
+非ゼロ algo の locator はその algo に参加していること、重複不可)。
+`DeleteFlexAlgo` は locator が algo にバインドされている間は拒否されます —
+先に locator を削除してください。
+
 ## 変更の監視
 
 ```go

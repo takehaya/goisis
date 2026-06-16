@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -180,9 +181,9 @@ func newRouteCmd(addr *string) *cobra.Command {
 }
 
 func newLocatorCmd(addr *string) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "locator",
-		Short: "List advertised SRv6 locators",
+		Short: "List or configure advertised SRv6 locators",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := newClient(*addr).ListLocators(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListLocatorsRequest{}))
 			if err != nil {
@@ -196,13 +197,48 @@ func newLocatorCmd(addr *string) *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.AddCommand(newLocatorAddCmd(addr), newLocatorDeleteCmd(addr))
+	return cmd
+}
+
+func newLocatorAddCmd(addr *string) *cobra.Command {
+	var algo uint32
+	cmd := &cobra.Command{
+		Use:   "add <prefix>",
+		Short: "Advertise a new SRv6 locator",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := newClient(*addr).AddLocator(cmd.Context(), connect.NewRequest(&goisisv1alpha1.AddLocatorRequest{
+				Prefix:    args[0],
+				Algorithm: algo,
+			}))
+			return err
+		},
+	}
+	cmd.Flags().Uint32Var(&algo, "algo", 0, "bind the locator to a Flexible Algorithm (128-255); 0 = normal SPF")
+	return cmd
+}
+
+func newLocatorDeleteCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete <prefix>",
+		Aliases: []string{"del", "remove"},
+		Short:   "Withdraw an advertised SRv6 locator",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := newClient(*addr).DeleteLocator(cmd.Context(), connect.NewRequest(&goisisv1alpha1.DeleteLocatorRequest{
+				Prefix: args[0],
+			}))
+			return err
+		},
+	}
 }
 
 func newFlexAlgoCmd(addr *string) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "flex-algo",
 		Aliases: []string{"flexalgo"},
-		Short:   "List Flexible Algorithm definitions and participants",
+		Short:   "List or configure Flexible Algorithms",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			res, err := newClient(*addr).ListFlexAlgos(cmd.Context(), connect.NewRequest(&goisisv1alpha1.ListFlexAlgosRequest{}))
 			if err != nil {
@@ -222,6 +258,82 @@ func newFlexAlgoCmd(addr *string) *cobra.Command {
 			}
 			return w.Flush()
 		},
+	}
+	cmd.AddCommand(newFlexAlgoAddCmd(addr), newFlexAlgoDeleteCmd(addr))
+	return cmd
+}
+
+func newFlexAlgoAddCmd(addr *string) *cobra.Command {
+	var (
+		metricType string
+		priority   uint32
+		advertise  bool
+	)
+	cmd := &cobra.Command{
+		Use:   "add <algo>",
+		Short: "Participate in a Flexible Algorithm (128-255)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			algo, err := parseUint8(args[0])
+			if err != nil {
+				return fmt.Errorf("algo: %w", err)
+			}
+			mt, err := parseMetricType(metricType)
+			if err != nil {
+				return err
+			}
+			_, err = newClient(*addr).AddFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1alpha1.AddFlexAlgoRequest{
+				Algorithm:           uint32(algo),
+				MetricType:          uint32(mt),
+				Priority:            priority,
+				AdvertiseDefinition: advertise,
+			}))
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&metricType, "metric-type", "igp", "metric type: igp, delay, or te")
+	cmd.Flags().Uint32Var(&priority, "priority", 0, "advertised election priority")
+	cmd.Flags().BoolVar(&advertise, "advertise", false, "advertise the Flex-Algo definition (FAD)")
+	return cmd
+}
+
+func newFlexAlgoDeleteCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete <algo>",
+		Aliases: []string{"del", "remove"},
+		Short:   "Stop participating in a Flexible Algorithm",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			algo, err := parseUint8(args[0])
+			if err != nil {
+				return fmt.Errorf("algo: %w", err)
+			}
+			_, err = newClient(*addr).DeleteFlexAlgo(cmd.Context(), connect.NewRequest(&goisisv1alpha1.DeleteFlexAlgoRequest{
+				Algorithm: uint32(algo),
+			}))
+			return err
+		},
+	}
+}
+
+func parseUint8(s string) (uint8, error) {
+	v, err := strconv.ParseUint(s, 10, 8)
+	if err != nil {
+		return 0, err
+	}
+	return uint8(v), nil
+}
+
+func parseMetricType(s string) (uint8, error) {
+	switch s {
+	case "igp", "":
+		return 0, nil
+	case "delay":
+		return 1, nil
+	case "te":
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("unknown metric type %q (want igp, delay, or te)", s)
 	}
 }
 

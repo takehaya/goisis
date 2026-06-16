@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/netip"
 
 	"connectrpc.com/connect"
 
@@ -160,6 +162,99 @@ func (h *connectHandler) ListFlexAlgos(
 		out = append(out, fa)
 	}
 	return connect.NewResponse(&goisisv1alpha1.ListFlexAlgosResponse{FlexAlgos: out}), nil
+}
+
+func (h *connectHandler) AddLocator(
+	ctx context.Context,
+	req *connect.Request[goisisv1alpha1.AddLocatorRequest],
+) (*connect.Response[goisisv1alpha1.AddLocatorResponse], error) {
+	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
+	if err != nil && req.Msg.GetAlgorithm() != 0 {
+		return nil, err
+	}
+	if err := h.s.AddLocator(ctx, SRv6LocatorConfig{Prefix: prefix, Algo: algo}); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&goisisv1alpha1.AddLocatorResponse{}), nil
+}
+
+func (h *connectHandler) DeleteLocator(
+	ctx context.Context,
+	req *connect.Request[goisisv1alpha1.DeleteLocatorRequest],
+) (*connect.Response[goisisv1alpha1.DeleteLocatorResponse], error) {
+	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := h.s.DeleteLocator(ctx, prefix); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&goisisv1alpha1.DeleteLocatorResponse{}), nil
+}
+
+func (h *connectHandler) AddFlexAlgo(
+	ctx context.Context,
+	req *connect.Request[goisisv1alpha1.AddFlexAlgoRequest],
+) (*connect.Response[goisisv1alpha1.AddFlexAlgoResponse], error) {
+	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
+	if err != nil {
+		return nil, err
+	}
+	mt, err := uint8FromProto(req.Msg.GetMetricType(), "metric_type")
+	if err != nil {
+		return nil, err
+	}
+	prio, err := uint8FromProto(req.Msg.GetPriority(), "priority")
+	if err != nil {
+		return nil, err
+	}
+	cfg := FlexAlgoConfig{
+		Algo:                algo,
+		MetricType:          mt,
+		Priority:            prio,
+		AdvertiseDefinition: req.Msg.GetAdvertiseDefinition(),
+	}
+	if err := h.s.AddFlexAlgo(ctx, cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&goisisv1alpha1.AddFlexAlgoResponse{}), nil
+}
+
+func (h *connectHandler) DeleteFlexAlgo(
+	ctx context.Context,
+	req *connect.Request[goisisv1alpha1.DeleteFlexAlgoRequest],
+) (*connect.Response[goisisv1alpha1.DeleteFlexAlgoResponse], error) {
+	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
+	if err != nil {
+		return nil, err
+	}
+	if err := h.s.DeleteFlexAlgo(ctx, algo); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&goisisv1alpha1.DeleteFlexAlgoResponse{}), nil
+}
+
+// flexAlgoNumber validates that a wire algorithm number fits the Flex-Algo
+// range (128-255) and returns it as a uint8.
+func flexAlgoNumber(v uint32) (uint8, error) {
+	if v < 128 || v > 255 {
+		return 0, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("algorithm %d out of Flex-Algo range (128-255)", v))
+	}
+	return uint8(v), nil
+}
+
+// uint8FromProto narrows a wire uint32 to uint8, rejecting overflow.
+func uint8FromProto(v uint32, field string) (uint8, error) {
+	if v > 255 {
+		return 0, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("%s %d exceeds 255", field, v))
+	}
+	return uint8(v), nil
 }
 
 func (h *connectHandler) WatchEvent(
