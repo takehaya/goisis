@@ -11,6 +11,8 @@ options. ([日本語](configuration.ja.md))
 | `hostname` | string | Dynamic hostname advertised in LSPs (RFC 5301). |
 | `fib` | bool | Program computed routes into the Linux kernel FIB tagged `proto isis`. Requires `CAP_NET_ADMIN`. Default `false` (control-plane only). |
 | `overload-on-startup` | duration | Set the overload bit for this long after startup, then clear it (e.g. `30s`). While set, peers route no transit traffic through this node. |
+| `area-password` | string | HMAC-MD5 authentication (RFC 5304) of Level-1 LSPs and SNPs (FRR's `area-password md5`). |
+| `domain-password` | string | HMAC-MD5 authentication of Level-2 LSPs and SNPs (FRR's `domain-password md5`). |
 | `circuits` | list (required) | Interfaces to run IS-IS on; see below. |
 | `prefixes` | list of CIDR | Extra prefixes to originate. Connected subnets of the circuits are advertised automatically. |
 | `srv6` | object | SRv6 locators; see below. |

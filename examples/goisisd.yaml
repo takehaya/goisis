@@ -14,6 +14,11 @@ fib: true
 # route no transit traffic through this node until routes have settled.
 # overload-on-startup: 30s
 
+# HMAC-MD5 authentication of LSPs/SNPs (RFC 5304). area-password covers Level 1,
+# domain-password covers Level 2 (FRR's area-password/domain-password md5).
+# area-password: s3cret
+# domain-password: s3cret
+
 circuits:
   - interface: eth0
     level: "12"     # "1", "2", or "12" (default "12")

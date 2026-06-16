@@ -3,6 +3,7 @@ package packet
 import (
 	"crypto/hmac"
 	"crypto/md5" //nolint:gosec // HMAC-MD5 is mandated by RFC 5304 for IS-IS auth interop
+	"encoding/binary"
 	"fmt"
 )
 
@@ -74,6 +75,20 @@ func PatchHMACMD5(pdu []byte, tlvOffset int, key []byte, isLSP bool) error {
 	}
 	d := hmacMD5Over(pdu, s, e, isLSP, key)
 	copy(pdu[s:e], d[:])
+	return nil
+}
+
+// FinalizeLSPAuth fills the HMAC-MD5 digest in a serialized LSP's
+// Authentication TLV and then recomputes the Fletcher checksum over the LSP
+// (the digest is part of the checksum coverage, so it must be set first). The
+// LSP must already contain a zeroed HMAC-MD5 authentication TLV.
+func FinalizeLSPAuth(pdu []byte, key []byte) error {
+	if err := PatchHMACMD5(pdu, lspHeaderLen, key, true); err != nil {
+		return err
+	}
+	pdu[24], pdu[25] = 0, 0
+	sum := fletcherChecksum(pdu[12:], 12)
+	binary.BigEndian.PutUint16(pdu[24:26], sum)
 	return nil
 }
 

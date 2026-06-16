@@ -231,6 +231,8 @@ type options struct {
 	fib               fib.FIB
 	metrics           Metrics
 	overloadOnStartup time.Duration
+	areaPassword      string // HMAC-MD5 key for L1 LSPs/SNPs (RFC 5304)
+	domainPassword    string // HMAC-MD5 key for L2 LSPs/SNPs
 	hasSystemID       bool
 }
 
@@ -308,6 +310,19 @@ func WithSRv6LocatorForAlgo(prefix netip.Prefix, algo uint8) ServerOption {
 // (26), both in the Router Capability TLV (242).
 func WithFlexAlgo(cfg FlexAlgoConfig) ServerOption {
 	return func(o *options) { o.flexAlgos = append(o.flexAlgos, cfg) }
+}
+
+// WithAreaPassword enables HMAC-MD5 authentication (RFC 5304) of Level-1 LSPs
+// and SNPs with the given key (FRR's `area-password md5`). Received L1 LSPs/SNPs
+// must carry a matching digest or they are dropped.
+func WithAreaPassword(pw string) ServerOption {
+	return func(o *options) { o.areaPassword = pw }
+}
+
+// WithDomainPassword enables HMAC-MD5 authentication (RFC 5304) of Level-2 LSPs
+// and SNPs with the given key (FRR's `domain-password md5`).
+func WithDomainPassword(pw string) ServerOption {
+	return func(o *options) { o.domainPassword = pw }
 }
 
 // WithOverloadOnStartup sets the overload bit (ISO 10589) in this node's own

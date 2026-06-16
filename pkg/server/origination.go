@@ -161,6 +161,13 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	// The overload bit applies to this node's own LSP, not to pseudonode LSPs.
 	overload := id.IsNodeLSP() && s.overloaded(now)
 
+	// Carry an HMAC-MD5 Authentication TLV (zeroed; filled by serializeLSP) when
+	// the level is authenticated. It is part of the content-unchanged check, so
+	// it stays stable across refreshes.
+	if s.authKey(level) != nil {
+		tlvs = append(tlvs, authTLVPlaceholder())
+	}
+
 	newBody, err := packet.MarshalTLVs(tlvs)
 	if err != nil {
 		s.logger.Error("serialize own LSP body", "lsp", id, "error", err)
@@ -189,7 +196,7 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 		ISType:         s.isType(),
 		TLVs:           tlvs,
 	}
-	raw, err := lsp.Serialize()
+	raw, err := s.serializeLSP(lsp)
 	if err != nil {
 		s.logger.Error("serialize own LSP", "lsp", id, "error", err)
 		return

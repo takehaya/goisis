@@ -11,6 +11,8 @@
 | `hostname` | string | LSP で広報する動的ホスト名(RFC 5301)。 |
 | `fib` | bool | 計算した経路を `proto isis` タグでカーネル FIB に書き込む。`CAP_NET_ADMIN` が必要。デフォルト `false`(コントロールプレーンのみ)。 |
 | `overload-on-startup` | duration | 起動後この時間だけオーバーロードビットを立て、その後解除する(例 `30s`)。立っている間、ピアはこのノードを経由する中継トラフィックを流さない。 |
+| `area-password` | string | Level-1 の LSP/SNP を HMAC-MD5 認証(RFC 5304、FRR の `area-password md5`)。 |
+| `domain-password` | string | Level-2 の LSP/SNP を HMAC-MD5 認証(FRR の `domain-password md5`)。 |
 | `circuits` | list(必須) | IS-IS を動かすインターフェース。下記参照。 |
 | `prefixes` | CIDR のリスト | 追加で広報する prefix。サーキットの接続サブネットは自動で広報される。 |
 | `srv6` | object | SRv6 locator。下記参照。 |

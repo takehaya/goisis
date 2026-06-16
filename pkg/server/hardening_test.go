@@ -102,6 +102,51 @@ func TestHelloAuthMismatchNoAdjacency(t *testing.T) {
 	}
 }
 
+// domainAuthPair starts two p2p L2 servers using the given L2 (domain) LSP/SNP
+// passwords. Hellos are unauthenticated, so the adjacency forms regardless; only
+// LSP/SNP exchange is gated by the password.
+func domainAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer) {
+	t.Helper()
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	mk := func(name string, tr datalink.Transport) CircuitConfig {
+		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse()}
+		fastHello(&c)
+		return c
+	}
+	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta)), WithDomainPassword(passA))
+	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb)), WithDomainPassword(passB))
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	return a, b
+}
+
+// TestLSPAuthMatchingSyncsLSDB: a matching domain password lets authenticated
+// LSPs install in the peer's LSDB.
+func TestLSPAuthMatchingSyncsLSDB(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, b := domainAuthPair(t, ctx, "lsppw", "lsppw")
+	waitFor(t, "b installs A's authenticated LSP", func() bool {
+		return liveLSPFrom(t, b, packet.SystemID{0, 0, 0, 0, 0, 1})
+	})
+}
+
+// TestLSPAuthMismatchRejectsLSP: with a mismatched domain password the adjacency
+// still forms (hellos are unauthenticated) but the peer's LSPs are dropped.
+func TestLSPAuthMismatchRejectsLSP(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, b := domainAuthPair(t, ctx, "lsppw", "wrongpw")
+	waitFor(t, "adjacency up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	time.Sleep(1500 * time.Millisecond) // give flooding ample time
+	if liveLSPFrom(t, b, packet.SystemID{0, 0, 0, 0, 0, 1}) {
+		t.Error("peer LSP installed despite a mismatched domain password")
+	}
+}
+
 // TestProcessLSPRefloodsPurgeOverSameSeqLive: when we hold a purge and a peer
 // floods a live copy at the same sequence number, we re-flood our purge (a
 // purge supersedes a live LSP at equal seq, ISO 10589 7.3.16.2).

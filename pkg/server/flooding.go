@@ -139,7 +139,7 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 	lsp := *ex.lsp
 	lsp.SequenceNumber = seenSeq + 1
 	lsp.RemainingTime = maxAgeSeconds
-	raw, err := lsp.Serialize()
+	raw, err := s.serializeLSP(&lsp)
 	if err != nil {
 		s.logger.Error("re-originate own LSP", "lsp", id, "error", err)
 		return
@@ -252,10 +252,26 @@ func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 }
 
 func (s *IsisServer) sendSNP(c *circuit, level packet.Level, pdu packet.PDU) {
+	key := s.authKey(level)
+	if key != nil {
+		// Append an HMAC-MD5 Authentication TLV (filled after serialization).
+		switch p := pdu.(type) {
+		case *packet.CSNP:
+			p.TLVs = append(p.TLVs, authTLVPlaceholder())
+		case *packet.PSNP:
+			p.TLVs = append(p.TLVs, authTLVPlaceholder())
+		}
+	}
 	wire, err := pdu.Serialize()
 	if err != nil {
 		s.logger.Error("serialize SNP", "circuit", c.cfg.Name, "error", err)
 		return
+	}
+	if key != nil {
+		if err := packet.PatchHMACMD5(wire, packet.HeaderLen(pdu.PDUType()), key, false); err != nil {
+			s.logger.Error("authenticate SNP", "circuit", c.cfg.Name, "error", err)
+			return
+		}
 	}
 	if err := c.cfg.Transport.Send(c.dest(level), wire); err != nil {
 		s.logger.Error("send SNP", "circuit", c.cfg.Name, "error", err)

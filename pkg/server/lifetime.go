@@ -28,7 +28,10 @@ func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time
 			&packet.UnknownTLV{TLVType: packet.TLVTypePurgeOriginatorID, Value: append([]byte{1}, s.systemID[:]...)},
 		},
 	}
-	raw, err := lsp.Serialize()
+	if s.authKey(level) != nil {
+		lsp.TLVs = append(lsp.TLVs, authTLVPlaceholder())
+	}
+	raw, err := s.serializeLSP(lsp)
 	if err != nil {
 		s.logger.Error("serialize purge", "lsp", id, "error", err)
 		return

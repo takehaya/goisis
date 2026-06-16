@@ -33,6 +33,10 @@ type Config struct {
 	// OverloadOnStartup, if set (a Go duration like "30s"), sets the overload
 	// bit for that long after startup.
 	OverloadOnStartup string `yaml:"overload-on-startup"`
+	// AreaPassword / DomainPassword enable HMAC-MD5 authentication (RFC 5304)
+	// of Level-1 / Level-2 LSPs and SNPs respectively.
+	AreaPassword   string `yaml:"area-password"`
+	DomainPassword string `yaml:"domain-password"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
@@ -143,6 +147,12 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			return nil, fmt.Errorf("overload-on-startup %q: %w", c.OverloadOnStartup, err)
 		}
 		opts = append(opts, server.WithOverloadOnStartup(d))
+	}
+	if c.AreaPassword != "" {
+		opts = append(opts, server.WithAreaPassword(c.AreaPassword))
+	}
+	if c.DomainPassword != "" {
+		opts = append(opts, server.WithDomainPassword(c.DomainPassword))
 	}
 	for _, cc := range c.Circuits {
 		cfg, err := cc.circuit()

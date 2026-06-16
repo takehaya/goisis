@@ -205,11 +205,17 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 			s.processP2PHello(c, frame.Src, h)
 		}
 	case *packet.LSP:
-		s.processLSP(c, frame.PDU, h, time.Now())
+		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, true) {
+			s.processLSP(c, frame.PDU, h, time.Now())
+		}
 	case *packet.CSNP:
-		s.processCSNP(c, h, time.Now())
+		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, false) {
+			s.processCSNP(c, h, time.Now())
+		}
 	case *packet.PSNP:
-		s.processPSNP(c, h, time.Now())
+		if s.pduAuthOK(frame.PDU, h.PDUType(), h.Level, false) {
+			s.processPSNP(c, h, time.Now())
+		}
 	}
 }
 
