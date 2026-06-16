@@ -85,6 +85,11 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	var v4 []packet.ExtendedIPReachEntry
 	var v6 []packet.IPv6ReachEntry
 	for _, p := range s.prefixes {
+		// Export policy: suppress prefixes the filter rejects. Flooding and the
+		// LSDB are untouched — we simply originate fewer reachability entries.
+		if s.advertiseFilter != nil && !s.advertiseFilter(p) {
+			continue
+		}
 		if p.Prefix.Addr().Is4() {
 			v4 = append(v4, packet.ExtendedIPReachEntry{Metric: p.Metric, Prefix: p.Prefix})
 		} else {

@@ -37,21 +37,24 @@ type IsisServer struct {
 	done    chan struct{}
 
 	// The following are owned by the Serve loop after Serve starts.
-	circuits   []*circuit
-	dbs        map[packet.Level]*lsdb
-	levelCap   levelSet // union of circuit levels, for the LSP IS-Type field
-	fib        fib.FIB
-	metrics    Metrics
-	rib        map[netip.Prefix]RouteInfo
-	connected  map[netip.Prefix]bool // directly-connected prefixes (never installed)
-	fibPending map[netip.Prefix]bool // routes whose last FIB write failed; retried
-	spfDirty   bool                  // a topology change needs an SPF recompute
-	watchers   map[*watcher]struct{} // WatchEvent subscribers
-	algoWarned map[algoKey]bool      // (level,algo) whose unsupported metric-type was logged
+	circuits     []*circuit
+	dbs          map[packet.Level]*lsdb
+	levelCap     levelSet // union of circuit levels, for the LSP IS-Type field
+	fib          fib.FIB
+	metrics      Metrics
+	rib          map[netip.Prefix]RouteInfo
+	connected    map[netip.Prefix]bool // directly-connected prefixes (never installed)
+	fibPending   map[netip.Prefix]bool // routes whose last FIB write failed; retried
+	fibInstalled map[netip.Prefix]bool // routes currently written to the FIB (gated by fibFilter)
+	spfDirty     bool                  // a topology change needs an SPF recompute
+	watchers     map[*watcher]struct{} // WatchEvent subscribers
+	algoWarned   map[algoKey]bool      // (level,algo) whose unsupported metric-type was logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
 	authKeys          map[packet.Level]authSpec // LSP/SNP authentication per level
+	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
+	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -86,10 +89,13 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		rib:               map[netip.Prefix]RouteInfo{},
 		connected:         map[netip.Prefix]bool{},
 		fibPending:        map[netip.Prefix]bool{},
+		fibInstalled:      map[netip.Prefix]bool{},
 		watchers:          map[*watcher]struct{}{},
 		algoWarned:        map[algoKey]bool{},
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
+		advertiseFilter:   o.advertiseFilter,
+		fibFilter:         o.fibFilter,
 	}
 	if spec := o.areaAuth.spec(); spec.on() {
 		s.authKeys[packet.Level1] = spec

@@ -31,6 +31,8 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 | `WithFlexAlgo(FlexAlgoConfig)` | Flexible Algorithm に参加 / 定義を広報。 |
 | `WithOverloadOnStartup(time.Duration)` | 起動後一定時間だけ OL ビットを立てる。 |
 | `WithFIB(fib.FIB)` | フォワーディングシンク(デフォルト `fib.Noop`)。 |
+| `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | export ポリシー:どの prefix を広報するか。 |
+| `WithFIBFilter(func(RouteInfo) bool)` | FIB ポリシー:どの経路を FIB に入れるか(拒否分は RIB に残る)。 |
 | `WithMetrics(server.Metrics)` | テレメトリシンク(デフォルト `NoopMetrics`)。 |
 | `WithLogger(*slog.Logger)` | 構造化ロガー。 |
 
@@ -43,6 +45,28 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 いずれも `context.Context` を取り、型付きスナップショットを返します:
 `GetGlobal` / `ListCircuits` / `ListAdjacencies` / `ListLSDB` / `ListRoutes` /
 `ListLocators` / `ListFlexAlgos`。
+
+## 経路ポリシー
+
+IS-IS は IGP です。エリア内の全ノードが 1 つの LSDB を共有し同じ SPF 結果に
+収束する必要があるため、フラッディングされるリンクステートに BGP 的な
+import/export ポリシーは存在しません(フィルタすると一貫性が壊れる)。ポリシーは
+境界にのみ適用でき、goisis は 2 つのフックを提供します:
+
+- **export**(`WithAdvertiseFilter`):自ノードが LSP に載せる prefix を制御。
+  フラッディングと LSDB は不変。
+- **FIB**(`WithFIBFilter`):計算経路のうちフォワーディングプレーンに入れるものを
+  制御。拒否された経路も RIB には残り(`ListRoutes`/`WatchEvent` で見える)、
+  watch-only の利用者が処理できる。IS-IS 版「RIB にはあるが FIB に入れない」。
+
+```go
+server.WithFIBFilter(func(r server.RouteInfo) bool {
+    return r.Prefix.Addr().Is6()   // IPv6 経路だけ FIB に入れ、v4 は RIB に残す
+}),
+```
+
+トポロジ別 / アルゴリズム別の独立 RIB(BGP の複数テーブルに相当する IGP 版)が
+欲しい場合はフィルタではなく Flexible Algorithm(`WithFlexAlgo`)を使います。
 
 ## 実行時の再構成
 

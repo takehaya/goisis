@@ -195,14 +195,27 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 		old, ok := s.rib[p]
 		changed := !ok || !sameRoute(old, r)
 		if changed {
-			// Notify watchers of the routing decision regardless of whether
-			// the kernel write succeeds (watch-only consumers program their
-			// own dataplane).
+			// Notify watchers of the routing decision regardless of whether the
+			// route is programmed or the kernel write succeeds (watch-only
+			// consumers, and FIB-filtered routes, are still surfaced).
 			r := r
 			s.emitRoute(&r, false)
 		}
-		if !changed && !s.fibPending[p] {
-			continue // unchanged and previously installed
+		// FIB policy: a rejected route stays in the RIB but is not written to
+		// the forwarding plane. If it was installed before (filter flipped, or
+		// the route changed across the policy boundary), withdraw it.
+		if s.fibFilter != nil && !s.fibFilter(r) {
+			if s.fibInstalled[p] {
+				if err := s.fib.Withdraw(p); err != nil {
+					s.logger.Error("fib withdraw", "prefix", p, "error", err)
+				}
+				delete(s.fibInstalled, p)
+			}
+			delete(s.fibPending, p)
+			continue
+		}
+		if !changed && s.fibInstalled[p] && !s.fibPending[p] {
+			continue // unchanged and already installed
 		}
 		nhs := make([]fib.Nexthop, len(r.NextHops))
 		for i, nh := range r.NextHops {
@@ -213,14 +226,18 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 			s.fibPending[p] = true // retry next recompute
 		} else {
 			delete(s.fibPending, p)
+			s.fibInstalled[p] = true
 		}
 	}
 	for p := range s.rib {
 		if _, ok := next[p]; !ok {
 			old := s.rib[p]
 			s.emitRoute(&old, true)
-			if err := s.fib.Withdraw(p); err != nil {
-				s.logger.Error("fib withdraw", "prefix", p, "error", err)
+			if s.fibInstalled[p] {
+				if err := s.fib.Withdraw(p); err != nil {
+					s.logger.Error("fib withdraw", "prefix", p, "error", err)
+				}
+				delete(s.fibInstalled, p)
 			}
 			delete(s.fibPending, p)
 		}

@@ -31,6 +31,8 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithFlexAlgo(FlexAlgoConfig)` | Participate in / advertise a Flexible Algorithm. |
 | `WithOverloadOnStartup(time.Duration)` | Set the OL bit for a window after startup. |
 | `WithFIB(fib.FIB)` | Forwarding sink (default `fib.Noop`). |
+| `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | Export policy: which prefixes to originate. |
+| `WithFIBFilter(func(RouteInfo) bool)` | FIB policy: which computed routes to program (rejected ones stay in the RIB). |
 | `WithMetrics(server.Metrics)` | Telemetry sink (default `NoopMetrics`). |
 | `WithLogger(*slog.Logger)` | Structured logger. |
 
@@ -43,6 +45,29 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 All take a `context.Context` and return typed snapshots:
 `GetGlobal`, `ListCircuits`, `ListAdjacencies`, `ListLSDB`, `ListRoutes`,
 `ListLocators`, `ListFlexAlgos`.
+
+## Route policy
+
+IS-IS is an IGP: every node in an area shares one LSDB and must converge on the
+same SPF result, so there is no BGP-style import/export policy on the flooded
+link state — filtering it would break consistency. Policy applies only at the
+edges, where goisis exposes two hooks:
+
+- **Export** (`WithAdvertiseFilter`): gate which configured prefixes this node
+  originates into its own LSP. Flooding and the LSDB are untouched.
+- **FIB** (`WithFIBFilter`): gate which computed routes reach the forwarding
+  plane. A rejected route stays in the RIB — `ListRoutes` and `WatchEvent` still
+  report it — so a watch-only consumer can act on it. This is the IS-IS
+  equivalent of "in the RIB, not the FIB".
+
+```go
+server.WithFIBFilter(func(r server.RouteInfo) bool {
+    return r.Prefix.Addr().Is6()   // program only IPv6 routes; keep v4 in the RIB
+}),
+```
+
+For per-topology / per-algorithm separate RIBs (the IGP analogue of multiple
+BGP tables), use Flexible Algorithm (`WithFlexAlgo`) rather than a filter.
 
 ## Reconfiguring at runtime
 

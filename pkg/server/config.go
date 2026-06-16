@@ -237,8 +237,23 @@ type options struct {
 	overloadOnStartup time.Duration
 	areaAuth          AuthConfig // L1 LSP/SNP authentication
 	domainAuth        AuthConfig // L2 LSP/SNP authentication
+	advertiseFilter   AdvertiseFilter
+	fibFilter         FIBFilter
 	hasSystemID       bool
 }
+
+// AdvertiseFilter decides whether a configured prefix is originated into this
+// node's LSP (TLV 135/236). Returning false suppresses the advertisement; the
+// IS-IS flooding and LSDB are untouched, so the area stays consistent. A nil
+// filter advertises everything. This is the IGP equivalent of an export policy
+// — it gates only what this node originates, never what it floods.
+type AdvertiseFilter func(AdvertisedPrefix) bool
+
+// FIBFilter decides whether a computed route is programmed into the FIB.
+// Returning false keeps the route in the RIB (ListRoutes and WatchEvent still
+// report it) but does not write it to the forwarding plane — the IS-IS
+// equivalent of "in the RIB but not the FIB". A nil filter programs everything.
+type FIBFilter func(RouteInfo) bool
 
 // AuthConfig describes an HMAC authentication key for one scope. Algorithm
 // selects HMAC-MD5 (RFC 5304, the default) or an HMAC-SHA variant (RFC 5310);
@@ -295,6 +310,22 @@ func WithAdvertisedPrefix(prefix netip.Prefix, metric uint32) ServerOption {
 // Defaults to fib.Noop.
 func WithFIB(f fib.FIB) ServerOption {
 	return func(o *options) { o.fib = f }
+}
+
+// WithAdvertiseFilter installs an export policy: only prefixes for which f
+// returns true are originated into this node's LSP. Flooding and the LSDB are
+// not affected, so the area's link-state databases stay consistent. See
+// AdvertiseFilter.
+func WithAdvertiseFilter(f AdvertiseFilter) ServerOption {
+	return func(o *options) { o.advertiseFilter = f }
+}
+
+// WithFIBFilter installs a FIB policy: only routes for which f returns true are
+// programmed into the forwarding plane. Filtered routes remain visible in the
+// RIB (ListRoutes, WatchEvent), so a watch-only consumer can still act on them.
+// See FIBFilter.
+func WithFIBFilter(f FIBFilter) ServerOption {
+	return func(o *options) { o.fibFilter = f }
 }
 
 // WithMetrics sets the observability sink. Defaults to NoopMetrics. Wire a
