@@ -27,8 +27,8 @@ func (s *IsisServer) sendOne(c *circuit, dst packet.SNPA, pdu packet.PDU) {
 		s.logger.Error("serialize hello", "circuit", c.cfg.Name, "error", err)
 		return
 	}
-	if c.cfg.HelloPassword != "" {
-		if err := packet.PatchHMACMD5(wire, packet.HeaderLen(pdu.PDUType()), []byte(c.cfg.HelloPassword), false); err != nil {
+	if spec := c.helloSpec(); spec.on() {
+		if err := packet.PatchAuth(wire, packet.HeaderLen(pdu.PDUType()), spec.algo, spec.keyID, spec.key, false); err != nil {
 			s.logger.Error("authenticate hello", "circuit", c.cfg.Name, "error", err)
 			return
 		}
@@ -42,8 +42,8 @@ func (s *IsisServer) sendOne(c *circuit, dst packet.SNPA, pdu packet.PDU) {
 // configured (padding is skipped then; the digest is filled at send time),
 // otherwise pads the hello toward the MTU.
 func (s *IsisServer) finalizeHello(c *circuit, pdu packet.PDU, tlvs *[]packet.TLV) {
-	if c.cfg.HelloPassword != "" {
-		*tlvs = append(*tlvs, authTLVPlaceholder())
+	if spec := c.helloSpec(); spec.on() {
+		*tlvs = append(*tlvs, authTLVPlaceholder(spec))
 		return
 	}
 	s.padHello(c, pdu, tlvs)
@@ -52,10 +52,11 @@ func (s *IsisServer) finalizeHello(c *circuit, pdu packet.PDU, tlvs *[]packet.TL
 // helloAuthOK reports whether a received hello satisfies this circuit's hello
 // authentication. With no password configured every hello passes.
 func (s *IsisServer) helloAuthOK(c *circuit, raw []byte, pt packet.PDUType) bool {
-	if c.cfg.HelloPassword == "" {
+	spec := c.helloSpec()
+	if !spec.on() {
 		return true
 	}
-	if !packet.VerifyHMACMD5(raw, packet.HeaderLen(pt), []byte(c.cfg.HelloPassword), false) {
+	if !packet.VerifyAuth(raw, packet.HeaderLen(pt), spec.algo, spec.keyID, spec.key, false) {
 		s.logger.Debug("drop hello failing authentication", "circuit", c.cfg.Name)
 		return false
 	}

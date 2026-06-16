@@ -49,9 +49,9 @@ type IsisServer struct {
 	watchers   map[*watcher]struct{} // WatchEvent subscribers
 	algoWarned map[algoKey]bool      // (level,algo) whose unsupported metric-type was logged
 
-	overloadOnStartup time.Duration           // set the OL bit this long after startup
-	overloadUntil     time.Time               // OL bit is set while now < this (zero = not set)
-	authKeys          map[packet.Level][]byte // HMAC-MD5 keys for LSPs/SNPs per level
+	overloadOnStartup time.Duration             // set the OL bit this long after startup
+	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
+	authKeys          map[packet.Level]authSpec // LSP/SNP authentication per level
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -89,13 +89,13 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		watchers:          map[*watcher]struct{}{},
 		algoWarned:        map[algoKey]bool{},
 		overloadOnStartup: o.overloadOnStartup,
-		authKeys:          map[packet.Level][]byte{},
+		authKeys:          map[packet.Level]authSpec{},
 	}
-	if o.areaPassword != "" {
-		s.authKeys[packet.Level1] = []byte(o.areaPassword)
+	if spec := o.areaAuth.spec(); spec.on() {
+		s.authKeys[packet.Level1] = spec
 	}
-	if o.domainPassword != "" {
-		s.authKeys[packet.Level2] = []byte(o.domainPassword)
+	if spec := o.domainAuth.spec(); spec.on() {
+		s.authKeys[packet.Level2] = spec
 	}
 	if s.fib == nil {
 		s.fib = fib.Noop{}

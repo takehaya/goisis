@@ -252,14 +252,14 @@ func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 }
 
 func (s *IsisServer) sendSNP(c *circuit, level packet.Level, pdu packet.PDU) {
-	key := s.authKey(level)
-	if key != nil {
-		// Append an HMAC-MD5 Authentication TLV (filled after serialization).
+	spec := s.authKey(level)
+	if spec.on() {
+		// Append an Authentication TLV (filled after serialization).
 		switch p := pdu.(type) {
 		case *packet.CSNP:
-			p.TLVs = append(p.TLVs, authTLVPlaceholder())
+			p.TLVs = append(p.TLVs, authTLVPlaceholder(spec))
 		case *packet.PSNP:
-			p.TLVs = append(p.TLVs, authTLVPlaceholder())
+			p.TLVs = append(p.TLVs, authTLVPlaceholder(spec))
 		}
 	}
 	wire, err := pdu.Serialize()
@@ -267,8 +267,8 @@ func (s *IsisServer) sendSNP(c *circuit, level packet.Level, pdu packet.PDU) {
 		s.logger.Error("serialize SNP", "circuit", c.cfg.Name, "error", err)
 		return
 	}
-	if key != nil {
-		if err := packet.PatchHMACMD5(wire, packet.HeaderLen(pdu.PDUType()), key, false); err != nil {
+	if spec.on() {
+		if err := packet.PatchAuth(wire, packet.HeaderLen(pdu.PDUType()), spec.algo, spec.keyID, spec.key, false); err != nil {
 			s.logger.Error("authenticate SNP", "circuit", c.cfg.Name, "error", err)
 			return
 		}

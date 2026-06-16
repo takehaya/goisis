@@ -93,7 +93,9 @@ test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
 
 M0–M8 implemented: codec, data-link + adjacency, LSP flooding/LSDB sync, SPF +
 RIB + netlink FIB, Connect API + CLI, SRv6 locators, Flex-Algo, plus hardening
-(overload-on-startup, clean-shutdown purge, Prometheus metrics, HMAC-MD5
-authentication of hellos and LSPs/SNPs). All interop tests pass against FRR
-10.6.1 (run with docker + root). Remaining: HMAC-SHA (RFC 5310), plus the
-mutable-config RPCs needed before promoting the API from `v1alpha1` to `v1`.
+(overload-on-startup, clean-shutdown purge, Prometheus metrics, HMAC
+authentication of hellos and LSPs/SNPs — MD5 per RFC 5304 and SHA-1/256/384/512
+per RFC 5310). All interop tests pass against FRR 10.6.1 (run with docker +
+root); FRR's IS-IS auth is MD5-only so the SHA variants are validated
+goisis↔goisis. Remaining: the mutable-config RPCs needed before promoting the
+API from `v1alpha1` to `v1`.

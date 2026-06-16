@@ -164,8 +164,8 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	// Carry an HMAC-MD5 Authentication TLV (zeroed; filled by serializeLSP) when
 	// the level is authenticated. It is part of the content-unchanged check, so
 	// it stays stable across refreshes.
-	if s.authKey(level) != nil {
-		tlvs = append(tlvs, authTLVPlaceholder())
+	if spec := s.authKey(level); spec.on() {
+		tlvs = append(tlvs, authTLVPlaceholder(spec))
 	}
 
 	newBody, err := packet.MarshalTLVs(tlvs)

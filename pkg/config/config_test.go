@@ -4,7 +4,60 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/takehaya/goisis/pkg/packet"
 )
+
+func TestAuthAlgorithm(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want packet.AuthAlgorithm
+		ok   bool
+	}{
+		{"", packet.AuthMD5, true},
+		{"md5", packet.AuthMD5, true},
+		{"sha1", packet.AuthSHA1, true},
+		{"sha256", packet.AuthSHA256, true},
+		{"hmac-sha-512", packet.AuthSHA512, true},
+		{"bogus", 0, false},
+	} {
+		got, err := authAlgorithm(tc.in)
+		if (err == nil) != tc.ok {
+			t.Errorf("authAlgorithm(%q) ok=%v, want %v (err=%v)", tc.in, err == nil, tc.ok, err)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("authAlgorithm(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestLoadAuth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := `net: 49.0001.0000.0000.0001.00
+area-password: areasecret
+area-auth-algorithm: sha256
+area-key-id: 5
+circuits:
+  - interface: eth0
+    hello-password: hp
+    hello-auth-algorithm: sha512
+    hello-key-id: 9
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.AreaPassword != "areasecret" || c.AreaAuthAlgorithm != "sha256" || c.AreaKeyID != 5 {
+		t.Errorf("area auth = %q/%q/%d", c.AreaPassword, c.AreaAuthAlgorithm, c.AreaKeyID)
+	}
+	cc := c.Circuits[0]
+	if cc.HelloPassword != "hp" || cc.HelloAuthAlgorithm != "sha512" || cc.HelloKeyID != 9 {
+		t.Errorf("hello auth = %q/%q/%d", cc.HelloPassword, cc.HelloAuthAlgorithm, cc.HelloKeyID)
+	}
+}
 
 func TestLoadSRv6Locators(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "c.yaml")

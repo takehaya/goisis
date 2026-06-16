@@ -54,11 +54,15 @@ type CircuitConfig struct {
 	IPv6Addrs []netip.Addr
 	// Padding pads hellos toward the MTU (ISO 10589); default true.
 	Padding *bool
-	// HelloPassword, if set, enables HMAC-MD5 authentication of hellos on this
-	// circuit (RFC 5304): hellos are signed with it and received hellos must
-	// carry a matching digest or they are dropped (no adjacency). It is the
-	// shared key used directly as the HMAC key (FRR's `isis password md5`).
-	HelloPassword string
+	// HelloPassword, if set, enables HMAC authentication of hellos on this
+	// circuit: hellos are signed with it and received hellos must carry a
+	// matching digest or they are dropped (no adjacency). HelloAuthAlgorithm
+	// selects the HMAC algorithm (default HMAC-MD5, RFC 5304; FRR's `isis
+	// password md5`); HelloKeyID is the RFC 5310 key identifier for the SHA
+	// family (ignored for MD5).
+	HelloPassword      string
+	HelloAuthAlgorithm packet.AuthAlgorithm
+	HelloKeyID         uint16
 }
 
 func (c *CircuitConfig) levels() []packet.Level {
@@ -231,9 +235,27 @@ type options struct {
 	fib               fib.FIB
 	metrics           Metrics
 	overloadOnStartup time.Duration
-	areaPassword      string // HMAC-MD5 key for L1 LSPs/SNPs (RFC 5304)
-	domainPassword    string // HMAC-MD5 key for L2 LSPs/SNPs
+	areaAuth          AuthConfig // L1 LSP/SNP authentication
+	domainAuth        AuthConfig // L2 LSP/SNP authentication
 	hasSystemID       bool
+}
+
+// AuthConfig describes an HMAC authentication key for one scope. Algorithm
+// selects HMAC-MD5 (RFC 5304, the default) or an HMAC-SHA variant (RFC 5310);
+// KeyID is the RFC 5310 key identifier (ignored for MD5). Secret is the shared
+// key; an empty Secret disables authentication for the scope.
+type AuthConfig struct {
+	Algorithm packet.AuthAlgorithm
+	KeyID     uint16
+	Secret    string
+}
+
+// spec resolves an AuthConfig to an internal authSpec.
+func (a AuthConfig) spec() authSpec {
+	if a.Secret == "" {
+		return authSpec{}
+	}
+	return authSpec{algo: a.Algorithm, keyID: a.KeyID, key: []byte(a.Secret)}
 }
 
 // WithLogger sets the logger used by the server. Defaults to slog.Default().
@@ -314,15 +336,28 @@ func WithFlexAlgo(cfg FlexAlgoConfig) ServerOption {
 
 // WithAreaPassword enables HMAC-MD5 authentication (RFC 5304) of Level-1 LSPs
 // and SNPs with the given key (FRR's `area-password md5`). Received L1 LSPs/SNPs
-// must carry a matching digest or they are dropped.
+// must carry a matching digest or they are dropped. For HMAC-SHA (RFC 5310) use
+// WithAreaAuth.
 func WithAreaPassword(pw string) ServerOption {
-	return func(o *options) { o.areaPassword = pw }
+	return func(o *options) { o.areaAuth = AuthConfig{Secret: pw} }
 }
 
 // WithDomainPassword enables HMAC-MD5 authentication (RFC 5304) of Level-2 LSPs
 // and SNPs with the given key (FRR's `domain-password md5`).
 func WithDomainPassword(pw string) ServerOption {
-	return func(o *options) { o.domainPassword = pw }
+	return func(o *options) { o.domainAuth = AuthConfig{Secret: pw} }
+}
+
+// WithAreaAuth enables authentication of Level-1 LSPs/SNPs with an explicit
+// algorithm (HMAC-MD5 or an HMAC-SHA variant) and key ID.
+func WithAreaAuth(cfg AuthConfig) ServerOption {
+	return func(o *options) { o.areaAuth = cfg }
+}
+
+// WithDomainAuth enables authentication of Level-2 LSPs/SNPs with an explicit
+// algorithm and key ID.
+func WithDomainAuth(cfg AuthConfig) ServerOption {
+	return func(o *options) { o.domainAuth = cfg }
 }
 
 // WithOverloadOnStartup sets the overload bit (ISO 10589) in this node's own

@@ -11,8 +11,13 @@ options. ([日本語](configuration.ja.md))
 | `hostname` | string | Dynamic hostname advertised in LSPs (RFC 5301). |
 | `fib` | bool | Program computed routes into the Linux kernel FIB tagged `proto isis`. Requires `CAP_NET_ADMIN`. Default `false` (control-plane only). |
 | `overload-on-startup` | duration | Set the overload bit for this long after startup, then clear it (e.g. `30s`). While set, peers route no transit traffic through this node. |
-| `area-password` | string | HMAC-MD5 authentication (RFC 5304) of Level-1 LSPs and SNPs (FRR's `area-password md5`). |
-| `domain-password` | string | HMAC-MD5 authentication of Level-2 LSPs and SNPs (FRR's `domain-password md5`). |
+| `area-password` | string | Authenticate Level-1 LSPs and SNPs with this key. |
+| `area-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `area-password md5`), or `sha1`/`sha256`/`sha384`/`sha512` (RFC 5310). |
+| `area-key-id` | uint16 | RFC 5310 key ID (SHA only). |
+| `domain-password` / `domain-auth-algorithm` / `domain-key-id` | | The same, for Level-2. |
+
+> FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
+> interop goisis↔goisis, not with FRR.
 | `circuits` | list (required) | Interfaces to run IS-IS on; see below. |
 | `prefixes` | list of CIDR | Extra prefixes to originate. Connected subnets of the circuits are advertised automatically. |
 | `srv6` | object | SRv6 locators; see below. |
@@ -27,7 +32,9 @@ options. ([日本語](configuration.ja.md))
 | `p2p` | bool | Point-to-point procedures (RFC 5303 three-way) instead of broadcast/DIS. |
 | `priority` | uint8 | DIS election priority on a LAN, 0–127 (default 64). |
 | `metric` | uint32 | Circuit wide metric (default 10). |
-| `hello-password` | string | Enables HMAC-MD5 hello authentication (RFC 5304). Hellos are signed with it and received hellos must carry a matching digest or they are dropped. Interops with FRR's `isis password md5`. |
+| `hello-password` | string | Enables HMAC hello authentication. Hellos are signed with it and received hellos must carry a matching digest or they are dropped. |
+| `hello-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `isis password md5`), or an HMAC-SHA variant (RFC 5310). |
+| `hello-key-id` | uint16 | RFC 5310 key ID (SHA only). |
 
 IPv4 and link-local IPv6 addresses configured on the interface are advertised in
 hellos (TLV 132/232) and used as next hops; their connected subnets are

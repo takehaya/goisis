@@ -28,8 +28,8 @@ func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time
 			&packet.UnknownTLV{TLVType: packet.TLVTypePurgeOriginatorID, Value: append([]byte{1}, s.systemID[:]...)},
 		},
 	}
-	if s.authKey(level) != nil {
-		lsp.TLVs = append(lsp.TLVs, authTLVPlaceholder())
+	if spec := s.authKey(level); spec.on() {
+		lsp.TLVs = append(lsp.TLVs, authTLVPlaceholder(spec))
 	}
 	raw, err := s.serializeLSP(lsp)
 	if err != nil {

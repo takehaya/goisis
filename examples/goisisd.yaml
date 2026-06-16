@@ -14,10 +14,14 @@ fib: true
 # route no transit traffic through this node until routes have settled.
 # overload-on-startup: 30s
 
-# HMAC-MD5 authentication of LSPs/SNPs (RFC 5304). area-password covers Level 1,
-# domain-password covers Level 2 (FRR's area-password/domain-password md5).
+# HMAC authentication of LSPs/SNPs. area-password covers Level 1, domain-password
+# covers Level 2. The algorithm defaults to HMAC-MD5 (RFC 5304, interops with
+# FRR's area-password/domain-password md5); set *-auth-algorithm to an HMAC-SHA
+# variant (RFC 5310, goisis<->goisis) with a *-key-id.
 # area-password: s3cret
 # domain-password: s3cret
+# area-auth-algorithm: sha256   # md5 (default) | sha1 | sha256 | sha384 | sha512
+# area-key-id: 1
 
 circuits:
   - interface: eth0

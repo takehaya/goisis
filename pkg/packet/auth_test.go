@@ -9,7 +9,7 @@ func TestHMACMD5PatchVerify(t *testing.T) {
 		HoldingTime: 30,
 		TLVs: []TLV{
 			&AreaAddressesTLV{Addresses: []AreaAddress{{0x49, 0x00, 0x01}}},
-			&AuthenticationTLV{AuthType: AuthTypeHMACMD5, Value: make([]byte, hmacMD5DigestLen)},
+			AuthTLV(AuthMD5, 0),
 		},
 	}
 	raw, err := h.Serialize()
@@ -36,6 +36,36 @@ func TestHMACMD5PatchVerify(t *testing.T) {
 	}
 }
 
+func TestHMACSHAPatchVerify(t *testing.T) {
+	for _, algo := range []AuthAlgorithm{AuthSHA1, AuthSHA256, AuthSHA384, AuthSHA512} {
+		h := &LANHello{
+			Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
+			TLVs: []TLV{
+				&AreaAddressesTLV{Addresses: []AreaAddress{{0x49, 0x00, 0x01}}},
+				AuthTLV(algo, 42),
+			},
+		}
+		raw, err := h.Serialize()
+		if err != nil {
+			t.Fatalf("algo %d: Serialize: %v", algo, err)
+		}
+		off := HeaderLen(h.PDUType())
+		key := []byte("sharedkey")
+		if err := PatchAuth(raw, off, algo, 42, key, false); err != nil {
+			t.Fatalf("algo %d: PatchAuth: %v", algo, err)
+		}
+		if !VerifyAuth(raw, off, algo, 42, key, false) {
+			t.Errorf("algo %d: verify failed for the correct key/keyID", algo)
+		}
+		if VerifyAuth(raw, off, algo, 42, []byte("wrong"), false) {
+			t.Errorf("algo %d: verify passed for the wrong key", algo)
+		}
+		if VerifyAuth(raw, off, algo, 99, key, false) {
+			t.Errorf("algo %d: verify passed for the wrong key ID", algo)
+		}
+	}
+}
+
 func TestVerifyHMACMD5IgnoresDataLinkPadding(t *testing.T) {
 	// A small authenticated PDU is padded by the NIC to the 60-octet Ethernet
 	// minimum on receive. Verification must hash the declared-length PDU, not
@@ -44,7 +74,7 @@ func TestVerifyHMACMD5IgnoresDataLinkPadding(t *testing.T) {
 		Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
 		TLVs: []TLV{
 			&AreaAddressesTLV{Addresses: []AreaAddress{{0x49, 0x00, 0x01}}},
-			&AuthenticationTLV{AuthType: AuthTypeHMACMD5, Value: make([]byte, hmacMD5DigestLen)},
+			AuthTLV(AuthMD5, 0),
 		},
 	}
 	raw, err := h.Serialize()
@@ -69,7 +99,7 @@ func TestVerifyHMACMD5IgnoresDataLinkPadding(t *testing.T) {
 func TestHMACMD5LSPZeroesVolatileFields(t *testing.T) {
 	lsp := &LSP{
 		Level: Level2, RemainingTime: 1000, LSPID: LSPID{0, 0, 0, 0, 0, 1, 0, 0}, SequenceNumber: 5, ISType: 2,
-		TLVs: []TLV{&AuthenticationTLV{AuthType: AuthTypeHMACMD5, Value: make([]byte, hmacMD5DigestLen)}},
+		TLVs: []TLV{AuthTLV(AuthMD5, 0)},
 	}
 	raw, err := lsp.Serialize()
 	if err != nil {

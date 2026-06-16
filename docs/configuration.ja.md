@@ -11,8 +11,13 @@
 | `hostname` | string | LSP で広報する動的ホスト名(RFC 5301)。 |
 | `fib` | bool | 計算した経路を `proto isis` タグでカーネル FIB に書き込む。`CAP_NET_ADMIN` が必要。デフォルト `false`(コントロールプレーンのみ)。 |
 | `overload-on-startup` | duration | 起動後この時間だけオーバーロードビットを立て、その後解除する(例 `30s`)。立っている間、ピアはこのノードを経由する中継トラフィックを流さない。 |
-| `area-password` | string | Level-1 の LSP/SNP を HMAC-MD5 認証(RFC 5304、FRR の `area-password md5`)。 |
-| `domain-password` | string | Level-2 の LSP/SNP を HMAC-MD5 認証(FRR の `domain-password md5`)。 |
+| `area-password` | string | Level-1 の LSP/SNP をこの鍵で認証。 |
+| `area-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `area-password md5`)/ `sha1`/`sha256`/`sha384`/`sha512`(RFC 5310)。 |
+| `area-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
+| `domain-password` / `domain-auth-algorithm` / `domain-key-id` | | Level-2 用に同じ。 |
+
+> FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
+> goisis 同士で相互運用します。
 | `circuits` | list(必須) | IS-IS を動かすインターフェース。下記参照。 |
 | `prefixes` | CIDR のリスト | 追加で広報する prefix。サーキットの接続サブネットは自動で広報される。 |
 | `srv6` | object | SRv6 locator。下記参照。 |
@@ -27,7 +32,9 @@
 | `p2p` | bool | ブロードキャスト/DIS の代わりにポイントツーポイント手順(RFC 5303 three-way)。 |
 | `priority` | uint8 | LAN での DIS 選出プライオリティ、0–127(デフォルト 64)。 |
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
-| `hello-password` | string | HMAC-MD5 による hello 認証(RFC 5304)を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。FRR の `isis password md5` と相互運用可能。 |
+| `hello-password` | string | HMAC による hello 認証を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。 |
+| `hello-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `isis password md5`)/ HMAC-SHA 系(RFC 5310)。 |
+| `hello-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
 
 インターフェースに設定された IPv4 アドレスとリンクローカル IPv6 アドレスは
 hello(TLV 132/232)で広報され、ネクストホップに使われます。その接続サブネットは

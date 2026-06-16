@@ -33,10 +33,15 @@ type Config struct {
 	// OverloadOnStartup, if set (a Go duration like "30s"), sets the overload
 	// bit for that long after startup.
 	OverloadOnStartup string `yaml:"overload-on-startup"`
-	// AreaPassword / DomainPassword enable HMAC-MD5 authentication (RFC 5304)
-	// of Level-1 / Level-2 LSPs and SNPs respectively.
-	AreaPassword   string `yaml:"area-password"`
-	DomainPassword string `yaml:"domain-password"`
+	// AreaPassword / DomainPassword enable authentication of Level-1 / Level-2
+	// LSPs and SNPs. The algorithm defaults to HMAC-MD5 (RFC 5304); set
+	// *-auth-algorithm to an HMAC-SHA variant (RFC 5310) with a *-key-id.
+	AreaPassword        string `yaml:"area-password"`
+	AreaAuthAlgorithm   string `yaml:"area-auth-algorithm"`
+	AreaKeyID           uint16 `yaml:"area-key-id"`
+	DomainPassword      string `yaml:"domain-password"`
+	DomainAuthAlgorithm string `yaml:"domain-auth-algorithm"`
+	DomainKeyID         uint16 `yaml:"domain-key-id"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
@@ -66,8 +71,12 @@ type CircuitConfig struct {
 	P2P       bool   `yaml:"p2p"`
 	Priority  *uint8 `yaml:"priority"`
 	Metric    uint32 `yaml:"metric"`
-	// HelloPassword enables HMAC-MD5 authentication of hellos (RFC 5304).
-	HelloPassword string `yaml:"hello-password"`
+	// HelloPassword enables HMAC authentication of hellos. The algorithm
+	// defaults to HMAC-MD5 (RFC 5304); hello-auth-algorithm selects an HMAC-SHA
+	// variant (RFC 5310) with hello-key-id.
+	HelloPassword      string `yaml:"hello-password"`
+	HelloAuthAlgorithm string `yaml:"hello-auth-algorithm"`
+	HelloKeyID         uint16 `yaml:"hello-key-id"`
 }
 
 // Load reads and parses a configuration file.
@@ -149,10 +158,18 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		opts = append(opts, server.WithOverloadOnStartup(d))
 	}
 	if c.AreaPassword != "" {
-		opts = append(opts, server.WithAreaPassword(c.AreaPassword))
+		algo, err := authAlgorithm(c.AreaAuthAlgorithm)
+		if err != nil {
+			return nil, fmt.Errorf("area-auth-algorithm: %w", err)
+		}
+		opts = append(opts, server.WithAreaAuth(server.AuthConfig{Algorithm: algo, KeyID: c.AreaKeyID, Secret: c.AreaPassword}))
 	}
 	if c.DomainPassword != "" {
-		opts = append(opts, server.WithDomainPassword(c.DomainPassword))
+		algo, err := authAlgorithm(c.DomainAuthAlgorithm)
+		if err != nil {
+			return nil, fmt.Errorf("domain-auth-algorithm: %w", err)
+		}
+		opts = append(opts, server.WithDomainAuth(server.AuthConfig{Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword}))
 	}
 	for _, cc := range c.Circuits {
 		cfg, err := cc.circuit()
@@ -212,23 +229,49 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 	if err != nil {
 		return server.CircuitConfig{}, fmt.Errorf("circuit %q: %w", cc.Interface, err)
 	}
+	helloAlgo, err := authAlgorithm(cc.HelloAuthAlgorithm)
+	if err != nil {
+		return server.CircuitConfig{}, fmt.Errorf("circuit %q hello-auth-algorithm: %w", cc.Interface, err)
+	}
 	tr, err := datalink.OpenLinux(cc.Interface)
 	if err != nil {
 		return server.CircuitConfig{}, err
 	}
 	v4, v6 := interfaceAddrs(cc.Interface)
 	return server.CircuitConfig{
-		Name:          cc.Interface,
-		Transport:     tr,
-		P2P:           cc.P2P,
-		Level1:        l1,
-		Level2:        l2,
-		Priority:      cc.Priority,
-		Metric:        cc.Metric,
-		IPv4Addrs:     v4,
-		IPv6Addrs:     v6,
-		HelloPassword: cc.HelloPassword,
+		Name:               cc.Interface,
+		Transport:          tr,
+		P2P:                cc.P2P,
+		Level1:             l1,
+		Level2:             l2,
+		Priority:           cc.Priority,
+		Metric:             cc.Metric,
+		IPv4Addrs:          v4,
+		IPv6Addrs:          v6,
+		HelloPassword:      cc.HelloPassword,
+		HelloAuthAlgorithm: helloAlgo,
+		HelloKeyID:         cc.HelloKeyID,
 	}, nil
+}
+
+// authAlgorithm maps a YAML algorithm name to its code. The default (empty) is
+// HMAC-MD5; the SHA names accept both short ("sha256") and FRR-style
+// ("hmac-sha-256") spellings.
+func authAlgorithm(s string) (packet.AuthAlgorithm, error) {
+	switch strings.TrimSpace(s) {
+	case "", "md5", "hmac-md5":
+		return packet.AuthMD5, nil
+	case "sha1", "sha-1", "hmac-sha-1":
+		return packet.AuthSHA1, nil
+	case "sha256", "sha-256", "hmac-sha-256":
+		return packet.AuthSHA256, nil
+	case "sha384", "sha-384", "hmac-sha-384":
+		return packet.AuthSHA384, nil
+	case "sha512", "sha-512", "hmac-sha-512":
+		return packet.AuthSHA512, nil
+	default:
+		return 0, fmt.Errorf("invalid auth algorithm %q (want md5, sha1, sha256, sha384, or sha512)", s)
+	}
 }
 
 // flexAlgoMetricType maps the YAML metric-type name to its code point.

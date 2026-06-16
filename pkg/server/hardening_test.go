@@ -147,6 +147,54 @@ func TestLSPAuthMismatchRejectsLSP(t *testing.T) {
 	}
 }
 
+// TestHelloAuthSHA256: HMAC-SHA-256 (RFC 5310) hello authentication with a key
+// ID — exercises the non-MD5 algorithm threaded through the server send/verify
+// path (FRR can't validate this; its IS-IS auth is MD5-only).
+func TestHelloAuthSHA256(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	mk := func(name string, tr datalink.Transport) CircuitConfig {
+		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse(),
+			HelloPassword: "sha-shared", HelloAuthAlgorithm: packet.AuthSHA256, HelloKeyID: 7}
+		fastHello(&c)
+		return c
+	}
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta)))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb)))
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	waitFor(t, "a sees b Up (SHA-256 hello auth)", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitFor(t, "b sees a Up (SHA-256 hello auth)", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+}
+
+// TestLSPAuthSHA256: HMAC-SHA-256 (RFC 5310) LSP/SNP authentication via the
+// domain key — matching keys sync the LSDB.
+func TestLSPAuthSHA256(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	cfg := AuthConfig{Algorithm: packet.AuthSHA256, KeyID: 3, Secret: "sha-lsp"}
+	mk := func(name string, tr datalink.Transport) CircuitConfig {
+		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse()}
+		fastHello(&c)
+		return c
+	}
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta)), WithDomainAuth(cfg))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb)), WithDomainAuth(cfg))
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	waitFor(t, "b installs A's SHA-256-authenticated LSP", func() bool {
+		return liveLSPFrom(t, b, packet.SystemID{0, 0, 0, 0, 0, 1})
+	})
+}
+
 // TestProcessLSPRefloodsPurgeOverSameSeqLive: when we hold a purge and a peer
 // floods a live copy at the same sequence number, we re-flood our purge (a
 // purge supersedes a live LSP at equal seq, ISO 10589 7.3.16.2).
