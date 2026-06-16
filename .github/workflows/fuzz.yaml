@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   fuzz:
@@ -32,3 +33,21 @@ jobs:
           name: fuzz-corpus-${{ matrix.target }}
           path: pkg/packet/testdata/fuzz/
           if-no-files-found: ignore
+      # Open (or update) a tracking issue so a nightly crash is not lost in the
+      # Actions tab. One open issue per target — re-crashes add a comment rather
+      # than filing duplicates.
+      - name: File or update a crash issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create fuzz --color FBCA04 --description "fuzz-found crash" 2>/dev/null || true
+          n=$(gh issue list --label fuzz --state open --search "$TARGET in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body "Reproduced again: $RUN_URL"
+          else
+            gh issue create --label fuzz --title "fuzz: $TARGET found a crash" \
+              --body "Nightly fuzz of \`$TARGET\` crashed. The reproducing input is in the run artifact \`fuzz-corpus-$TARGET\` ($RUN_URL). Download it into \`pkg/packet/testdata/fuzz/$TARGET/\`, then run \`go test -run '$TARGET/<hash>' ./pkg/packet/\` to reproduce — committing that file turns the crash into a permanent regression test."
+          fi
