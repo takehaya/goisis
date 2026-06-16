@@ -37,6 +37,25 @@ prefixes:
   - 10.1.1.1/32
   - 2001:db8:1::1/128
 
+# Route policy (prefix-lists). IS-IS floods one consistent LSDB per area, so
+# there is no policy on the flooded link state — only at the edges:
+#   advertise: which prefixes this node originates into its own LSP
+#   fib:       which computed routes are programmed into the kernel FIB
+#              (rejected routes stay in the RIB, visible via the API/WatchEvent)
+# Each rule is "permit:"/"deny:" a CIDR with optional ge/le length bounds. The
+# first matching rule wins; default is "deny" (a permit list is an allowlist).
+# policy:
+#   advertise:
+#     default: permit
+#     rules:
+#       - deny: 10.0.0.0/8     # never originate RFC1918 10/8 (and longer)
+#         le: 32
+#   fib:
+#     default: permit
+#     rules:
+#       - deny: 0.0.0.0/0      # control-plane only: keep IPv4 in the RIB,
+#         le: 32               # don't program it into the kernel
+
 # SRv6 locators (RFC 9352). Each is advertised in the SRv6 Locator TLV with a
 # local End SID at its base address; with fib:true that End SID is installed as
 # a seg6local route.

@@ -30,6 +30,9 @@ type Config struct {
 	Prefixes []string         `yaml:"prefixes"`
 	SRv6     *SRv6Config      `yaml:"srv6"`
 	FlexAlgo []FlexAlgoConfig `yaml:"flex-algo"`
+	// Policy filters which prefixes are originated (advertise) and which
+	// computed routes are programmed into the FIB (fib).
+	Policy *PolicyConfig `yaml:"policy"`
 	// OverloadOnStartup, if set (a Go duration like "30s"), sets the overload
 	// bit for that long after startup.
 	OverloadOnStartup string `yaml:"overload-on-startup"`
@@ -62,6 +65,32 @@ type FlexAlgoConfig struct {
 	Advertise bool `yaml:"advertise"`
 	// Locator, if set, is an SRv6 locator advertised bound to this algorithm.
 	Locator string `yaml:"locator"`
+}
+
+// PolicyConfig configures prefix-list route policy. Advertise gates which
+// prefixes are originated; FIB gates which computed routes are programmed into
+// the forwarding plane (filtered routes stay in the RIB).
+type PolicyConfig struct {
+	Advertise *PrefixListConfig `yaml:"advertise"`
+	FIB       *PrefixListConfig `yaml:"fib"`
+}
+
+// PrefixListConfig is an ordered prefix-list. Each rule is "permit: CIDR" or
+// "deny: CIDR" with optional ge/le length bounds. The first matching rule wins;
+// when none match, Default ("permit" or "deny") decides — an unset Default is
+// "deny" (so a list of permit rules is an allowlist).
+type PrefixListConfig struct {
+	Default string             `yaml:"default"`
+	Rules   []PrefixRuleConfig `yaml:"rules"`
+}
+
+// PrefixRuleConfig is one prefix-list rule. Exactly one of Permit/Deny is the
+// CIDR to match; GE/LE bound the matched prefix length.
+type PrefixRuleConfig struct {
+	Permit string `yaml:"permit"`
+	Deny   string `yaml:"deny"`
+	GE     int    `yaml:"ge"`
+	LE     int    `yaml:"le"`
 }
 
 // CircuitConfig configures one circuit.
@@ -156,6 +185,22 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			return nil, fmt.Errorf("overload-on-startup %q: %w", c.OverloadOnStartup, err)
 		}
 		opts = append(opts, server.WithOverloadOnStartup(d))
+	}
+	if c.Policy != nil {
+		if c.Policy.Advertise != nil {
+			pl, err := c.Policy.Advertise.prefixList()
+			if err != nil {
+				return nil, fmt.Errorf("policy.advertise: %w", err)
+			}
+			opts = append(opts, server.WithAdvertiseFilter(pl.AdvertiseFilter()))
+		}
+		if c.Policy.FIB != nil {
+			pl, err := c.Policy.FIB.prefixList()
+			if err != nil {
+				return nil, fmt.Errorf("policy.fib: %w", err)
+			}
+			opts = append(opts, server.WithFIBFilter(pl.FIBFilter()))
+		}
 	}
 	if c.AreaPassword != "" {
 		algo, err := authAlgorithm(c.AreaAuthAlgorithm)
@@ -252,6 +297,39 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 		HelloAuthAlgorithm: helloAlgo,
 		HelloKeyID:         cc.HelloKeyID,
 	}, nil
+}
+
+// prefixList converts a YAML prefix-list into a server.PrefixList.
+func (pc PrefixListConfig) prefixList() (server.PrefixList, error) {
+	pl := server.PrefixList{}
+	switch strings.TrimSpace(pc.Default) {
+	case "", "deny":
+		pl.Default = server.Deny
+	case "permit":
+		pl.Default = server.Permit
+	default:
+		return pl, fmt.Errorf("invalid default %q (want permit or deny)", pc.Default)
+	}
+	for i, r := range pc.Rules {
+		var action server.PrefixAction
+		var cidr string
+		switch {
+		case r.Permit != "" && r.Deny == "":
+			action, cidr = server.Permit, r.Permit
+		case r.Deny != "" && r.Permit == "":
+			action, cidr = server.Deny, r.Deny
+		default:
+			return pl, fmt.Errorf("rule %d: exactly one of permit/deny is required", i)
+		}
+		prefix, err := netip.ParsePrefix(cidr)
+		if err != nil {
+			return pl, fmt.Errorf("rule %d: %w", i, err)
+		}
+		pl.Rules = append(pl.Rules, server.PrefixRule{
+			Action: action, Prefix: prefix, MinLen: r.GE, MaxLen: r.LE,
+		})
+	}
+	return pl, nil
 }
 
 // authAlgorithm maps a YAML algorithm name to its code. The default (empty) is

@@ -78,6 +78,38 @@ flex-algo:
 ノードは列挙した各アルゴリズムに参加します(SR-Algorithm sub-TLV 19 で広報)。
 参加していないアルゴリズムに紐づく locator は到達不能になるため、起動時に拒否されます。
 
+## `policy`
+
+IS-IS はエリアごとに 1 つの一貫した LSDB をフラッディングするため、フラッディング
+されるリンクステートにはポリシーがありません(フィルタすると収束が壊れる)。
+ポリシーは境界にのみ、prefix-list として適用します:
+
+```yaml
+policy:
+  advertise:          # このノードが LSP に載せる prefix
+    default: permit
+    rules:
+      - deny: 10.0.0.0/8
+        le: 32
+  fib:                # FIB に入れる計算経路
+    default: permit
+    rules:
+      - deny: 0.0.0.0/0
+        le: 32        # コントロールプレーンのみ:RIB には残しカーネルには入れない
+```
+
+| キー | 型 | 説明 |
+|-----|------|-------------|
+| `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。 |
+| `fib` | prefix-list | FIB ポリシー:フォワーディングプレーンに入れる経路。拒否分も RIB には残り `ListRoutes`/`WatchEvent` で見える。 |
+| `<list>.default` | string | `deny`(デフォルト)/ `permit`。どのルールにもマッチしないときに適用。 |
+| `<list>.rules[]` | list | 順序付き。最初のマッチが勝つ。各ルールは `permit:`/`deny:` の CIDR + 任意の `ge`/`le` 長範囲。 |
+
+ルールは、その CIDR に含まれ長さが `[ge, le]` の prefix にマッチします(両方省略で
+完全長一致)。フラッディングされる LSDB には一切影響しません。トポロジ別 /
+アルゴリズム別の独立 RIB(BGP の複数テーブルに相当)が欲しい場合はフィルタでなく
+Flexible Algorithm を使ってください。
+
 ## ケーパビリティ
 
 `goisisd` は `CAP_NET_RAW`(AF_PACKET)を、`fib: true` のとき `CAP_NET_ADMIN` を

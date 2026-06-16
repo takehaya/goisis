@@ -80,6 +80,38 @@ A node participates in every listed algorithm (advertised in the SR-Algorithm
 sub-TLV, 19). A locator bound to an algorithm the node does not participate in
 is rejected at startup, since it would be unreachable.
 
+## `policy`
+
+IS-IS floods one consistent LSDB per area, so there is no policy on the flooded
+link state — filtering it would break convergence. Policy applies only at the
+edges, as prefix-lists:
+
+```yaml
+policy:
+  advertise:          # which prefixes this node originates into its LSP
+    default: permit
+    rules:
+      - deny: 10.0.0.0/8
+        le: 32
+  fib:                # which computed routes are programmed into the FIB
+    default: permit
+    rules:
+      - deny: 0.0.0.0/0
+        le: 32        # control-plane only: keep routes in the RIB, not the kernel
+```
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236). |
+| `fib` | prefix-list | FIB policy: routes programmed into the forwarding plane. Rejected routes stay in the RIB — `ListRoutes` and `WatchEvent` still report them. |
+| `<list>.default` | string | `deny` (default) or `permit`, applied when no rule matches. |
+| `<list>.rules[]` | list | Ordered; the first match wins. Each rule is `permit:`/`deny:` a CIDR, with optional `ge`/`le` length bounds. |
+
+A rule matches a prefix within its CIDR whose length is in `[ge, le]` (omit both
+for an exact-length match). The flooded LSDB is never affected. For per-topology
+or per-algorithm separate RIBs (the IGP analogue of multiple BGP tables), use
+Flexible Algorithm rather than a filter.
+
 ## Capabilities
 
 `goisisd` needs `CAP_NET_RAW` (AF_PACKET) and, with `fib: true`, `CAP_NET_ADMIN`:

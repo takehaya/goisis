@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,6 +125,71 @@ func TestLoadOverloadOnStartup(t *testing.T) {
 	}
 	if c.OverloadOnStartup != "30s" {
 		t.Errorf("overload-on-startup = %q, want 30s", c.OverloadOnStartup)
+	}
+}
+
+func TestLoadPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := `net: 49.0001.0000.0000.0001.00
+circuits:
+  - interface: eth0
+policy:
+  advertise:
+    default: deny
+    rules:
+      - deny: 10.0.0.0/8
+        ge: 8
+        le: 32
+      - permit: 0.0.0.0/0
+        le: 32
+  fib:
+    default: permit
+    rules:
+      - deny: 192.0.2.0/24
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Policy == nil || c.Policy.Advertise == nil || c.Policy.FIB == nil {
+		t.Fatalf("policy not parsed: %+v", c.Policy)
+	}
+
+	adv, err := c.Policy.Advertise.prefixList()
+	if err != nil {
+		t.Fatalf("advertise prefixList: %v", err)
+	}
+	if adv.Allows(netip.MustParsePrefix("10.1.0.0/16")) {
+		t.Error("10.1/16 should be denied by the advertise policy")
+	}
+	if !adv.Allows(netip.MustParsePrefix("192.0.2.0/24")) {
+		t.Error("192.0.2/24 should be permitted by the advertise policy")
+	}
+
+	fib, err := c.Policy.FIB.prefixList()
+	if err != nil {
+		t.Fatalf("fib prefixList: %v", err)
+	}
+	if fib.Allows(netip.MustParsePrefix("192.0.2.0/24")) {
+		t.Error("192.0.2/24 should be denied by the fib policy")
+	}
+	if !fib.Allows(netip.MustParsePrefix("198.51.100.0/24")) {
+		t.Error("198.51.100/24 should pass the default-permit fib policy")
+	}
+}
+
+func TestPrefixListInvalid(t *testing.T) {
+	if _, err := (PrefixListConfig{Rules: []PrefixRuleConfig{{Permit: "10.0.0.0/8", Deny: "10.0.0.0/8"}}}).prefixList(); err == nil {
+		t.Error("expected error when both permit and deny are set")
+	}
+	if _, err := (PrefixListConfig{Default: "bogus"}).prefixList(); err == nil {
+		t.Error("expected error for invalid default action")
+	}
+	if _, err := (PrefixListConfig{Rules: []PrefixRuleConfig{{Permit: "not-a-cidr"}}}).prefixList(); err == nil {
+		t.Error("expected error for invalid CIDR")
 	}
 }
 

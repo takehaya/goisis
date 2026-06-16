@@ -46,6 +46,50 @@ func TestAdvertiseFilterSuppressesPrefix(t *testing.T) {
 	}
 }
 
+// TestPrefixListAllows checks rule order, ge/le bounds, family separation, and
+// the default action.
+func TestPrefixListAllows(t *testing.T) {
+	pl := PrefixList{
+		Rules: []PrefixRule{
+			{Action: Deny, Prefix: netip.MustParsePrefix("10.0.0.0/8"), MinLen: 8, MaxLen: 32},
+			{Action: Permit, Prefix: netip.MustParsePrefix("0.0.0.0/0"), MinLen: 0, MaxLen: 32},
+		},
+		Default: Deny,
+	}
+	cases := []struct {
+		prefix string
+		want   bool
+	}{
+		{"10.1.1.0/24", false},   // inside 10/8 -> first rule denies
+		{"192.0.2.0/24", true},   // permitted by the 0/0 le-32 rule
+		{"10.0.0.0/8", false},    // the denied block itself
+		{"2001:db8::/32", false}, // IPv6: no rule matches -> default deny
+	}
+	for _, c := range cases {
+		if got := pl.Allows(netip.MustParsePrefix(c.prefix)); got != c.want {
+			t.Errorf("Allows(%s) = %v, want %v", c.prefix, got, c.want)
+		}
+	}
+
+	// Exact-length match when no ge/le is set.
+	exact := PrefixList{Rules: []PrefixRule{{Action: Permit, Prefix: netip.MustParsePrefix("10.0.0.0/24")}}}
+	if !exact.Allows(netip.MustParsePrefix("10.0.0.0/24")) {
+		t.Error("exact /24 should match")
+	}
+	if exact.Allows(netip.MustParsePrefix("10.0.0.0/25")) {
+		t.Error("/25 should not match an exact /24 rule")
+	}
+
+	// Default permit makes it a denylist.
+	deny := PrefixList{Rules: []PrefixRule{{Action: Deny, Prefix: netip.MustParsePrefix("10.0.0.0/8"), MaxLen: 32}}, Default: Permit}
+	if deny.Allows(netip.MustParsePrefix("10.1.0.0/16")) {
+		t.Error("10.1/16 should be denied")
+	}
+	if !deny.Allows(netip.MustParsePrefix("192.0.2.0/24")) {
+		t.Error("192.0.2/24 should pass the default-permit list")
+	}
+}
+
 // TestFIBFilterKeepsRouteInRIB drives two linked nodes: A advertises two
 // prefixes, B installs a FIB policy that rejects one. Both routes must reach
 // B's RIB (the filter must not drop them from the RIB), but only the permitted
