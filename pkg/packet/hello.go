@@ -47,7 +47,7 @@ func (p *LANHello) Serialize() ([]byte, error) {
 }
 
 func decodeLANHello(level Level, h commonHeader, b []byte) (PDU, error) {
-	b, err := checkFixedHeader(h, b, lanHelloHeaderLen, 17)
+	b, err := checkFixedHeader(h, b, lanHelloHeaderLen)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (p *P2PHello) Serialize() ([]byte, error) {
 }
 
 func decodeP2PHello(h commonHeader, b []byte) (PDU, error) {
-	b, err := checkFixedHeader(h, b, p2pHelloHeaderLen, 17)
+	b, err := checkFixedHeader(h, b, p2pHelloHeaderLen)
 	if err != nil {
 		return nil, err
 	}

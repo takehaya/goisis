@@ -99,8 +99,7 @@ func VerifyHMACMD5(pdu []byte, tlvOffset int, key []byte, isLSP bool) bool {
 	if !ok {
 		return false
 	}
-	want := make([]byte, e-s)
-	copy(want, pdu[s:e])
+	// hmacMD5Over hashes a copy, so pdu[s:e] still holds the received digest.
 	got := hmacMD5Over(pdu, s, e, isLSP, key)
-	return hmac.Equal(want, got[:])
+	return hmac.Equal(pdu[s:e], got[:])
 }

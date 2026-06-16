@@ -45,7 +45,7 @@ func (p *CSNP) Serialize() ([]byte, error) {
 }
 
 func decodeCSNP(level Level, h commonHeader, b []byte) (PDU, error) {
-	b, err := checkFixedHeader(h, b, csnpHeaderLen, 8)
+	b, err := checkFixedHeader(h, b, csnpHeaderLen)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (p *PSNP) Serialize() ([]byte, error) {
 }
 
 func decodePSNP(level Level, h commonHeader, b []byte) (PDU, error) {
-	b, err := checkFixedHeader(h, b, psnpHeaderLen, 8)
+	b, err := checkFixedHeader(h, b, psnpHeaderLen)
 	if err != nil {
 		return nil, err
 	}

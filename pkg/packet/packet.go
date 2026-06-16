@@ -205,12 +205,16 @@ func DecodePDU(b []byte) (PDU, error) {
 // checkFixedHeader validates the length indicator and reads the PDU length
 // field at pduLenOff, returning the PDU trimmed to its declared length.
 // minLen is the length of common plus PDU-specific fixed header.
-func checkFixedHeader(h commonHeader, b []byte, minLen, pduLenOff int) ([]byte, error) {
+func checkFixedHeader(h commonHeader, b []byte, minLen int) ([]byte, error) {
 	if int(h.LengthIndicator) != minLen {
 		return nil, fmt.Errorf("%w: length indicator %d, want %d", errBadFixedHeader, h.LengthIndicator, minLen)
 	}
 	if len(b) < minLen {
 		return nil, fmt.Errorf("fixed header: %w", ErrTruncated)
+	}
+	pduLenOff, ok := pduLenOffset(h.PDUType)
+	if !ok {
+		return nil, fmt.Errorf("%w: no PDU-length offset for type %d", errBadFixedHeader, h.PDUType)
 	}
 	pduLen := int(binary.BigEndian.Uint16(b[pduLenOff:]))
 	if pduLen < minLen {

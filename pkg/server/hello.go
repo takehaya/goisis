@@ -43,10 +43,7 @@ func (s *IsisServer) sendOne(c *circuit, dst packet.SNPA, pdu packet.PDU) {
 // otherwise pads the hello toward the MTU.
 func (s *IsisServer) finalizeHello(c *circuit, pdu packet.PDU, tlvs *[]packet.TLV) {
 	if c.cfg.HelloPassword != "" {
-		*tlvs = append(*tlvs, &packet.AuthenticationTLV{
-			AuthType: packet.AuthTypeHMACMD5,
-			Value:    make([]byte, 16),
-		})
+		*tlvs = append(*tlvs, authTLVPlaceholder())
 		return
 	}
 	s.padHello(c, pdu, tlvs)

@@ -98,7 +98,7 @@ func (p *LSP) Serialize() ([]byte, error) {
 }
 
 func decodeLSP(level Level, h commonHeader, b []byte) (PDU, error) {
-	b, err := checkFixedHeader(h, b, lspHeaderLen, 8)
+	b, err := checkFixedHeader(h, b, lspHeaderLen)
 	if err != nil {
 		return nil, err
 	}
