@@ -3,7 +3,7 @@
 Go で書かれた IS-IS ルーティングプロトコル実装 —
 [GoBGP](https://github.com/osrg/gobgp) の IS-IS 版を目指しています。
 
-[English README](README.md) · [設定リファレンス](docs/configuration.ja.md) · [ライブラリガイド](docs/library.ja.md)
+[English README](README.md) · [はじめに](docs/getting-started.ja.md) · [設定リファレンス](docs/configuration.ja.md) · [ライブラリガイド](docs/library.ja.md)
 
 goisis は **ライブラリファースト** です。`pkg/server.IsisServer` で自分の Go
 プログラムに IS-IS インスタンスを組み込めて、デーモン `goisisd` はその薄い

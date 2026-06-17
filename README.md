@@ -3,7 +3,7 @@
 IS-IS routing protocol implementation in Go — the IS-IS counterpart of
 [GoBGP](https://github.com/osrg/gobgp).
 
-[日本語版 README はこちら](README.ja.md) · [Configuration reference](docs/configuration.md) · [Library guide](docs/library.md)
+[日本語版 README はこちら](README.ja.md) · [Getting started](docs/getting-started.md) · [Configuration reference](docs/configuration.md) · [Library guide](docs/library.md)
 
 goisis is **library-first**: embed an IS-IS instance in your Go program with
 `pkg/server.IsisServer`, and the `goisisd` daemon is a thin wrapper around it.
