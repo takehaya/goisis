@@ -252,7 +252,11 @@ func seg6localSupported(t *testing.T) bool {
 
 func waitUp(t *testing.T, what string, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(40 * time.Second)
+	// FRR's LAN LSP regeneration / DIS settling can take ~40s, so a 40s budget
+	// races the convergence it waits for (TestFRRBroadcastAdjacency flaked at
+	// ~40.6s). Give generous headroom; success returns as soon as fn() is true,
+	// so this only lengthens the genuine-failure path.
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return
