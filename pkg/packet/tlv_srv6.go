@@ -73,7 +73,13 @@ func decodeEndSID(v []byte) (*SRv6EndSID, error) {
 		return nil, fmt.Errorf("SRv6 End SID sub-sub-TLVs: %w", ErrTruncated)
 	}
 	sub := v[srv6EndSIDFixedLen : srv6EndSIDFixedLen+subLen]
-	for len(sub) >= 2 {
+	for len(sub) > 0 {
+		// A trailing octet too short for a sub-sub-TLV header is malformed —
+		// reject it rather than silently dropping it (consistency with the
+		// sub-TLV registry; preserves byte-exact intent).
+		if len(sub) < 2 {
+			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV header: %w", ErrTruncated)
+		}
 		t, l := sub[0], int(sub[1])
 		if len(sub) < 2+l {
 			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV %d: %w", t, ErrTruncated)
@@ -170,7 +176,10 @@ func decodeSRv6LocatorTLV(value []byte) (TLV, error) {
 			return nil, fmt.Errorf("SRv6 locator sub-TLVs: %w", ErrTruncated)
 		}
 		sub := value[off : off+subLen]
-		for len(sub) >= 2 {
+		for len(sub) > 0 {
+			if len(sub) < 2 {
+				return nil, fmt.Errorf("SRv6 locator sub-TLV header: %w", ErrTruncated)
+			}
 			st, sl := sub[0], int(sub[1])
 			if len(sub) < 2+sl {
 				return nil, fmt.Errorf("SRv6 locator sub-TLV %d: %w", st, ErrTruncated)

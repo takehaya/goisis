@@ -96,8 +96,11 @@ func unpackPrefix(sig []byte, bits int, v6 bool) netip.Prefix {
 
 // ExtendedIPReachEntry is one prefix in an Extended IP Reachability TLV.
 type ExtendedIPReachEntry struct {
-	Metric  uint32
-	Up      bool // false = up; true = down (leaked between levels, RFC 5305)
+	Metric uint32
+	// Down is the RFC 5305 up/down bit: true means the prefix was leaked down
+	// from a higher level (the on-wire bit is set). The zero value (false) is
+	// the common "up" case.
+	Down    bool
 	Prefix  netip.Prefix
 	SubTLVs []SubTLV
 }
@@ -130,7 +133,7 @@ func (t *ExtendedIPReachabilityTLV) Serialize() ([]byte, error) {
 		value = append(value, metric[:]...)
 
 		ctrl := byte(e.Prefix.Bits())
-		if e.Up {
+		if e.Down {
 			ctrl |= 0x80 // up/down bit
 		}
 		if len(sub) > 0 {
@@ -167,7 +170,7 @@ func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
 			return nil, fmt.Errorf("extended IP reach prefix: %w", ErrTruncated)
 		}
 		prefix := unpackPrefix(value[5:off], bits, false)
-		e := ExtendedIPReachEntry{Metric: metric, Up: ctrl&0x80 != 0, Prefix: prefix}
+		e := ExtendedIPReachEntry{Metric: metric, Down: ctrl&0x80 != 0, Prefix: prefix}
 		if ctrl&0x40 != 0 { // sub-TLV present
 			if len(value) < off+1 {
 				return nil, fmt.Errorf("extended IP reach sub-TLV length: %w", ErrTruncated)
@@ -192,8 +195,10 @@ func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
 
 // IPv6ReachEntry is one prefix in an IPv6 Reachability TLV.
 type IPv6ReachEntry struct {
-	Metric   uint32
-	Up       bool // false = up; true = down
+	Metric uint32
+	// Down is the RFC 5308 up/down bit: true means leaked down from a higher
+	// level (on-wire bit set). The zero value (false) is the common "up" case.
+	Down     bool
 	External bool // X bit
 	Prefix   netip.Prefix
 	SubTLVs  []SubTLV
@@ -226,7 +231,7 @@ func (t *IPv6ReachabilityTLV) Serialize() ([]byte, error) {
 		value = append(value, metric[:]...)
 
 		var flags byte
-		if e.Up {
+		if e.Down {
 			flags |= 0x80
 		}
 		if e.External {
@@ -266,7 +271,7 @@ func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
 		prefix := unpackPrefix(value[6:off], bits, true)
 		e := IPv6ReachEntry{
 			Metric:   metric,
-			Up:       flags&0x80 != 0,
+			Down:     flags&0x80 != 0,
 			External: flags&0x40 != 0,
 			Prefix:   prefix,
 		}

@@ -45,7 +45,7 @@ func TestExtendedIPReachabilityUpDownAndSubTLV(t *testing.T) {
 	tlv := &ExtendedIPReachabilityTLV{Prefixes: []ExtendedIPReachEntry{
 		{
 			Metric:  100,
-			Up:      true,
+			Down:    true,
 			Prefix:  netip.MustParsePrefix("203.0.113.0/24"),
 			SubTLVs: []SubTLV{&UnknownSubTLV{SubTLVType: 1, Value: []byte{0xaa, 0xbb}}},
 		},
@@ -56,7 +56,7 @@ func TestExtendedIPReachabilityUpDownAndSubTLV(t *testing.T) {
 	}
 	decoded := checkTLVRoundtrip(t, wire)[0].(*ExtendedIPReachabilityTLV)
 	e := decoded.Prefixes[0]
-	if !e.Up {
+	if !e.Down {
 		t.Error("up/down bit lost")
 	}
 	if len(e.SubTLVs) != 1 || e.SubTLVs[0].Type() != 1 {
@@ -67,7 +67,7 @@ func TestExtendedIPReachabilityUpDownAndSubTLV(t *testing.T) {
 func TestIPv6ReachabilityRoundtrip(t *testing.T) {
 	tlv := &IPv6ReachabilityTLV{Prefixes: []IPv6ReachEntry{
 		{Metric: 10, Prefix: netip.MustParsePrefix("2001:db8::/32")},
-		{Metric: 20, External: true, Up: true, Prefix: netip.MustParsePrefix("2001:db8:1:2::/64")},
+		{Metric: 20, External: true, Down: true, Prefix: netip.MustParsePrefix("2001:db8:1:2::/64")},
 		{Metric: 0, Prefix: netip.MustParsePrefix("::/0")},
 	}}
 	wire, err := tlv.Serialize()
@@ -78,7 +78,7 @@ func TestIPv6ReachabilityRoundtrip(t *testing.T) {
 	if len(decoded.Prefixes) != 3 {
 		t.Fatalf("got %d prefixes, want 3", len(decoded.Prefixes))
 	}
-	if !decoded.Prefixes[1].External || !decoded.Prefixes[1].Up {
+	if !decoded.Prefixes[1].External || !decoded.Prefixes[1].Down {
 		t.Errorf("X/U flags lost: %+v", decoded.Prefixes[1])
 	}
 	if decoded.Prefixes[2].Prefix != netip.MustParsePrefix("::/0") {
