@@ -253,7 +253,7 @@ func TestLaggedReportedAfterServerStop(t *testing.T) {
 	}
 	// Simulate a lagging drop on the Serve loop.
 	if err := s.mgmtOperation(context.Background(), func() error {
-		sub.w.lagged = true
+		sub.w.lagged.Store(true)
 		s.dropWatcher(sub.w)
 		return nil
 	}); err != nil {

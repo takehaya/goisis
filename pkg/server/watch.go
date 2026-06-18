@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -25,7 +26,10 @@ type Event struct {
 type watcher struct {
 	ch     chan Event
 	closed bool
-	lagged bool // dropped for falling behind (vs. unsubscribed/shutdown)
+	// lagged is set (before ch is closed) when the subscriber is dropped for
+	// falling behind, vs. a normal unsubscribe/shutdown. It is atomic because
+	// Subscription.Lagged may read it from the consumer goroutine.
+	lagged atomic.Bool
 }
 
 // Subscription is a handle to a WatchEvent stream.
@@ -42,18 +46,10 @@ type Subscription struct {
 // fell too far behind (as opposed to a normal unsubscribe or server stop). A
 // lagging consumer has missed events and should resubscribe.
 func (sub *Subscription) Lagged() bool {
-	lagged := false
-	if err := sub.s.mgmtOperation(context.Background(), func() error {
-		lagged = sub.w.lagged
-		return nil
-	}); err != nil {
-		// The Serve loop has stopped, so the closure did not run. A lagging
-		// drop sets w.lagged before closing the channel and never mutates it
-		// again, and the loop goroutine has fully exited, so a direct read is
-		// race-free here.
-		return sub.w.lagged
-	}
-	return lagged
+	// lagged is an atomic.Bool set before the channel is closed, so the consumer
+	// can read it directly once it observes the close — no serialization onto
+	// the Serve loop is required.
+	return sub.w.lagged.Load()
 }
 
 // Unsubscribe ends the subscription.
@@ -85,7 +81,7 @@ func (s *IsisServer) emit(ev Event) {
 		case w.ch <- ev:
 		default:
 			s.logger.Warn("dropping lagging watch subscriber")
-			w.lagged = true
+			w.lagged.Store(true)
 			s.dropWatcher(w)
 		}
 	}

@@ -8,11 +8,13 @@ import (
 )
 
 // LSP lifetime constants (ISO 10589 architectural defaults).
+//
+// goisis deliberately does not apply an RFC 7987 minimum-remaining-lifetime
+// floor to received LSPs; aging follows the advertised remaining lifetime.
 const (
-	maxAgeSeconds         = 1200 // MaxAge
-	refreshSeconds        = 900  // maximumLSPGenerationInterval
-	zeroAgeSeconds        = 60   // ZeroAgeLifetime: hold a purge this long
-	minRemainingOnReceive = 0    // RFC 7987 floor is applied to own refresh, not receive
+	maxAgeSeconds  = 1200 // MaxAge
+	refreshSeconds = 900  // maximumLSPGenerationInterval
+	zeroAgeSeconds = 60   // ZeroAgeLifetime: hold a purge this long
 )
 
 // lspEntry is one LSP in the database, owned by the Serve loop.
