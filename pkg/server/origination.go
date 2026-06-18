@@ -35,6 +35,37 @@ func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 	s.markDirty()
 }
 
+// tlvChunks splits entries into the fewest TLVs whose serialized form each
+// fits the 255-octet TLV value limit (ISO 10589; the TLV interface contract
+// requires producers to split). mk builds one TLV from a sub-slice. Without
+// this, a reachability list that overflows a single TLV would make
+// MarshalTLVs/Serialize fail and the node would originate nothing — a silent
+// black hole. Returns nil for no entries.
+func tlvChunks[E any](entries []E, mk func([]E) packet.TLV) []packet.TLV {
+	var out []packet.TLV
+	start := 0
+	for i := 0; i < len(entries); i++ {
+		// encodeTLV (via Serialize) fails once the value exceeds 255 octets.
+		if _, err := mk(entries[start : i+1]).Serialize(); err == nil {
+			continue // still fits; keep growing the chunk
+		}
+		if i == start {
+			// A single entry overflows a TLV by itself; emit it alone and let
+			// the LSP-size guard surface any resulting over-size LSP.
+			out = append(out, mk(entries[start:i+1]))
+			start = i + 1
+			continue
+		}
+		out = append(out, mk(entries[start:i])) // entries[start:i] is the largest that fit
+		start = i
+		i-- // reconsider entries[i] as the first of the next chunk
+	}
+	if start < len(entries) {
+		out = append(out, mk(entries[start:]))
+	}
+	return out
+}
+
 // regenerateNodeLSP builds fragment 0 of this node's own LSP at a level.
 func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, now time.Time) {
 	tlvs := []packet.TLV{
@@ -76,9 +107,9 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			Metric:     c.cfg.Metric,
 		})
 	}
-	if len(neighbors) > 0 {
-		tlvs = append(tlvs, &packet.ExtendedISReachabilityTLV{Neighbors: neighbors})
-	}
+	tlvs = append(tlvs, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
+		return &packet.ExtendedISReachabilityTLV{Neighbors: n}
+	})...)
 
 	// IP reachability: prefixes this node originates (TLV 135 for IPv4, 236
 	// for IPv6).
@@ -106,12 +137,12 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
 		}
 	}
-	if len(v4) > 0 {
-		tlvs = append(tlvs, &packet.ExtendedIPReachabilityTLV{Prefixes: v4})
-	}
-	if len(v6) > 0 {
-		tlvs = append(tlvs, &packet.IPv6ReachabilityTLV{Prefixes: v6})
-	}
+	tlvs = append(tlvs, tlvChunks(v4, func(e []packet.ExtendedIPReachEntry) packet.TLV {
+		return &packet.ExtendedIPReachabilityTLV{Prefixes: e}
+	})...)
+	tlvs = append(tlvs, tlvChunks(v6, func(e []packet.IPv6ReachEntry) packet.TLV {
+		return &packet.IPv6ReachabilityTLV{Prefixes: e}
+	})...)
 
 	// SRv6 Locator TLV (27): the locators with their local End SIDs.
 	if len(s.locators) > 0 {
@@ -119,7 +150,9 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		for _, lc := range s.locators {
 			locs = append(locs, lc.locatorEntry())
 		}
-		tlvs = append(tlvs, &packet.SRv6LocatorTLV{Locators: locs})
+		tlvs = append(tlvs, tlvChunks(locs, func(l []packet.SRv6Locator) packet.TLV {
+			return &packet.SRv6LocatorTLV{Locators: l}
+		})...)
 	}
 
 	att := level == packet.Level1 && s.levelCap.has(packet.Level2)
@@ -152,7 +185,9 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 		sort.Slice(neighbors, func(i, j int) bool {
 			return bytes.Compare(neighbors[i].NeighborID[:], neighbors[j].NeighborID[:]) < 0
 		})
-		tlvs := []packet.TLV{&packet.ExtendedISReachabilityTLV{Neighbors: neighbors}}
+		tlvs := tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
+			return &packet.ExtendedISReachabilityTLV{Neighbors: n}
+		})
 		s.originate(level, id, tlvs, false, forceRefresh, now)
 	}
 }
@@ -205,6 +240,14 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	if err != nil {
 		s.logger.Error("serialize own LSP", "lsp", id, "error", err)
 		return
+	}
+	// Oversize TLVs are split across multiple TLVs above, but a single LSP
+	// fragment still cannot exceed the architectural buffer; LSP fragmentation
+	// across fragment numbers (1..255) is not implemented. Surface this loudly
+	// rather than silently flooding an LSP peers will drop.
+	if len(raw) > packet.ReceiveLSPBufferSize {
+		s.logger.Error("own LSP exceeds the maximum size; peers may drop it (LSP fragmentation is not implemented)",
+			"lsp", id, "size", len(raw), "max", packet.ReceiveLSPBufferSize)
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
 	s.logger.Info("originate LSP", "level", level, "lsp", id, "seq", seq)
