@@ -30,7 +30,7 @@ A `goisis` CLI talks to the daemon over [Connect RPC](https://connectrpc.com/)
 
 > Scope: an L2 single-area MVP. Multi-topology (RFC 5120), graceful restart
 > (RFC 5306), and BFD integration are deferred; narrow metrics are parsed but
-> never originated. See the [milestones](#status).
+> never originated.
 
 ## Install
 
@@ -132,19 +132,9 @@ architecture and contributor notes.
 
 ## Status
 
-| Milestone | Scope |
-|-----------|-------|
-| M0–M1 | Scaffold, CI/CD, PDU/TLV codec (fuzzed, FRR golden) |
-| M2–M3 | Data-link + adjacency FSM, DIS election, LSP flooding, LSDB sync |
-| M4 | SPF + RIB + prefix origination + netlink FIB |
-| M5 | Connect RPC API + CLI + `WatchEvent` |
-| M6 | SRv6 locator advertisement, learning, End SID programming |
-| M7 | Flex-Algo definition, election, per-algorithm SPF |
-| M8 | Overload-on-startup, clean-shutdown purge, Prometheus metrics, HMAC-MD5/SHA authentication (hellos + LSPs/SNPs) |
-| M9 | Runtime Add/Delete of SRv6 locators & Flex-Algos (RPC + CLI), `v1` API |
-
-The management API is `v1`: read RPCs plus runtime Add/Delete of SRv6 locators
-and Flexible Algorithms, with buf breaking-change detection gating the schema.
+Working and continuously interop-tested against FRR 10.6.1: dual-stack L1/L2
+routing, SPF/RIB with a netlink FIB, SRv6 locators, Flexible Algorithm, HMAC
+authentication, route policy, and a stable `v1` Connect API + CLI.
 
 ## Naming
 
