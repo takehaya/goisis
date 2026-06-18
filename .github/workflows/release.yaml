@@ -18,15 +18,19 @@ jobs:
       releases_created: ${{ steps.release.outputs.releases_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      # Mint a GitHub App installation token. Unlike the default GITHUB_TOKEN, a
+      # release PR opened with an app token triggers CI on that PR.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.TAKEHAYA_RELEASE_PLEASE_APP_APP_ID }}
+          private-key: ${{ secrets.TAKEHAYA_RELEASE_PLEASE_APP_PRIVATE_KEY }}
       - id: release
         uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          # Plain GITHUB_TOKEN cannot trigger CI on the release PR it creates.
-          # Set RELEASE_PLEASE_TOKEN (fine-grained PAT or GitHub App token)
-          # to lift that limitation.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
   goreleaser:
     needs: release-please
