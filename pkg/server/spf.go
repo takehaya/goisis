@@ -298,6 +298,11 @@ func relax(tent map[packet.NodeID]*tentEntry, id packet.NodeID, d uint32, fh map
 }
 
 // popMin removes and returns the minimum-distance entry from tent.
+//
+// This is a linear scan (O(V) per pop, O(V^2) overall), chosen deliberately:
+// for a single-area L2 MVP the vertex count is small and the constant factors
+// beat a heap. Swap in a priority queue only if profiling on large areas shows
+// SPF as a bottleneck.
 func popMin(tent map[packet.NodeID]*tentEntry) *tentEntry {
 	var best *tentEntry
 	for _, e := range tent {

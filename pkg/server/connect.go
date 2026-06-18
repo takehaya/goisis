@@ -172,8 +172,8 @@ func (h *connectHandler) AddLocator(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
-	if err != nil && req.Msg.GetAlgorithm() != 0 {
+	algo, err := locatorAlgo(req.Msg.GetAlgorithm())
+	if err != nil {
 		return nil, err
 	}
 	if err := h.s.AddLocator(ctx, SRv6LocatorConfig{Prefix: prefix, Algo: algo}); err != nil {
@@ -246,6 +246,15 @@ func flexAlgoNumber(v uint32) (uint8, error) {
 			fmt.Errorf("algorithm %d out of Flex-Algo range (128-255)", v))
 	}
 	return uint8(v), nil
+}
+
+// locatorAlgo validates a locator's algorithm: 0 (normal SPF) or a Flexible
+// Algorithm (128-255).
+func locatorAlgo(v uint32) (uint8, error) {
+	if v == 0 {
+		return 0, nil
+	}
+	return flexAlgoNumber(v)
 }
 
 // uint8FromProto narrows a wire uint32 to uint8, rejecting overflow.

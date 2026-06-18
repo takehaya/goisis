@@ -15,6 +15,7 @@ import (
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
 	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
 	"github.com/takehaya/goisis/internal/version"
+	"github.com/takehaya/goisis/pkg/packet"
 )
 
 func main() {
@@ -327,23 +328,23 @@ func parseUint8(s string) (uint8, error) {
 func parseMetricType(s string) (uint8, error) {
 	switch s {
 	case "igp", "":
-		return 0, nil
+		return packet.FlexAlgoMetricIGP, nil
 	case "delay":
-		return 1, nil
+		return packet.FlexAlgoMetricMinDelay, nil
 	case "te":
-		return 2, nil
+		return packet.FlexAlgoMetricTE, nil
 	default:
 		return 0, fmt.Errorf("unknown metric type %q (want igp, delay, or te)", s)
 	}
 }
 
 func metricTypeStr(mt uint32) string {
-	switch mt {
-	case 0:
+	switch uint8(mt) {
+	case packet.FlexAlgoMetricIGP:
 		return "igp"
-	case 1:
+	case packet.FlexAlgoMetricMinDelay:
 		return "delay"
-	case 2:
+	case packet.FlexAlgoMetricTE:
 		return "te"
 	default:
 		return fmt.Sprintf("%d", mt)

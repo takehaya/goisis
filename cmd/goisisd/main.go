@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -39,6 +40,23 @@ func main() {
 		logger.Error("goisisd exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// nonLoopbackAPI reports whether the API listen address is reachable from off
+// the host. The Connect/gRPC API is unauthenticated plaintext h2c, so binding
+// it beyond loopback (a specific external IP, or 0.0.0.0/:: for all interfaces)
+// exposes routing state and warrants an operator warning. A hostname or an
+// unparseable address is left to the operator's judgment.
+func nonLoopbackAPI(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return !ip.IsLoopback()
 }
 
 func run(logger *slog.Logger, apiListen, configFile string) error {
@@ -91,6 +109,11 @@ func run(logger *slog.Logger, apiListen, configFile string) error {
 		Handler:     mux,
 		Protocols:   protocols,
 		BaseContext: func(net.Listener) context.Context { return reqCtx },
+	}
+
+	if nonLoopbackAPI(apiListen) {
+		logger.Warn("the management API is unauthenticated plaintext but is bound beyond loopback; anyone who can reach it can read and modify routing state",
+			"api", apiListen)
 	}
 
 	logger.Info("starting goisisd", "version", version.Version, "api", apiListen)

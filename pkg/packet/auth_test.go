@@ -121,3 +121,32 @@ func TestHMACMD5LSPZeroesVolatileFields(t *testing.T) {
 		t.Error("verify must ignore lifetime/checksum changes for an LSP")
 	}
 }
+
+// FuzzVerifyAuth exercises the receive-side authentication parser over hostile
+// bytes. VerifyAuth is a second parser over untrusted input (it locates and
+// hashes the Authentication TLV), so it must never panic regardless of content.
+// Offsets are kept in range because callers always pass a valid header length.
+func FuzzVerifyAuth(f *testing.F) {
+	seed := func(h PDU, algo AuthAlgorithm, keyID uint16, isLSP bool) {
+		raw, err := h.Serialize()
+		if err != nil {
+			return
+		}
+		off := HeaderLen(h.PDUType())
+		_ = PatchAuth(raw, off, algo, keyID, []byte("seed-key"), isLSP)
+		f.Add(raw, off, keyID, isLSP)
+	}
+	seed(&LANHello{Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30, TLVs: []TLV{AuthTLV(AuthMD5, 0)}}, AuthMD5, 0, false)
+	seed(&LANHello{Level: Level2, SourceID: SystemID{0, 0, 0, 0, 0, 2}, HoldingTime: 30, TLVs: []TLV{AuthTLV(AuthSHA256, 7)}}, AuthSHA256, 7, false)
+	seed(&LSP{Level: Level2, LSPID: LSPID{0, 0, 0, 0, 0, 1, 0, 0}, SequenceNumber: 1, ISType: 2, TLVs: []TLV{AuthTLV(AuthMD5, 0)}}, AuthMD5, 0, true)
+
+	algos := []AuthAlgorithm{AuthMD5, AuthSHA1, AuthSHA256, AuthSHA384, AuthSHA512}
+	f.Fuzz(func(t *testing.T, pdu []byte, off int, keyID uint16, isLSP bool) {
+		if off < 0 || off > len(pdu) {
+			return // callers always pass an in-range header offset
+		}
+		for _, algo := range algos {
+			_ = VerifyAuth(pdu, off, algo, keyID, []byte("k"), isLSP)
+		}
+	})
+}
