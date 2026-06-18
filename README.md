@@ -130,17 +130,6 @@ FRR interop and golden-fixture capture (`test/interop`, `test/fixturegen`)
 require `docker` and root; they run in CI. See [CLAUDE.md](CLAUDE.md) for the
 architecture and contributor notes.
 
-## Status
-
-Working and continuously interop-tested against FRR 10.6.1: dual-stack L1/L2
-routing, SPF/RIB with a netlink FIB, SRv6 locators, Flexible Algorithm, HMAC
-authentication, route policy, and a stable `v1` Connect API + CLI.
-
-## Naming
-
-Unrelated to [choppsv1/goisis](https://github.com/choppsv1/goisis); the module
-path is `github.com/takehaya/goisis`.
-
 ## License
 
 Apache-2.0

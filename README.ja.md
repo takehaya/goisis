@@ -130,17 +130,6 @@ FRR 相互運用と golden フィクスチャ採取(`test/interop`、`test/fixtu
 `docker` と root が必要で、CI で実行されます。アーキテクチャと貢献メモは
 [CLAUDE.md](CLAUDE.md) を参照してください。
 
-## 状況
-
-FRR 10.6.1 と常時相互運用テスト済みで動作します: デュアルスタック L1/L2 ルーティング、
-SPF/RIB と netlink FIB、SRv6 locator、Flexible Algorithm、HMAC 認証、経路ポリシー、
-安定版 `v1` Connect API + CLI。
-
-## 名前について
-
-[choppsv1/goisis](https://github.com/choppsv1/goisis) とは無関係です。モジュール
-パスは `github.com/takehaya/goisis` です。
-
 ## ライセンス
 
 Apache-2.0
