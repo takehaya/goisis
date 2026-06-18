@@ -52,13 +52,13 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	id := lsp.LSPID
 
 	// Discard a corrupted-but-decodable LSP rather than store or forward it
-	// (ISO 10589 7.3.14.2). A purge legitimately carries a zero checksum and
-	// is exempt.
-	if lsp.RemainingTime != 0 {
-		if valid, err := lsp.ChecksumValid(); err != nil || !valid {
-			s.logger.Debug("drop LSP with invalid checksum", "circuit", c.cfg.Name, "lsp", id)
-			return
-		}
+	// (ISO 10589 7.3.14.2). Validate the Fletcher checksum over the bytes as
+	// received — not a re-serialization of the decoded TLVs, which would couple
+	// validity to byte-exact round-trip. A purge legitimately carries a zero
+	// checksum and is exempt.
+	if lsp.RemainingTime != 0 && !packet.LSPChecksumValidRaw(raw) {
+		s.logger.Debug("drop LSP with invalid checksum", "circuit", c.cfg.Name, "lsp", id)
+		return
 	}
 
 	ex := db.get(id)

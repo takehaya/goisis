@@ -72,6 +72,43 @@ func TestLSPChecksumDetectsCorruption(t *testing.T) {
 	}
 }
 
+func TestLSPChecksumValidRaw(t *testing.T) {
+	in := &LSP{
+		Level:          Level2,
+		RemainingTime:  1199,
+		LSPID:          LSPID{0, 0, 0, 0, 0, 1, 0, 0},
+		SequenceNumber: 7,
+		ISType:         3,
+		TLVs: []TLV{
+			&AreaAddressesTLV{Addresses: []AreaAddress{{0x49, 0x00, 0x01}}},
+			&ExtendedIPReachabilityTLV{Prefixes: []ExtendedIPReachEntry{
+				{Metric: 10, Prefix: netip.MustParsePrefix("192.0.2.0/24")},
+			}},
+		},
+	}
+	wire, err := in.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	// The receive-path check accepts the bytes exactly as produced on the wire.
+	if !LSPChecksumValidRaw(wire) {
+		t.Errorf("valid LSP rejected by LSPChecksumValidRaw")
+	}
+	// Corrupting a TLV byte (after the checksum field) must be detected.
+	corrupt := append([]byte(nil), wire...)
+	corrupt[len(corrupt)-1] ^= 0xff
+	if LSPChecksumValidRaw(corrupt) {
+		t.Errorf("corrupted LSP accepted by LSPChecksumValidRaw")
+	}
+	// Too-short input is rejected, not panicked on (hostile-input guard).
+	if LSPChecksumValidRaw(wire[:10]) {
+		t.Errorf("truncated buffer accepted by LSPChecksumValidRaw")
+	}
+	if LSPChecksumValidRaw(nil) {
+		t.Errorf("nil accepted by LSPChecksumValidRaw")
+	}
+}
+
 func TestLSPFlagsAllBits(t *testing.T) {
 	in := &LSP{
 		Level:          Level2,

@@ -123,9 +123,30 @@ func decodeLSP(level Level, h commonHeader, b []byte) (PDU, error) {
 	return p, nil
 }
 
+// LSPChecksumValidRaw reports whether a received LSP's Fletcher checksum
+// verifies against its on-wire bytes. Unlike (*LSP).ChecksumValid — which
+// re-serializes the decoded TLVs and so couples validity to byte-exact
+// round-trip — this checks the bytes exactly as received. The receive path MUST
+// use this: re-serialization can reject a peer's valid-but-non-canonical
+// encoding, or pass a corrupt-but-decodable TLV area. raw is the full LSP PDU
+// trimmed to its declared length. A purge (zero remaining lifetime) carries a
+// zero checksum and must be exempted by the caller.
+func LSPChecksumValidRaw(raw []byte) bool {
+	if len(raw) < lspHeaderLen {
+		return false
+	}
+	// The checksum covers from the LSP ID (PDU offset 12) to the end, with the
+	// checksum octets (offset 24:26) in place.
+	return fletcherValid(raw[12:])
+}
+
 // ChecksumValid reports whether the LSP's on-wire checksum verifies. A purge
 // (remaining lifetime zero, body stripped) carries a zero checksum and is
 // not subject to this check by the caller.
+//
+// This re-serializes the decoded TLVs, so it is only meaningful for an LSP
+// goisis itself built or that round-trips byte-exactly. For the receive path,
+// use LSPChecksumValidRaw against the wire bytes instead.
 func (p *LSP) ChecksumValid() (bool, error) {
 	b, err := p.serializeWithChecksum(p.checksum)
 	if err != nil {
