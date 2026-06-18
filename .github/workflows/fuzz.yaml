@@ -28,7 +28,7 @@ jobs:
         run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m ./pkg/packet/
       - name: Upload crashers
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-corpus-${{ matrix.target }}
           path: pkg/packet/testdata/fuzz/
