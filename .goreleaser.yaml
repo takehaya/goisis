@@ -33,10 +33,21 @@ builds:
       - -s -w -X github.com/takehaya/goisis/internal/version.Version={{.Version}}
 
 archives:
-  - id: default
+  # One archive per binary so each has a consistent binary count across
+  # platforms (goisisd is Linux-only; goisis is cross-platform). A single
+  # archive of both fails: linux would carry two binaries, darwin one.
+  - id: goisisd
+    ids:
+      - goisisd
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "goisisd_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: goisis
+    ids:
+      - goisis
+    formats:
+      - tar.gz
+    name_template: "goisis_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt
