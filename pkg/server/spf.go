@@ -55,30 +55,47 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 	if db == nil {
 		return nil
 	}
+	live := func(e *lspEntry, now time.Time) bool {
+		return e.purgedAt.IsZero() && e.remaining(now) != 0
+	}
+
+	// Pass 1: admit a node from its fragment-0 LSP, which carries the node's
+	// header flags (overload) and, for a Flex-Algo, its SR-Algorithm
+	// participation (Router Capability TLV 242, fragment 0). A node with no
+	// live fragment 0 is not in the topology.
 	nodes := map[packet.NodeID]*spfNode{}
+	have := map[packet.NodeID]map[netip.Prefix]bool{} // plain IP reach, for prefer-prefix-reachability
+	var locs []struct {
+		nid packet.NodeID
+		p   spfPrefix
+	}
 	for id, e := range db.entries {
-		if !e.purgedAt.IsZero() || e.remaining(now) == 0 {
-			continue // purged or expired
-		}
-		if id.FragmentID() != 0 {
-			continue // only fragment 0 carries the node's edges/flags (M4)
-		}
-		nid := id.NodeID()
-		// Flex-Algo prunes real nodes that do not participate in the algorithm;
-		// pseudonodes represent a LAN and are always kept as transit.
-		if algo != 0 && nid.PseudonodeID() == 0 && !lspParticipatesInAlgo(e, algo) {
+		if id.FragmentID() != 0 || !live(e, now) {
 			continue
 		}
-		n := &spfNode{id: nid, overload: e.lsp.Overload}
-		// have tracks prefixes advertised as plain IP reachability (TLV
-		// 135/236) so an SRv6 locator (TLV 27) for the same prefix is not
-		// added twice; prefix reachability wins (RFC 9352). Prefixes are
-		// masked to their bit length so the dedup key, the RIB key, and the
-		// masked prefix the FIB installs all agree (a peer may leave host bits
-		// set in a non-byte-aligned prefix; the startup sweep keys on the
-		// masked kernel prefix and would otherwise reap our own routes).
-		have := map[netip.Prefix]bool{}
-		var locPrefixes []spfPrefix
+		nid := id.NodeID()
+		if algo != 0 && nid.PseudonodeID() == 0 && !lspParticipatesInAlgo(e, algo) {
+			continue // Flex-Algo prunes non-participating real nodes (pseudonodes are transit)
+		}
+		nodes[nid] = &spfNode{id: nid, overload: e.lsp.Overload}
+		have[nid] = map[netip.Prefix]bool{}
+	}
+
+	// Pass 2: accumulate edges and prefixes from EVERY fragment of an admitted
+	// node (a large node splits its reachability across fragments 1..255).
+	// Prefixes are masked to their bit length so the dedup key, the RIB key, and
+	// the masked prefix the FIB installs all agree (a peer may leave host bits
+	// set in a non-byte-aligned prefix; the startup sweep keys on the masked
+	// kernel prefix and would otherwise reap our own routes).
+	for id, e := range db.entries {
+		if !live(e, now) {
+			continue
+		}
+		nid := id.NodeID()
+		n := nodes[nid]
+		if n == nil {
+			continue // node not admitted (no live fragment 0, or Flex-Algo-pruned)
+		}
 		for _, tlv := range e.lsp.TLVs {
 			switch t := tlv.(type) {
 			case *packet.ExtendedISReachabilityTLV:
@@ -95,7 +112,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
 						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
-						have[pfx] = true
+						have[nid][pfx] = true
 					}
 				}
 			case *packet.IPv6ReachabilityTLV:
@@ -106,25 +123,28 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
 						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
-						have[pfx] = true
+						have[nid][pfx] = true
 					}
 				}
 			case *packet.SRv6LocatorTLV:
 				for _, loc := range t.Locators {
 					if loc.Algorithm == algo && loc.Metric < maxPathMetric {
-						locPrefixes = append(locPrefixes, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric})
+						locs = append(locs, struct {
+							nid packet.NodeID
+							p   spfPrefix
+						}{nid, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric}})
 					}
 				}
 			}
 		}
-		// Add SRv6 locator prefixes the node didn't also advertise as plain IP
-		// reachability (prefer-prefix-reachability rule).
-		for _, lp := range locPrefixes {
-			if !have[lp.prefix] {
-				n.prefixes = append(n.prefixes, lp)
-			}
+	}
+
+	// Add SRv6 locator prefixes a node didn't also advertise as plain IP
+	// reachability (prefer-prefix-reachability rule, RFC 9352).
+	for _, l := range locs {
+		if !have[l.nid][l.p.prefix] {
+			nodes[l.nid].prefixes = append(nodes[l.nid].prefixes, l.p)
 		}
-		nodes[nid] = n
 	}
 	return nodes
 }

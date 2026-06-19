@@ -66,21 +66,24 @@ func tlvChunks[E any](entries []E, mk func([]E) packet.TLV) []packet.TLV {
 	return out
 }
 
-// regenerateNodeLSP builds fragment 0 of this node's own LSP at a level.
+// regenerateNodeLSP builds this node's own LSP at a level, fragmenting it
+// across fragment numbers 1..255 when the TLVs exceed one LSP.
 func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, now time.Time) {
-	tlvs := []packet.TLV{
+	// Fixed TLVs stay in fragment 0: area addresses, supported protocols, the
+	// dynamic hostname, and the Router Capability TLV (SRv6 / Flex-Algo).
+	fixed := []packet.TLV{
 		&packet.AreaAddressesTLV{Addresses: s.areaAddrs},
 		&packet.ProtocolsSupportedTLV{NLPIDs: []byte{packet.NLPIDIPv4, packet.NLPIDIPv6}},
 	}
 	if s.hostname != "" {
-		tlvs = append(tlvs, &packet.DynamicHostnameTLV{Hostname: s.hostname})
+		fixed = append(fixed, &packet.DynamicHostnameTLV{Hostname: s.hostname})
+	}
+	if caps := s.routerCapabilitySubTLVs(); len(caps) > 0 {
+		fixed = append(fixed, &packet.RouterCapabilityTLV{RouterID: s.routerID(), SubTLVs: caps})
 	}
 
-	// Router Capability TLV (242): SRv6 capability and/or Flex-Algo
-	// participation + definitions.
-	if caps := s.routerCapabilitySubTLVs(); len(caps) > 0 {
-		tlvs = append(tlvs, &packet.RouterCapabilityTLV{RouterID: s.routerID(), SubTLVs: caps})
-	}
+	// Variable TLVs may spill into fragments 1..255.
+	var variable []packet.TLV
 
 	// IS reachability: on a broadcast circuit point at the DIS pseudonode;
 	// on p2p point directly at the neighbor.
@@ -107,7 +110,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			Metric:     c.cfg.Metric,
 		})
 	}
-	tlvs = append(tlvs, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
+	variable = append(variable, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
 		return &packet.ExtendedISReachabilityTLV{Neighbors: n}
 	})...)
 
@@ -137,10 +140,10 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
 		}
 	}
-	tlvs = append(tlvs, tlvChunks(v4, func(e []packet.ExtendedIPReachEntry) packet.TLV {
+	variable = append(variable, tlvChunks(v4, func(e []packet.ExtendedIPReachEntry) packet.TLV {
 		return &packet.ExtendedIPReachabilityTLV{Prefixes: e}
 	})...)
-	tlvs = append(tlvs, tlvChunks(v6, func(e []packet.IPv6ReachEntry) packet.TLV {
+	variable = append(variable, tlvChunks(v6, func(e []packet.IPv6ReachEntry) packet.TLV {
 		return &packet.IPv6ReachabilityTLV{Prefixes: e}
 	})...)
 
@@ -150,13 +153,13 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		for _, lc := range s.locators {
 			locs = append(locs, lc.locatorEntry())
 		}
-		tlvs = append(tlvs, tlvChunks(locs, func(l []packet.SRv6Locator) packet.TLV {
+		variable = append(variable, tlvChunks(locs, func(l []packet.SRv6Locator) packet.TLV {
 			return &packet.SRv6LocatorTLV{Locators: l}
 		})...)
 	}
 
 	att := level == packet.Level1 && s.levelCap.has(packet.Level2)
-	s.originate(level, lspID(s.systemID, 0), tlvs, att, forceRefresh, now)
+	s.originateFragmented(level, 0, fixed, variable, att, forceRefresh, now)
 }
 
 // regeneratePseudonodeLSPs originates (or purges) this node's pseudonode LSPs
@@ -166,12 +169,9 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 		if c.cfg.P2P {
 			continue
 		}
-		id := lspID(s.systemID, c.pseudonodeID)
 		if !c.isDIS(level, s.systemID) {
-			// We are not DIS here: purge any pseudonode LSP we own.
-			if e := s.dbs[level].get(id); e != nil && e.own && e.purgedAt.IsZero() {
-				s.purgeOwn(level, id, now)
-			}
+			// We are not DIS here: purge every pseudonode LSP fragment we own.
+			s.purgeStaleFragments(level, c.pseudonodeID, 0, now)
 			continue
 		}
 		// Members: ourselves plus every Up adjacency, all at metric 0. Sort
@@ -185,10 +185,96 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 		sort.Slice(neighbors, func(i, j int) bool {
 			return bytes.Compare(neighbors[i].NeighborID[:], neighbors[j].NeighborID[:]) < 0
 		})
-		tlvs := tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
+		variable := tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
 			return &packet.ExtendedISReachabilityTLV{Neighbors: n}
 		})
-		s.originate(level, id, tlvs, false, forceRefresh, now)
+		s.originateFragmented(level, c.pseudonodeID, nil, variable, false, forceRefresh, now)
+	}
+}
+
+// originateFragmented splits a node's (or pseudonode's) TLV set across LSP
+// fragments so each fragment fits the architectural buffer, originates each, and
+// purges any higher-numbered fragments left over from a larger prior
+// origination. The fixed TLVs stay in fragment 0; att and the overload bit
+// apply to fragment 0 only.
+func (s *IsisServer) originateFragmented(level packet.Level, pseudonode uint8, fixed, variable []packet.TLV, att, forceRefresh bool, now time.Time) {
+	// Reserve the LSP header and, when the level is authenticated, the
+	// Authentication TLV that originate appends to each fragment.
+	budget := packet.ReceiveLSPBufferSize - packet.HeaderLen(packet.PDUTypeL2LSP)
+	if spec := s.authKey(level); spec.on() {
+		budget -= tlvLen(authTLVPlaceholder(spec))
+	}
+
+	frags := packLSPFragments(fixed, variable, budget)
+	for n, ftlvs := range frags {
+		if n > 255 {
+			s.logger.Error("LSP needs more than 256 fragments; truncating",
+				"system_id", s.systemID, "pseudonode", pseudonode)
+			break
+		}
+		id := lspIDFrag(s.systemID, pseudonode, uint8(n)) //nolint:gosec // bounded by the n > 255 guard
+		s.originate(level, id, ftlvs, att && n == 0, forceRefresh, now)
+	}
+	count := len(frags)
+	if count > 256 {
+		count = 256
+	}
+	s.purgeStaleFragments(level, pseudonode, count, now)
+}
+
+// packLSPFragments distributes TLVs across fragments whose serialized TLV area
+// each fits budget. fixed TLVs occupy fragment 0; variable TLVs fill fragment 0
+// and spill into further fragments in order. Always returns at least one
+// fragment.
+func packLSPFragments(fixed, variable []packet.TLV, budget int) [][]packet.TLV {
+	frags := [][]packet.TLV{append([]packet.TLV(nil), fixed...)}
+	size := tlvsLen(fixed)
+	cur := 0
+	for _, t := range variable {
+		ts := tlvLen(t)
+		if size+ts > budget && len(frags[cur]) > 0 {
+			frags = append(frags, nil)
+			cur++
+			size = 0
+		}
+		frags[cur] = append(frags[cur], t)
+		size += ts
+	}
+	return frags
+}
+
+func tlvLen(t packet.TLV) int {
+	b, err := t.Serialize()
+	if err != nil {
+		return packet.ReceiveLSPBufferSize // force it onto its own fragment
+	}
+	return len(b)
+}
+
+func tlvsLen(tlvs []packet.TLV) int {
+	n := 0
+	for _, t := range tlvs {
+		n += tlvLen(t)
+	}
+	return n
+}
+
+// purgeStaleFragments purges this node's own LSP fragments numbered >= keep for
+// the given pseudonode — fragments left behind when the TLV set shrank, or all
+// fragments (keep == 0) when relinquishing a pseudonode.
+func (s *IsisServer) purgeStaleFragments(level packet.Level, pseudonode uint8, keep int, now time.Time) {
+	db := s.dbs[level]
+	for id, e := range db.entries {
+		if !e.own || !e.purgedAt.IsZero() {
+			continue
+		}
+		nid := id.NodeID()
+		if nid.SystemID() != s.systemID || nid.PseudonodeID() != pseudonode {
+			continue
+		}
+		if int(id.FragmentID()) >= keep {
+			s.purgeOwn(level, id, now)
+		}
 	}
 }
 
@@ -198,8 +284,9 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packet.TLV, att, forceRefresh bool, now time.Time) {
 	db := s.dbs[level]
 	ex := db.get(id)
-	// The overload bit applies to this node's own LSP, not to pseudonode LSPs.
-	overload := id.IsNodeLSP() && s.overloaded(now)
+	// The overload bit applies to fragment 0 of this node's own LSP, not to
+	// pseudonode LSPs or higher fragments (SPF reads it from fragment 0).
+	overload := id.IsNodeLSP() && id.FragmentID() == 0 && s.overloaded(now)
 
 	// Carry an HMAC-MD5 Authentication TLV (zeroed; filled by serializeLSP) when
 	// the level is authenticated. It is part of the content-unchanged check, so
@@ -241,12 +328,11 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 		s.logger.Error("serialize own LSP", "lsp", id, "error", err)
 		return
 	}
-	// Oversize TLVs are split across multiple TLVs above, but a single LSP
-	// fragment still cannot exceed the architectural buffer; LSP fragmentation
-	// across fragment numbers (1..255) is not implemented. Surface this loudly
-	// rather than silently flooding an LSP peers will drop.
+	// originateFragmented keeps each fragment within the buffer; reaching here
+	// means a single fragment's fixed TLVs plus one variable TLV still overflow
+	// (pathological). Surface it loudly rather than flooding an LSP peers drop.
 	if len(raw) > packet.ReceiveLSPBufferSize {
-		s.logger.Error("own LSP exceeds the maximum size; peers may drop it (LSP fragmentation is not implemented)",
+		s.logger.Error("own LSP fragment exceeds the maximum size; peers may drop it",
 			"lsp", id, "size", len(raw), "max", packet.ReceiveLSPBufferSize)
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
@@ -313,10 +399,15 @@ func (s *IsisServer) routerID() netip.Addr {
 }
 
 // lspID builds a fragment-0 LSP ID from a system ID and pseudonode octet.
-// goisis originates only fragment 0 today; LSP fragmentation is future work.
 func lspID(id packet.SystemID, pseudonode uint8) packet.LSPID {
+	return lspIDFrag(id, pseudonode, 0)
+}
+
+// lspIDFrag builds an LSP ID for a specific fragment number.
+func lspIDFrag(id packet.SystemID, pseudonode, fragment uint8) packet.LSPID {
 	var l packet.LSPID
 	copy(l[:6], id[:])
 	l[6] = pseudonode
+	l[7] = fragment
 	return l
 }
