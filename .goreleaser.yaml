@@ -8,9 +8,11 @@ builds:
     binary: goisisd
     env:
       - CGO_ENABLED=0
+    # The daemon is Linux-only: it opens AF_PACKET sockets and programs the
+    # netlink FIB (pkg/config references unix.RT_TABLE_MAIN / fib.NewNetlink).
+    # The CLI below stays cross-platform.
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64
