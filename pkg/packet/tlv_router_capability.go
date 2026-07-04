@@ -77,12 +77,10 @@ func (s *SRv6CapabilitiesSubTLV) Type() uint8 { return subTLVSRv6Capabilities }
 
 // Serialize implements SubTLV.
 func (s *SRv6CapabilitiesSubTLV) Serialize() ([]byte, error) {
-	if len(s.SubSubTLVs) > 253 {
-		return nil, fmt.Errorf("SRv6 capabilities: %w: %d octets of sub-sub-TLVs", ErrTooLong, len(s.SubSubTLVs))
-	}
-	out := make([]byte, 0, 4+len(s.SubSubTLVs))
-	out = append(out, subTLVSRv6Capabilities, byte(2+len(s.SubSubTLVs)), byte(s.Flags>>8), byte(s.Flags))
-	return append(out, s.SubSubTLVs...), nil
+	value := make([]byte, 0, 2+len(s.SubSubTLVs))
+	value = append(value, byte(s.Flags>>8), byte(s.Flags))
+	value = append(value, s.SubSubTLVs...)
+	return encodeSubTLV(subTLVSRv6Capabilities, value)
 }
 
 func decodeSRv6Capabilities(value []byte) (SubTLV, error) {

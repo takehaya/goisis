@@ -104,28 +104,39 @@ func HeaderLen(t PDUType) int {
 
 // authDigestRange locates the HMAC digest inside a serialized PDU's
 // Authentication TLV matching algo (and, for the SHA family, keyID). tlvOffset
-// is where the TLV area begins. It returns the digest's byte range.
+// is where the TLV area begins. It returns the digest's byte range. A PDU
+// carries exactly one Authentication TLV (RFC 5304), so if more than one is
+// present — whatever their contents — the PDU is reported as having no valid
+// digest: duplicates are a parser-differential surface (another implementation
+// may pick a different instance) and must be dropped.
 func authDigestRange(pdu []byte, tlvOffset int, algo AuthAlgorithm, keyID uint16) (start, end int, ok bool) {
 	at := byte(algo.authType())
 	dl := algo.digestLen()
+	seen := false
 	for i := tlvOffset; i+2 <= len(pdu); {
 		typ, l := pdu[i], int(pdu[i+1])
 		if i+2+l > len(pdu) {
 			break
 		}
 		v := i + 2 // value start: the auth-type byte
-		if TLVType(typ) == TLVTypeAuthentication && l >= 1 && pdu[v] == at {
-			if algo == AuthMD5 {
-				if l == 1+dl {
-					return v + 1, v + 1 + dl, true
+		if TLVType(typ) == TLVTypeAuthentication {
+			if seen {
+				return 0, 0, false // duplicate Authentication TLV
+			}
+			seen = true
+			if l >= 1 && pdu[v] == at {
+				if algo == AuthMD5 {
+					if l == 1+dl {
+						start, end, ok = v+1, v+1+dl, true
+					}
+				} else if l == 3+dl && uint16(pdu[v+1])<<8|uint16(pdu[v+2]) == keyID {
+					start, end, ok = v+3, v+3+dl, true
 				}
-			} else if l == 3+dl && uint16(pdu[v+1])<<8|uint16(pdu[v+2]) == keyID {
-				return v + 3, v + 3 + dl, true
 			}
 		}
 		i += 2 + l
 	}
-	return 0, 0, false
+	return start, end, ok
 }
 
 // hmacOver computes the HMAC over pdu with the digest field (and, for an LSP,
@@ -183,6 +194,8 @@ func FinalizeLSPAuth(pdu []byte, algo AuthAlgorithm, keyID uint16, key []byte) e
 	if err := PatchAuth(pdu, lspHeaderLen, algo, keyID, key, true); err != nil {
 		return err
 	}
+	// hmacOver zeroed the checksum only in its private copy, so pdu still
+	// holds the now-stale checksum; clear it before the Fletcher recompute.
 	pdu[24], pdu[25] = 0, 0
 	sum := fletcherChecksum(pdu[12:], 12)
 	binary.BigEndian.PutUint16(pdu[24:26], sum)

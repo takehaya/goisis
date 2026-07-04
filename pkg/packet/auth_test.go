@@ -96,6 +96,60 @@ func TestVerifyHMACMD5IgnoresDataLinkPadding(t *testing.T) {
 	}
 }
 
+func TestVerifyAuthRejectsDuplicateAuthTLV(t *testing.T) {
+	// RFC 5304: a PDU carries exactly one Authentication TLV. Duplicates are a
+	// parser-differential surface (another implementation may authenticate
+	// against a different instance), so both patching and verification must
+	// refuse them regardless of which TLV would match.
+	key := []byte("s3cret")
+
+	// Two Authentication TLVs baked into the PDU: even though the digest of
+	// the first would cover both, patch and verify must refuse outright.
+	h := &LANHello{
+		Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
+		TLVs: []TLV{
+			AuthTLV(AuthMD5, 0),
+			&UnknownTLV{TLVType: TLVTypeAuthentication, Value: append([]byte{byte(AuthTypeHMACMD5)}, make([]byte, 16)...)},
+		},
+	}
+	raw, err := h.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	off := HeaderLen(h.PDUType())
+	if err := PatchHMACMD5(raw, off, key, false); err == nil {
+		t.Error("PatchHMACMD5 must refuse a PDU with two Authentication TLVs")
+	}
+	if VerifyHMACMD5(raw, off, key, false) {
+		t.Error("verify must fail for a PDU with two Authentication TLVs")
+	}
+
+	// A validly authenticated PDU with a second Authentication TLV appended
+	// after the fact must fail verification too.
+	h2 := &LANHello{
+		Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
+		TLVs: []TLV{AuthTLV(AuthMD5, 0)},
+	}
+	raw2, err := h2.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	if err := PatchHMACMD5(raw2, off, key, false); err != nil {
+		t.Fatalf("PatchHMACMD5: %v", err)
+	}
+	if !VerifyHMACMD5(raw2, off, key, false) {
+		t.Fatal("verify failed before appending the duplicate")
+	}
+	dup, err := AuthTLV(AuthMD5, 0).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize duplicate auth TLV: %v", err)
+	}
+	raw2 = append(raw2, dup...)
+	if VerifyHMACMD5(raw2, off, key, false) {
+		t.Error("verify must fail after appending a second Authentication TLV")
+	}
+}
+
 func TestHMACMD5LSPZeroesVolatileFields(t *testing.T) {
 	lsp := &LSP{
 		Level: Level2, RemainingTime: 1000, LSPID: LSPID{0, 0, 0, 0, 0, 1, 0, 0}, SequenceNumber: 5, ISType: 2,
@@ -139,6 +193,9 @@ func FuzzVerifyAuth(f *testing.F) {
 	seed(&LANHello{Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30, TLVs: []TLV{AuthTLV(AuthMD5, 0)}}, AuthMD5, 0, false)
 	seed(&LANHello{Level: Level2, SourceID: SystemID{0, 0, 0, 0, 0, 2}, HoldingTime: 30, TLVs: []TLV{AuthTLV(AuthSHA256, 7)}}, AuthSHA256, 7, false)
 	seed(&LSP{Level: Level2, LSPID: LSPID{0, 0, 0, 0, 0, 1, 0, 0}, SequenceNumber: 1, ISType: 2, TLVs: []TLV{AuthTLV(AuthMD5, 0)}}, AuthMD5, 0, true)
+	// Duplicate Authentication TLV: RFC 5304 allows exactly one, so this must
+	// be rejected — and, above all, never panic.
+	seed(&LANHello{Level: Level1, SourceID: SystemID{0, 0, 0, 0, 0, 3}, HoldingTime: 30, TLVs: []TLV{AuthTLV(AuthMD5, 0), AuthTLV(AuthMD5, 0)}}, AuthMD5, 0, false)
 
 	algos := []AuthAlgorithm{AuthMD5, AuthSHA1, AuthSHA256, AuthSHA384, AuthSHA512}
 	f.Fuzz(func(t *testing.T, pdu []byte, off int, keyID uint16, isLSP bool) {
