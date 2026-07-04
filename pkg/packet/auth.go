@@ -118,23 +118,26 @@ func authDigestRange(pdu []byte, tlvOffset int, algo AuthAlgorithm, keyID uint16
 		if i+2+l > len(pdu) {
 			break
 		}
-		v := i + 2 // value start: the auth-type byte
-		if TLVType(typ) == TLVTypeAuthentication {
-			if seen {
-				return 0, 0, false // duplicate Authentication TLV
-			}
-			seen = true
-			if l >= 1 && pdu[v] == at {
-				if algo == AuthMD5 {
-					if l == 1+dl {
-						start, end, ok = v+1, v+1+dl, true
-					}
-				} else if l == 3+dl && uint16(pdu[v+1])<<8|uint16(pdu[v+2]) == keyID {
-					start, end, ok = v+3, v+3+dl, true
-				}
-			}
+		next := i + 2 + l
+		if TLVType(typ) != TLVTypeAuthentication {
+			i = next
+			continue
 		}
-		i += 2 + l
+		if seen {
+			return 0, 0, false // duplicate Authentication TLV
+		}
+		seen = true
+		v := i + 2 // value start: the auth-type byte
+		switch {
+		case l < 1 || pdu[v] != at:
+			// Wrong auth type for our algorithm: no digest here, but keep
+			// scanning so a duplicate later in the area is still rejected.
+		case algo == AuthMD5 && l == 1+dl:
+			start, end, ok = v+1, v+1+dl, true
+		case algo != AuthMD5 && l == 3+dl && uint16(pdu[v+1])<<8|uint16(pdu[v+2]) == keyID:
+			start, end, ok = v+3, v+3+dl, true
+		}
+		i = next
 	}
 	return start, end, ok
 }

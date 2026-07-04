@@ -49,6 +49,12 @@ type Config struct {
 	// defense-in-depth guard against LSDB exhaustion; zero or negative
 	// disables the cap. Size it well above the legitimate area's LSP count.
 	LSDBEntryLimit int `yaml:"lsdb-entry-limit"`
+	// OpenCircuit, when non-nil, replaces how Options opens each circuit's
+	// transport and reads its hello source addresses — the only impure part
+	// of Options (the default opens an AF_PACKET socket on the interface).
+	// Instance-scoped so tests and embedders can supply mock transports; not
+	// part of the YAML schema.
+	OpenCircuit func(ifname string) (tr datalink.Transport, v4, v6 []netip.Addr, err error) `yaml:"-"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
@@ -223,8 +229,12 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		}
 		opts = append(opts, server.WithDomainAuth(server.AuthConfig{Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword}))
 	}
+	open := c.OpenCircuit
+	if open == nil {
+		open = defaultOpenCircuit
+	}
 	for _, cc := range c.Circuits {
-		cfg, err := cc.circuit()
+		cfg, err := cc.circuit(open)
 		if err != nil {
 			return nil, err
 		}
@@ -276,11 +286,9 @@ func connectedPrefixes(name string) []netip.Prefix {
 	return out
 }
 
-// openCircuit opens the AF_PACKET transport for a circuit's interface and
-// reads its hello source addresses — the only impure part of Options. It is a
-// package variable so tests can substitute mock transports and synthetic
-// addresses.
-var openCircuit = func(ifname string) (tr datalink.Transport, v4, v6 []netip.Addr, err error) {
+// defaultOpenCircuit opens the AF_PACKET transport for a circuit's interface
+// and reads its hello source addresses. Config.OpenCircuit overrides it.
+func defaultOpenCircuit(ifname string) (tr datalink.Transport, v4, v6 []netip.Addr, err error) {
 	tr, err = datalink.OpenLinux(ifname)
 	if err != nil {
 		return nil, nil, nil, err
@@ -289,7 +297,7 @@ var openCircuit = func(ifname string) (tr datalink.Transport, v4, v6 []netip.Add
 	return tr, v4, v6, nil
 }
 
-func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
+func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error)) (server.CircuitConfig, error) {
 	l1, l2, err := levels(cc.Level)
 	if err != nil {
 		return server.CircuitConfig{}, fmt.Errorf("circuit %q: %w", cc.Interface, err)
@@ -298,7 +306,7 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 	if err != nil {
 		return server.CircuitConfig{}, fmt.Errorf("circuit %q hello-auth-algorithm: %w", cc.Interface, err)
 	}
-	tr, v4, v6, err := openCircuit(cc.Interface)
+	tr, v4, v6, err := open(cc.Interface)
 	if err != nil {
 		return server.CircuitConfig{}, err
 	}

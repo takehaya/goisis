@@ -168,18 +168,17 @@ func (t *ExtendedIPReachabilityTLV) Serialize() ([]byte, error) {
 }
 
 func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
-	entries, err := decodePrefixReach(value, false)
-	if err != nil {
-		return nil, err
-	}
 	tlv := &ExtendedIPReachabilityTLV{}
-	for _, e := range entries {
+	err := decodePrefixReach(value, false, func(e prefixReachEntry) {
 		tlv.Prefixes = append(tlv.Prefixes, ExtendedIPReachEntry{
 			Metric:  e.metric,
 			Down:    e.down,
 			Prefix:  e.prefix,
 			SubTLVs: e.subTLVs,
 		})
+	})
+	if err != nil {
+		return nil, err
 	}
 	return tlv, nil
 }
@@ -243,12 +242,8 @@ func (t *IPv6ReachabilityTLV) Serialize() ([]byte, error) {
 }
 
 func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
-	entries, err := decodePrefixReach(value, true)
-	if err != nil {
-		return nil, err
-	}
 	tlv := &IPv6ReachabilityTLV{}
-	for _, e := range entries {
+	err := decodePrefixReach(value, true, func(e prefixReachEntry) {
 		tlv.Prefixes = append(tlv.Prefixes, IPv6ReachEntry{
 			Metric:   e.metric,
 			Down:     e.down,
@@ -256,6 +251,9 @@ func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
 			Prefix:   e.prefix,
 			SubTLVs:  e.subTLVs,
 		})
+	})
+	if err != nil {
+		return nil, err
 	}
 	return tlv, nil
 }
@@ -275,16 +273,17 @@ type prefixReachEntry struct {
 // Reachability (135, RFC 5305 §4) and IPv6 Reachability (236, RFC 5308 §2)
 // TLVs: per entry a 4-octet metric, the flag/prefix-length octet(s), the
 // significant prefix octets, and — when the sub-TLV flag is set — a
-// length-prefixed sub-TLV block.
-func decodePrefixReach(value []byte, v6 bool) ([]prefixReachEntry, error) {
+// length-prefixed sub-TLV block. Each decoded entry is handed to emit so the
+// per-family callers append straight into their typed slices (this runs per
+// received LSP; no intermediate slice).
+func decodePrefixReach(value []byte, v6 bool, emit func(prefixReachEntry)) error {
 	name, fam, headLen, maxBits := "extended IP reach", "IPv4", 5, 32
 	if v6 {
 		name, fam, headLen, maxBits = "IPv6 reach", "IPv6", 6, 128
 	}
-	var out []prefixReachEntry
 	for len(value) > 0 {
 		if len(value) < headLen {
-			return nil, fmt.Errorf("%s entry: %w", name, ErrTruncated)
+			return fmt.Errorf("%s entry: %w", name, ErrTruncated)
 		}
 		e := prefixReachEntry{metric: binary.BigEndian.Uint32(value[0:4])}
 		var bits int
@@ -302,34 +301,34 @@ func decodePrefixReach(value []byte, v6 bool) ([]prefixReachEntry, error) {
 			bits = int(ctrl & prefixLenMask)
 		}
 		if bits > maxBits {
-			return nil, fmt.Errorf("%w: %s prefix length %d", errBadTLV, fam, bits)
+			return fmt.Errorf("%w: %s prefix length %d", errBadTLV, fam, bits)
 		}
 		sigLen := (bits + 7) / 8
 		off := headLen + sigLen
 		if len(value) < off {
-			return nil, fmt.Errorf("%s prefix: %w", name, ErrTruncated)
+			return fmt.Errorf("%s prefix: %w", name, ErrTruncated)
 		}
 		e.prefix = unpackPrefix(value[headLen:off], bits, v6)
 		if hasSub {
 			if len(value) < off+1 {
-				return nil, fmt.Errorf("%s sub-TLV length: %w", name, ErrTruncated)
+				return fmt.Errorf("%s sub-TLV length: %w", name, ErrTruncated)
 			}
 			subLen := int(value[off])
 			off++
 			if len(value) < off+subLen {
-				return nil, fmt.Errorf("%s sub-TLVs (%d octets): %w", name, subLen, ErrTruncated)
+				return fmt.Errorf("%s sub-TLVs (%d octets): %w", name, subLen, ErrTruncated)
 			}
 			subs, err := decodeSubTLVs(SubTLVContextIPReachability, value[off:off+subLen])
 			if err != nil {
-				return nil, fmt.Errorf("%s sub-TLVs: %w", name, err)
+				return fmt.Errorf("%s sub-TLVs: %w", name, err)
 			}
 			e.subTLVs = subs
 			off += subLen
 		}
-		out = append(out, e)
+		emit(e)
 		value = value[off:]
 	}
-	return out, nil
+	return nil
 }
 
 func init() {

@@ -105,11 +105,20 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 
 	// Cap the database size against an attacker flooding fabricated LSP IDs
 	// on an unauthenticated segment (see WithLSDBEntryLimit). Only new IDs
-	// count: updates to known IDs never grow the map.
+	// count: updates to known IDs never grow the map. Warn once per level
+	// (re-armed when a new ID installs below the limit) — an unthrottled log
+	// per attack PDU would turn the memory defense into log amplification on
+	// the management loop.
 	if ex == nil && s.lsdbEntryLimit > 0 && len(db.entries) >= s.lsdbEntryLimit {
-		s.logger.Warn("drop LSP: database at entry limit",
-			"circuit", c.cfg.Name, "level", level, "lsp", id, "limit", s.lsdbEntryLimit)
+		if !s.lsdbLimitWarned[level] {
+			s.lsdbLimitWarned[level] = true
+			s.logger.Warn("drop LSP: database at entry limit; suppressing repeats",
+				"circuit", c.cfg.Name, "level", level, "lsp", id, "limit", s.lsdbEntryLimit)
+		}
 		return
+	}
+	if ex == nil {
+		delete(s.lsdbLimitWarned, level) // headroom again: re-arm the warning
 	}
 
 	// Install the newer copy.

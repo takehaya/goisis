@@ -56,6 +56,7 @@ type IsisServer struct {
 	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
 	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
+	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -98,6 +99,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		advertiseFilter:   o.advertiseFilter,
 		fibFilter:         o.fibFilter,
 		lsdbEntryLimit:    o.lsdbEntryLimit,
+		lsdbLimitWarned:   map[packet.Level]bool{},
 	}
 	if spec := o.areaAuth.spec(); spec.on() {
 		s.authKeys[packet.Level1] = spec

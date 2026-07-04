@@ -5,7 +5,7 @@ IS-IS routing protocol implementation in Go — the IS-IS counterpart of
 `pkg/server.IsisServer`; `goisisd` is a thin daemon and `goisis` a CLI over
 [Connect RPC](https://connectrpc.com/).
 
-[日本語](README.ja.md) · [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) · [Library guide](docs/library.md)
+[日本語](README.ja.md) · [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) · [Library guide](docs/library.md) · [Design](docs/design.md)
 
 ## Features
 

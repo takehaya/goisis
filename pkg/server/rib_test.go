@@ -67,20 +67,34 @@ func (f *recordFIB) getSID(sid netip.Addr) (fib.LocalSID, bool) {
 	return s, ok
 }
 
-// failFIB is a single-threaded FIB stub that can be armed to fail Update and
-// records installed routes and withdraw calls (for white-box programFIB tests).
+// failFIB is a single-threaded FIB stub for white-box programFIB/updateRIB
+// tests: it records installed routes and per-prefix call counts, and can be
+// armed to fail every Update (failNext) or Update/Withdraw of specific
+// prefixes (failUpdate/failWithdraw).
 type failFIB struct {
-	installed map[netip.Prefix]bool
-	withdrawn map[netip.Prefix]bool
-	failNext  bool
+	installed    map[netip.Prefix]bool
+	withdrawn    map[netip.Prefix]bool
+	failUpdate   map[netip.Prefix]bool
+	failWithdraw map[netip.Prefix]bool
+	updates      map[netip.Prefix]int
+	withdraws    map[netip.Prefix]int
+	failNext     bool
 }
 
 func newFailFIB() *failFIB {
-	return &failFIB{installed: map[netip.Prefix]bool{}, withdrawn: map[netip.Prefix]bool{}}
+	return &failFIB{
+		installed:    map[netip.Prefix]bool{},
+		withdrawn:    map[netip.Prefix]bool{},
+		failUpdate:   map[netip.Prefix]bool{},
+		failWithdraw: map[netip.Prefix]bool{},
+		updates:      map[netip.Prefix]int{},
+		withdraws:    map[netip.Prefix]int{},
+	}
 }
 
 func (f *failFIB) Update(p netip.Prefix, _ []fib.Nexthop) error {
-	if f.failNext {
+	f.updates[p]++
+	if f.failNext || f.failUpdate[p] {
 		return errFIB
 	}
 	f.installed[p] = true
@@ -88,6 +102,10 @@ func (f *failFIB) Update(p netip.Prefix, _ []fib.Nexthop) error {
 }
 
 func (f *failFIB) Withdraw(p netip.Prefix) error {
+	f.withdraws[p]++
+	if f.failWithdraw[p] {
+		return errFIB
+	}
 	delete(f.installed, p)
 	f.withdrawn[p] = true
 	return nil
@@ -386,55 +404,13 @@ func TestRIBWithdrawsOnPeerLoss(t *testing.T) {
 	waitFor(t, "b FIB withdraws route after peer loss", func() bool { _, ok := bfib.get(dst); return !ok })
 }
 
-// selectiveFIB fails Update/Withdraw for armed prefixes and counts every call
-// (single-threaded, for white-box updateRIB error-propagation tests).
-type selectiveFIB struct {
-	failUpdate   map[netip.Prefix]bool
-	failWithdraw map[netip.Prefix]bool
-	updates      map[netip.Prefix]int
-	withdraws    map[netip.Prefix]int
-	installed    map[netip.Prefix]bool
-}
-
-func newSelectiveFIB() *selectiveFIB {
-	return &selectiveFIB{
-		failUpdate:   map[netip.Prefix]bool{},
-		failWithdraw: map[netip.Prefix]bool{},
-		updates:      map[netip.Prefix]int{},
-		withdraws:    map[netip.Prefix]int{},
-		installed:    map[netip.Prefix]bool{},
-	}
-}
-
-func (f *selectiveFIB) Update(p netip.Prefix, _ []fib.Nexthop) error {
-	f.updates[p]++
-	if f.failUpdate[p] {
-		return errFIB
-	}
-	f.installed[p] = true
-	return nil
-}
-
-func (f *selectiveFIB) Withdraw(p netip.Prefix) error {
-	f.withdraws[p]++
-	if f.failWithdraw[p] {
-		return errFIB
-	}
-	delete(f.installed, p)
-	return nil
-}
-
-func (f *selectiveFIB) Sweep(func(netip.Prefix) bool) error { return nil }
-func (f *selectiveFIB) AddLocalSID(fib.LocalSID) error      { return nil }
-func (f *selectiveFIB) RemoveLocalSID(netip.Addr) error     { return nil }
-
 // TestUpdateRIBFIBFailureRetries drives a real route computation against a FIB
 // whose Update fails for one prefix: the failure lands in fibPending while the
 // RIB keeps the desired route, the next recompute retries (and clears) the
 // write, and a failed Withdraw is logged but never retried — its bookkeeping
 // (fibInstalled/fibPending) is cleared regardless, per programFIB's contract.
 func TestUpdateRIBFIBFailureRetries(t *testing.T) {
-	sf := newSelectiveFIB()
+	sf := newFailFIB()
 	s := ribServer(t, false, WithFIB(sf))
 	now := time.Now()
 	self := packet.SystemID{0, 0, 0, 0, 0, 1}
