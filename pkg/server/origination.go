@@ -309,6 +309,8 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 		}
 	}
 
+	// Seqno wrap (ISO 10589 7.3.16.1) is deliberately unhandled; see newer in
+	// lsdb.go.
 	seq := uint32(1)
 	if ex != nil {
 		seq = ex.lsp.SequenceNumber + 1
@@ -330,10 +332,12 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	}
 	// originateFragmented keeps each fragment within the buffer; reaching here
 	// means a single fragment's fixed TLVs plus one variable TLV still overflow
-	// (pathological). Surface it loudly rather than flooding an LSP peers drop.
+	// (pathological). Surface it loudly and drop the fragment rather than
+	// storing and flooding an LSP peers discard (ReceiveLSPBufferSize).
 	if len(raw) > packet.ReceiveLSPBufferSize {
-		s.logger.Error("own LSP fragment exceeds the maximum size; peers may drop it",
+		s.logger.Error("own LSP fragment exceeds the maximum size; not originated",
 			"lsp", id, "size", len(raw), "max", packet.ReceiveLSPBufferSize)
+		return
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
 	s.logger.Info("originate LSP", "level", level, "lsp", id, "seq", seq)

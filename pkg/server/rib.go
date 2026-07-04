@@ -26,15 +26,15 @@ type RouteInfo struct {
 }
 
 // updateRIB recomputes SPF for every level and algorithm, resolves next hops,
-// and programs the difference into the FIB. Level 1 routes are preferred over
-// Level 2 for the same prefix (ISO 10589 / RFC 1195). Algorithm 0 and each
-// Flexible Algorithm advertise disjoint prefixes (plain reachability vs.
-// per-algorithm SRv6 locators), so they do not contend for the same key.
+// and programs the difference into the FIB. When the same prefix is computed
+// more than once, betterRoute picks the winner (L1 over L2, then the lower
+// algorithm; see its doc for the rationale).
 func (s *IsisServer) updateRIB(now time.Time) {
 	merged := map[netip.Prefix]route{}
 	algos := s.routingAlgos()
-	// L2 first so L1 overlays it (L1 preferred for the same prefix).
-	for _, level := range []packet.Level{packet.Level2, packet.Level1} {
+	// Iteration order is immaterial: betterRoute alone decides which route wins
+	// when the same prefix is computed at both levels or under two algorithms.
+	for _, level := range []packet.Level{packet.Level1, packet.Level2} {
 		if _, ok := s.dbs[level]; !ok {
 			continue
 		}
@@ -68,12 +68,7 @@ func (s *IsisServer) updateRIB(now time.Time) {
 				delete(s.algoWarned, algoKey{level: level, algo: algo}) // re-arm
 			}
 			for p, r := range s.computeSPF(level, algo, now) {
-				// Algorithm 0 and each Flex-Algo normally advertise disjoint
-				// prefixes, but a shared/anycast prefix claimed by two
-				// algorithms could collide here. Resolve deterministically by
-				// preferring the lower algorithm (plain reachability over a
-				// Flex-Algo) rather than depending on iteration order.
-				if cur, ok := merged[p]; ok && cur.algo <= r.algo && cur.level == level {
+				if cur, ok := merged[p]; ok && !betterRoute(r, cur) {
 					continue
 				}
 				merged[p] = r
@@ -104,6 +99,26 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// neither loses the withdraw bookkeeping nor re-emits change events.
 	s.programFIB(next)
 	s.rib = next
+}
+
+// betterRoute reports whether candidate should replace incumbent as the route
+// for one prefix. The precedence, highest first:
+//
+//  1. Level: a Level 1 route is preferred over a Level 2 route for the same
+//     prefix (ISO 10589 / RFC 1195: intra-area routes take precedence over
+//     inter-area routes). Level dominates the algorithm, so an L1 Flex-Algo
+//     route displaces an L2 algorithm-0 route.
+//  2. Algorithm: within a level, the lower algorithm wins. Algorithm 0 and
+//     each Flex-Algo normally advertise disjoint prefixes, but a shared/anycast
+//     prefix claimed by two algorithms could collide; prefer plain reachability
+//     (algorithm 0) over a Flex-Algo, deterministically.
+//
+// On a full tie the incumbent stays.
+func betterRoute(candidate, incumbent route) bool {
+	if candidate.level != incumbent.level {
+		return candidate.level == packet.Level1
+	}
+	return candidate.algo < incumbent.algo
 }
 
 // algoKey identifies a (level, Flex-Algo) pair, used to de-dup the

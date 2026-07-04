@@ -65,6 +65,12 @@ func (db *lsdb) get(id packet.LSPID) *lspEntry { return db.entries[id] }
 // newer reports whether candidate supersedes existing for the same LSP ID
 // (ISO 10589 7.3.16.2): higher sequence number wins; on a tie a purge
 // (remaining lifetime 0) supersedes a live copy.
+//
+// Sequence numbers are assumed monotonic. The 7.3.16.1 exhaustion procedure
+// (purge, then wait MaxAge before re-originating at 1) is deliberately not
+// implemented: at the 900s refresh rate, exhausting 2^32 increments takes
+// ~120k years. Consequently a peer that crash-restarts at seq 1 is ignored
+// until its stale LSP ages out (ties into the deferred RFC 5306).
 func newer(candSeq uint32, candRemaining uint16, ex *lspEntry, now time.Time) bool {
 	if ex == nil {
 		return true
