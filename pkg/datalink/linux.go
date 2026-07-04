@@ -45,7 +45,7 @@ type LinuxTransport struct {
 
 // OpenLinux opens an AF_PACKET transport on the named interface. It requires
 // CAP_NET_RAW.
-func OpenLinux(ifname string) (*LinuxTransport, error) {
+func OpenLinux(ifname string) (Transport, error) {
 	ifi, err := net.InterfaceByName(ifname)
 	if err != nil {
 		return nil, fmt.Errorf("datalink: interface %q: %w", ifname, err)
