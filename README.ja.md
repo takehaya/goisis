@@ -5,7 +5,7 @@ Go で書かれた IS-IS ルーティングプロトコル実装 —
 `pkg/server.IsisServer` で組み込めます。`goisisd` は薄いデーモン、`goisis` は
 [Connect RPC](https://connectrpc.com/) 越しの CLI です。
 
-[English](README.md) · [はじめに](docs/getting-started.ja.md) · [設定](docs/configuration.ja.md) · [ライブラリ](docs/library.ja.md)
+[English](README.md) · [はじめに](docs/getting-started.ja.md) · [設定](docs/configuration.ja.md) · [ライブラリ](docs/library.ja.md) · [設計](docs/design.ja.md)
 
 ## 機能
 
