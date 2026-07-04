@@ -238,14 +238,5 @@ func TestSIDStructureClamp(t *testing.T) {
 
 // injectLSP installs a synthetic fragment-0 L2 LSP into the LSDB for tests.
 func injectLSP(s *IsisServer, id packet.SystemID, tlvs []packet.TLV, now time.Time) {
-	lid := lspID(id, 0)
-	lsp := &packet.LSP{
-		Level:          packet.Level2,
-		RemainingTime:  maxAgeSeconds,
-		LSPID:          lid,
-		SequenceNumber: 1,
-		ISType:         2,
-		TLVs:           tlvs,
-	}
-	s.dbs[packet.Level2].entries[lid] = &lspEntry{lsp: lsp, inserted: now, lifetime: maxAgeSeconds}
+	injectLSPAt(s, packet.Level2, id, tlvs, now)
 }

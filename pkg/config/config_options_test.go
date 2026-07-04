@@ -19,20 +19,17 @@ type mockCircuit struct {
 	v4, v6 []netip.Addr
 }
 
-// withMockCircuits substitutes the openCircuit seam so each interface name
-// resolves to a mock transport and synthetic hello addresses instead of an
-// AF_PACKET socket.
-func withMockCircuits(t *testing.T, circuits map[string]mockCircuit) {
-	t.Helper()
-	prev := openCircuit
-	openCircuit = func(ifname string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+// mockCircuits returns a Config.OpenCircuit implementation resolving each
+// interface name to a mock transport and synthetic hello addresses instead of
+// an AF_PACKET socket.
+func mockCircuits(circuits map[string]mockCircuit) func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+	return func(ifname string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
 		mc, ok := circuits[ifname]
 		if !ok {
 			return nil, nil, nil, fmt.Errorf("no mock circuit for %q", ifname)
 		}
 		return mc.tr, mc.v4, mc.v6, nil
 	}
-	t.Cleanup(func() { openCircuit = prev })
 }
 
 // loadConfig writes a YAML config to a temp file and loads it.
@@ -65,7 +62,7 @@ func waitFor(t *testing.T, what string, fn func() bool) {
 // TestOptionsBuildServer runs the whole YAML -> Options -> NewIsisServer seam
 // with a mock transport and asserts the resulting server's observable state.
 func TestOptionsBuildServer(t *testing.T) {
-	withMockCircuits(t, map[string]mockCircuit{
+	open := mockCircuits(map[string]mockCircuit{
 		"mock0": {
 			tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500),
 			v4: []netip.Addr{netip.MustParseAddr("10.0.0.1")},
@@ -98,6 +95,7 @@ circuits:
     metric: 20
     hello-password: hp
 `)
+	c.OpenCircuit = open
 	if c.LSDBEntryLimit != 5000 {
 		t.Errorf("lsdb-entry-limit = %d, want 5000", c.LSDBEntryLimit)
 	}
@@ -156,7 +154,7 @@ circuits:
 // before any transport is opened, so no seam substitution is needed beyond a
 // guard that fails the test if a transport were requested.
 func TestOptionsErrors(t *testing.T) {
-	withMockCircuits(t, nil) // any circuit open fails the Options call
+	open := mockCircuits(nil) // any circuit open fails the Options call
 	for name, yaml := range map[string]string{
 		"invalid net":         "net: bogus\ncircuits:\n  - interface: eth0\n",
 		"invalid prefix":      "net: 49.0001.0000.0000.0001.00\nprefixes:\n  - not-a-cidr\ncircuits:\n  - interface: eth0\n",
@@ -166,6 +164,7 @@ func TestOptionsErrors(t *testing.T) {
 		"invalid overload":    "net: 49.0001.0000.0000.0001.00\noverload-on-startup: soon\ncircuits:\n  - interface: eth0\n",
 	} {
 		c := loadConfig(t, yaml)
+		c.OpenCircuit = open
 		if _, err := c.Options(); err == nil {
 			t.Errorf("%s: Options succeeded, want error", name)
 		}
@@ -181,7 +180,7 @@ func TestOptionsTwoNodeConvergence(t *testing.T) {
 	ta := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xa}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xb}, 1500)
 	datalink.Link(ta, tb)
-	withMockCircuits(t, map[string]mockCircuit{
+	open := mockCircuits(map[string]mockCircuit{
 		"ifa": {tr: ta, v4: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
 		"ifb": {tr: tb, v4: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
 	})
@@ -221,6 +220,7 @@ hostname: rb
 	ctx := t.Context()
 	var servers [2]*server.IsisServer
 	for i, cfg := range []*Config{cfgA, cfgB} {
+		cfg.OpenCircuit = open
 		opts, err := cfg.Options()
 		if err != nil {
 			t.Fatalf("Options[%d]: %v", i, err)

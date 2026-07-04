@@ -34,7 +34,7 @@ func (h *connectHandler) GetIsis(
 ) (*connect.Response[goisisv1.GetIsisResponse], error) {
 	g, err := h.s.GetGlobal(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.GetIsisResponse{
 		Global: &goisisv1.Global{Version: g.Version, SystemId: g.SystemID.String()},
@@ -47,7 +47,7 @@ func (h *connectHandler) ListCircuits(
 ) (*connect.Response[goisisv1.ListCircuitsResponse], error) {
 	cs, err := h.s.ListCircuits(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.Circuit, 0, len(cs))
 	for _, c := range cs {
@@ -69,7 +69,7 @@ func (h *connectHandler) ListAdjacencies(
 ) (*connect.Response[goisisv1.ListAdjacenciesResponse], error) {
 	adjs, err := h.s.ListAdjacencies(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.Adjacency, 0, len(adjs))
 	for _, a := range adjs {
@@ -84,7 +84,7 @@ func (h *connectHandler) GetLsdb(
 ) (*connect.Response[goisisv1.GetLsdbResponse], error) {
 	lsps, err := h.s.ListLSDB(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.Lsp, 0, len(lsps))
 	for _, l := range lsps {
@@ -106,7 +106,7 @@ func (h *connectHandler) ListRoutes(
 ) (*connect.Response[goisisv1.ListRoutesResponse], error) {
 	routes, err := h.s.ListRoutes(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.Route, 0, len(routes))
 	for _, r := range routes {
@@ -121,7 +121,7 @@ func (h *connectHandler) ListLocators(
 ) (*connect.Response[goisisv1.ListLocatorsResponse], error) {
 	locs, err := h.s.ListLocators(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.Locator, 0, len(locs))
 	for _, l := range locs {
@@ -140,7 +140,7 @@ func (h *connectHandler) ListFlexAlgos(
 ) (*connect.Response[goisisv1.ListFlexAlgosResponse], error) {
 	infos, err := h.s.ListFlexAlgos(ctx)
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	out := make([]*goisisv1.FlexAlgo, 0, len(infos))
 	for _, fi := range infos {
@@ -174,7 +174,7 @@ func (h *connectHandler) AddLocator(
 	}
 	algo, err := locatorAlgo(req.Msg.GetAlgorithm())
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	if err := h.s.AddLocator(ctx, SRv6LocatorConfig{Prefix: prefix, Algo: algo}); err != nil {
 		return nil, toConnectError(err)
@@ -202,15 +202,15 @@ func (h *connectHandler) AddFlexAlgo(
 ) (*connect.Response[goisisv1.AddFlexAlgoResponse], error) {
 	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	mt, err := uint8FromProto(req.Msg.GetMetricType(), "metric_type")
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	prio, err := uint8FromProto(req.Msg.GetPriority(), "priority")
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	cfg := FlexAlgoConfig{
 		Algo:                algo,
@@ -230,7 +230,7 @@ func (h *connectHandler) DeleteFlexAlgo(
 ) (*connect.Response[goisisv1.DeleteFlexAlgoResponse], error) {
 	algo, err := flexAlgoNumber(req.Msg.GetAlgorithm())
 	if err != nil {
-		return nil, err
+		return nil, toConnectError(err)
 	}
 	if err := h.s.DeleteFlexAlgo(ctx, algo); err != nil {
 		return nil, toConnectError(err)
@@ -238,9 +238,11 @@ func (h *connectHandler) DeleteFlexAlgo(
 	return connect.NewResponse(&goisisv1.DeleteFlexAlgoResponse{}), nil
 }
 
-// toConnectError maps an IsisServer error to a Connect error code. The
-// lifecycle errors get their canonical codes; everything else the mutators
-// return is a validation failure, hence InvalidArgument.
+// toConnectError maps a handler error to a Connect error code — the single
+// exit point for every handler. Lifecycle errors get their canonical codes,
+// already-coded errors (the proto field validators) pass through, and
+// everything else the server returns is a validation failure, hence
+// InvalidArgument.
 func toConnectError(err error) error {
 	var ce *connect.Error
 	switch {
@@ -292,7 +294,7 @@ func (h *connectHandler) WatchEvent(
 ) error {
 	sub, err := h.s.Subscribe(ctx)
 	if err != nil {
-		return err
+		return toConnectError(err)
 	}
 	defer sub.Unsubscribe()
 	for {

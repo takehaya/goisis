@@ -34,7 +34,8 @@ don't inherit the toolchain graph). Codegen is reproducible offline.
 - **Single management loop** (GoBGP-style): `IsisServer.Serve` is the only
   goroutine that mutates protocol state (circuits, adjacencies, the LSDB). Every
   public read method and protocol event is serialized onto it via `mgmtOperation`
-  / `eventCh`. Per-circuit reader goroutines only decode frames and forward events.
+  / `eventCh`. Per-circuit reader goroutines only receive raw frames and forward
+  them; decoding and authentication also run on the loop (`handleRx`).
 - **Event-driven SPF**: mutations call `markDirty()`; the loop runs `updateRIB`
   after any change rather than on a fixed timer.
 - **Pluggable sinks** (same pattern, keep core dependency-free):
