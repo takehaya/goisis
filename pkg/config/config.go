@@ -45,6 +45,10 @@ type Config struct {
 	DomainPassword      string `yaml:"domain-password"`
 	DomainAuthAlgorithm string `yaml:"domain-auth-algorithm"`
 	DomainKeyID         uint16 `yaml:"domain-key-id"`
+	// LSDBEntryLimit caps the number of LSPs held per level as a
+	// defense-in-depth guard against LSDB exhaustion; zero or negative
+	// disables the cap. Size it well above the legitimate area's LSP count.
+	LSDBEntryLimit int `yaml:"lsdb-entry-limit"`
 }
 
 // SRv6Config configures SRv6 locator advertisement.
@@ -179,6 +183,9 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			opts = append(opts, server.WithSRv6LocatorForAlgo(prefix, fa.Algo))
 		}
 	}
+	if c.LSDBEntryLimit > 0 {
+		opts = append(opts, server.WithLSDBEntryLimit(c.LSDBEntryLimit))
+	}
 	if c.OverloadOnStartup != "" {
 		d, err := time.ParseDuration(c.OverloadOnStartup)
 		if err != nil {
@@ -269,6 +276,19 @@ func connectedPrefixes(name string) []netip.Prefix {
 	return out
 }
 
+// openCircuit opens the AF_PACKET transport for a circuit's interface and
+// reads its hello source addresses — the only impure part of Options. It is a
+// package variable so tests can substitute mock transports and synthetic
+// addresses.
+var openCircuit = func(ifname string) (tr datalink.Transport, v4, v6 []netip.Addr, err error) {
+	tr, err = datalink.OpenLinux(ifname)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	v4, v6 = interfaceAddrs(ifname)
+	return tr, v4, v6, nil
+}
+
 func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 	l1, l2, err := levels(cc.Level)
 	if err != nil {
@@ -278,11 +298,10 @@ func (cc CircuitConfig) circuit() (server.CircuitConfig, error) {
 	if err != nil {
 		return server.CircuitConfig{}, fmt.Errorf("circuit %q hello-auth-algorithm: %w", cc.Interface, err)
 	}
-	tr, err := datalink.OpenLinux(cc.Interface)
+	tr, v4, v6, err := openCircuit(cc.Interface)
 	if err != nil {
 		return server.CircuitConfig{}, err
 	}
-	v4, v6 := interfaceAddrs(cc.Interface)
 	return server.CircuitConfig{
 		Name:               cc.Interface,
 		Transport:          tr,
