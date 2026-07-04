@@ -177,7 +177,7 @@ func (h *connectHandler) AddLocator(
 		return nil, err
 	}
 	if err := h.s.AddLocator(ctx, SRv6LocatorConfig{Prefix: prefix, Algo: algo}); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.AddLocatorResponse{}), nil
 }
@@ -191,7 +191,7 @@ func (h *connectHandler) DeleteLocator(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	if err := h.s.DeleteLocator(ctx, prefix); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.DeleteLocatorResponse{}), nil
 }
@@ -219,7 +219,7 @@ func (h *connectHandler) AddFlexAlgo(
 		AdvertiseDefinition: req.Msg.GetAdvertiseDefinition(),
 	}
 	if err := h.s.AddFlexAlgo(ctx, cfg); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.AddFlexAlgoResponse{}), nil
 }
@@ -233,9 +233,28 @@ func (h *connectHandler) DeleteFlexAlgo(
 		return nil, err
 	}
 	if err := h.s.DeleteFlexAlgo(ctx, algo); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.DeleteFlexAlgoResponse{}), nil
+}
+
+// toConnectError maps an IsisServer error to a Connect error code. The
+// lifecycle errors get their canonical codes; everything else the mutators
+// return is a validation failure, hence InvalidArgument.
+func toConnectError(err error) error {
+	var ce *connect.Error
+	switch {
+	case errors.Is(err, ErrServerStopped):
+		return connect.NewError(connect.CodeUnavailable, err)
+	case errors.Is(err, context.Canceled):
+		return connect.NewError(connect.CodeCanceled, err)
+	case errors.Is(err, context.DeadlineExceeded):
+		return connect.NewError(connect.CodeDeadlineExceeded, err)
+	case errors.As(err, &ce):
+		return err // already coded (e.g. a validated proto field)
+	default:
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
 }
 
 // flexAlgoNumber validates that a wire algorithm number fits the Flex-Algo

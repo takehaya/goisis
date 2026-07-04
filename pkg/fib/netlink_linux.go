@@ -3,6 +3,7 @@
 package fib
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -149,6 +150,9 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT6
 		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
 		enc.Table = sid.Table
+	case BehaviorEndDT46:
+		// The vendored netlink library predates SEG6_LOCAL_ACTION_END_DT46.
+		return nil, fmt.Errorf("fib: End.DT46 is not yet programmable by the netlink FIB")
 	default:
 		return nil, fmt.Errorf("fib: unsupported SID behavior %d", sid.Behavior)
 	}
@@ -183,5 +187,5 @@ func ipNetToPrefix(n *net.IPNet) (netip.Prefix, bool) {
 }
 
 func isNotExist(err error) bool {
-	return err == unix.ESRCH || err == unix.ENOENT
+	return errors.Is(err, unix.ESRCH) || errors.Is(err, unix.ENOENT)
 }

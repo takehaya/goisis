@@ -37,11 +37,14 @@ type Frame struct {
 type Transport interface {
 	// Send transmits an IS-IS PDU. For broadcast circuits dst selects the
 	// destination multicast group (AllL1ISs/AllL2ISs); p2p transports
-	// ignore dst.
+	// ignore dst. Send is called from the IS-IS management loop and MUST
+	// NOT block: a full or hung socket would stall the protocol engine
+	// network-wide (hellos, adjacency expiry, flooding on all circuits).
 	Send(dst packet.SNPA, pdu []byte) error
 
-	// Recv returns the next IS-IS PDU. It blocks until a PDU arrives or the
-	// transport is closed (ErrClosed).
+	// Recv returns the next IS-IS PDU. It is called from a dedicated
+	// per-circuit reader goroutine and MAY block until a PDU arrives or
+	// the transport is closed (ErrClosed).
 	Recv() (Frame, error)
 
 	// LocalSNPA returns the circuit's own MAC.

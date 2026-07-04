@@ -30,12 +30,7 @@ func (s *SRAlgorithmSubTLV) Type() uint8 { return subTLVSRAlgorithm }
 
 // Serialize implements SubTLV.
 func (s *SRAlgorithmSubTLV) Serialize() ([]byte, error) {
-	if len(s.Algorithms) > 255 {
-		return nil, fmt.Errorf("SR-Algorithm: %w: %d algorithms", ErrTooLong, len(s.Algorithms))
-	}
-	out := make([]byte, 0, 2+len(s.Algorithms))
-	out = append(out, subTLVSRAlgorithm, byte(len(s.Algorithms)))
-	return append(out, s.Algorithms...), nil
+	return encodeSubTLV(subTLVSRAlgorithm, s.Algorithms)
 }
 
 func decodeSRAlgorithm(value []byte) (SubTLV, error) {
@@ -87,12 +82,7 @@ func (f *FlexAlgoDefinitionSubTLV) Serialize() ([]byte, error) {
 		value = append(value, ss.SubSubTLVType, byte(len(ss.Value)))
 		value = append(value, ss.Value...)
 	}
-	if len(value) > 255 {
-		return nil, fmt.Errorf("flex-algo definition: %w: %d octets", ErrTooLong, len(value))
-	}
-	out := make([]byte, 0, 2+len(value))
-	out = append(out, subTLVFlexAlgoDef, byte(len(value)))
-	return append(out, value...), nil
+	return encodeSubTLV(subTLVFlexAlgoDef, value)
 }
 
 func decodeFlexAlgoDefinition(value []byte) (SubTLV, error) {

@@ -239,6 +239,7 @@ type options struct {
 	domainAuth        AuthConfig // L2 LSP/SNP authentication
 	advertiseFilter   AdvertiseFilter
 	fibFilter         FIBFilter
+	lsdbEntryLimit    int
 	hasSystemID       bool
 }
 
@@ -389,6 +390,18 @@ func WithAreaAuth(cfg AuthConfig) ServerOption {
 // algorithm and key ID.
 func WithDomainAuth(cfg AuthConfig) ServerOption {
 	return func(o *options) { o.domainAuth = cfg }
+}
+
+// WithLSDBEntryLimit caps the number of LSPs held per level. Once a level's
+// database holds n entries, LSPs with previously-unseen LSP IDs are dropped
+// (updates to known IDs and this node's own LSPs are unaffected). This is a
+// defense-in-depth guard against LSDB exhaustion by an attacker flooding
+// fabricated source IDs on an unauthenticated segment — authentication
+// (WithAreaAuth / WithDomainAuth) is the primary mitigation. Zero or negative
+// disables the cap (the default). Size the limit well above the legitimate
+// area's LSP count: a dropped legitimate LSP means an incomplete topology.
+func WithLSDBEntryLimit(n int) ServerOption {
+	return func(o *options) { o.lsdbEntryLimit = n }
 }
 
 // WithOverloadOnStartup sets the overload bit (ISO 10589) in this node's own

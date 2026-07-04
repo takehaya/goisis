@@ -3,6 +3,7 @@ package packet
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 )
 
 // SRv6 sub-TLV and sub-sub-TLV code points (RFC 9352).
@@ -42,21 +43,37 @@ type SRv6EndSID struct {
 	SID      netip.Addr // 16-octet SRv6 SID
 	// Structure, if non-nil, is the SID Structure sub-sub-TLV.
 	Structure *SIDStructure
+	// Unknown preserves sub-sub-TLVs this package does not implement so the
+	// End SID re-serializes without data loss (UnknownSubTLV is reused for
+	// the sub-sub level; the type+length framing is identical). On encode
+	// they follow the SID Structure, in received order.
+	Unknown []UnknownSubTLV
 }
 
-func (e *SRv6EndSID) encode() []byte {
+func (e *SRv6EndSID) encode() ([]byte, error) {
 	sid := e.SID.As16()
 	out := make([]byte, 0, srv6EndSIDFixedLen+2+sidStructureLen)
 	out = append(out, e.Flags, byte(e.Behavior>>8), byte(e.Behavior))
 	out = append(out, sid[:]...)
+	var sub []byte
 	if e.Structure != nil {
-		out = append(out, 2+sidStructureLen) // sub-sub-TLV length
-		out = append(out, subSubTLVSIDStruct, sidStructureLen,
+		sub = append(sub, subSubTLVSIDStruct, sidStructureLen,
 			e.Structure.LocatorBlock, e.Structure.LocatorNode, e.Structure.Function, e.Structure.Argument)
-	} else {
-		out = append(out, 0)
 	}
-	return out
+	for _, u := range e.Unknown {
+		b, err := u.Serialize()
+		if err != nil {
+			return nil, err
+		}
+		sub = append(sub, b...)
+	}
+	// The sub-sub-TLV area and the fixed part must together fit the End SID
+	// sub-TLV's one-octet length.
+	if len(sub) > 255-srv6EndSIDFixedLen {
+		return nil, fmt.Errorf("%w: %d octets of SRv6 End SID sub-sub-TLVs", ErrTooLong, len(sub))
+	}
+	out = append(out, byte(len(sub)))
+	return append(out, sub...), nil
 }
 
 func decodeEndSID(v []byte) (*SRv6EndSID, error) {
@@ -75,8 +92,8 @@ func decodeEndSID(v []byte) (*SRv6EndSID, error) {
 	sub := v[srv6EndSIDFixedLen : srv6EndSIDFixedLen+subLen]
 	for len(sub) > 0 {
 		// A trailing octet too short for a sub-sub-TLV header is malformed —
-		// reject it rather than silently dropping it (consistency with the
-		// sub-TLV registry; preserves byte-exact intent).
+		// reject it rather than silently dropping it, matching the TLV and
+		// sub-TLV area decoders.
 		if len(sub) < 2 {
 			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV header: %w", ErrTruncated)
 		}
@@ -84,8 +101,13 @@ func decodeEndSID(v []byte) (*SRv6EndSID, error) {
 		if len(sub) < 2+l {
 			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV %d: %w", t, ErrTruncated)
 		}
-		if t == subSubTLVSIDStruct && l == sidStructureLen {
+		if t == subSubTLVSIDStruct && l == sidStructureLen && e.Structure == nil {
 			e.Structure = &SIDStructure{LocatorBlock: sub[2], LocatorNode: sub[3], Function: sub[4], Argument: sub[5]}
+		} else {
+			// Anything else — an unimplemented sub-sub-TLV, an oddly sized
+			// SID Structure, or a duplicate one — is preserved opaquely so
+			// the End SID round-trips without data loss.
+			e.Unknown = append(e.Unknown, UnknownSubTLV{SubTLVType: t, Value: slices.Clone(sub[2 : 2+l])})
 		}
 		sub = sub[2+l:]
 	}
@@ -99,6 +121,11 @@ type SRv6Locator struct {
 	Algorithm uint8
 	Locator   netip.Prefix // the locator prefix (Loc-Size bits)
 	EndSIDs   []*SRv6EndSID
+	// Unknown preserves locator sub-TLVs this package does not implement so
+	// the entry re-serializes without data loss. On encode they follow the
+	// End SIDs, in received order (order within each group is kept; the
+	// interleaving between the groups is not).
+	Unknown []UnknownSubTLV
 }
 
 // SRv6LocatorTLV is the SRv6 Locator TLV (type 27, RFC 9352).
@@ -123,9 +150,22 @@ func (t *SRv6LocatorTLV) Serialize() ([]byte, error) {
 		}
 		var sub []byte
 		for _, e := range l.EndSIDs {
-			enc := e.encode()
-			sub = append(sub, subTLVSRv6EndSID, byte(len(enc)))
-			sub = append(sub, enc...)
+			enc, err := e.encode()
+			if err != nil {
+				return nil, err
+			}
+			wrapped, err := encodeSubTLV(subTLVSRv6EndSID, enc)
+			if err != nil {
+				return nil, err
+			}
+			sub = append(sub, wrapped...)
+		}
+		for _, u := range l.Unknown {
+			b, err := u.Serialize()
+			if err != nil {
+				return nil, err
+			}
+			sub = append(sub, b...)
 		}
 		if len(sub) > 255 {
 			return nil, fmt.Errorf("%w: %d octets of SRv6 locator sub-TLVs", ErrTooLong, len(sub))
@@ -190,6 +230,10 @@ func decodeSRv6LocatorTLV(value []byte) (TLV, error) {
 					return nil, err
 				}
 				loc.EndSIDs = append(loc.EndSIDs, e)
+			} else {
+				// Preserve unimplemented locator sub-TLVs opaquely so the
+				// entry round-trips without data loss.
+				loc.Unknown = append(loc.Unknown, UnknownSubTLV{SubTLVType: st, Value: slices.Clone(sub[2 : 2+sl])})
 			}
 			sub = sub[2+sl:]
 		}

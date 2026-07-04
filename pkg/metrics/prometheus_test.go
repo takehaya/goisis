@@ -14,6 +14,7 @@ func TestPrometheusRecords(t *testing.T) {
 	m.SPFRun("L2", 5*time.Millisecond)
 	m.LSDBSize("L2", 3)
 	m.FloodTx("eth0")
+	m.FIBPending(2)
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -28,9 +29,19 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_spf_duration_seconds",
 		"goisis_lsdb_lsps",
 		"goisis_flooding_lsp_tx_total",
+		"goisis_fib_pending",
 	} {
 		if !got[want] {
 			t.Errorf("metric %q not registered/emitted", want)
+		}
+	}
+	// The gauge carries the reported value, not just its registration.
+	for _, mf := range mfs {
+		if mf.GetName() != "goisis_fib_pending" {
+			continue
+		}
+		if ms := mf.GetMetric(); len(ms) != 1 || ms[0].GetGauge().GetValue() != 2 {
+			t.Errorf("goisis_fib_pending = %+v, want a single gauge with value 2", ms)
 		}
 	}
 }

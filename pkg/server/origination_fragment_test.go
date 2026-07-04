@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,11 +13,11 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-func ownFragments(s *IsisServer, pn uint8) map[uint8]*lspEntry {
+func ownFragments(s *IsisServer) map[uint8]*lspEntry {
 	out := map[uint8]*lspEntry{}
 	for id, e := range s.dbs[packet.Level2].entries {
 		nid := id.NodeID()
-		if nid.SystemID() == s.systemID && nid.PseudonodeID() == pn && e.own && e.purgedAt.IsZero() {
+		if nid.SystemID() == s.systemID && nid.PseudonodeID() == 0 && e.own && e.purgedAt.IsZero() {
 			out[id.FragmentID()] = e
 		}
 	}
@@ -40,7 +43,7 @@ func TestOriginationFragmentsLargeNodeLSP(t *testing.T) {
 	s := mustServer(t, opts...)
 	s.regenerateNodeLSP(packet.Level2, false, time.Now())
 
-	frags := ownFragments(s, 0)
+	frags := ownFragments(s)
 	if len(frags) < 2 {
 		t.Fatalf("expected the node LSP to span >=2 fragments, got %d", len(frags))
 	}
@@ -142,7 +145,7 @@ func TestOriginationPurgesStaleFragments(t *testing.T) {
 	s := mustServer(t, opts...)
 	now := time.Now()
 	s.regenerateNodeLSP(packet.Level2, false, now)
-	before := len(ownFragments(s, 0))
+	before := len(ownFragments(s))
 	if before < 2 {
 		t.Fatalf("setup: expected multiple fragments, got %d", before)
 	}
@@ -151,7 +154,7 @@ func TestOriginationPurgesStaleFragments(t *testing.T) {
 	s.prefixes = []AdvertisedPrefix{{Prefix: netip.MustParsePrefix("10.0.0.1/32"), Metric: 10}}
 	s.regenerateNodeLSP(packet.Level2, false, now)
 
-	after := ownFragments(s, 0)
+	after := ownFragments(s)
 	if len(after) != 1 {
 		t.Errorf("expected 1 live fragment after shrinking, got %d", len(after))
 	}
@@ -160,5 +163,140 @@ func TestOriginationPurgesStaleFragments(t *testing.T) {
 	e := s.dbs[packet.Level2].entries[lspIDFrag(s.systemID, 0, hi)]
 	if e == nil || e.purgedAt.IsZero() {
 		t.Errorf("stale fragment %d was not purged", hi)
+	}
+}
+
+// TestPackLSPFragmentsSmallBudget drives the pure packer past 256 fragments
+// with a tiny budget: every TLV is placed exactly once, no fragment is empty
+// or over budget, and the fixed TLVs land only in fragment 0. (The 0..255
+// fragment-ID truncation is originateFragmented's job, not the packer's.)
+func TestPackLSPFragmentsSmallBudget(t *testing.T) {
+	mk := func() packet.TLV { return &packet.UnknownTLV{TLVType: 200, Value: make([]byte, 8)} }
+	fixed := []packet.TLV{mk()} // serializes to 10 octets
+	var variable []packet.TLV
+	for i := 0; i < 600; i++ {
+		variable = append(variable, mk())
+	}
+	const budget = 24 // two 10-octet TLVs per fragment
+
+	frags := packLSPFragments(fixed, variable, budget)
+
+	// fragment 0: fixed + 1 variable; then 299 fragments of 2 and one of 1.
+	if len(frags) != 301 {
+		t.Fatalf("got %d fragments, want 301", len(frags))
+	}
+	total := 0
+	for n, f := range frags {
+		if len(f) == 0 {
+			t.Errorf("fragment %d is empty", n)
+		}
+		if got := tlvsLen(f); got > budget {
+			t.Errorf("fragment %d holds %d octets, over the %d budget", n, got, budget)
+		}
+		for _, tlv := range f {
+			if tlv == fixed[0] && n != 0 {
+				t.Errorf("fixed TLV leaked into fragment %d", n)
+			}
+		}
+		total += len(f)
+	}
+	if want := len(fixed) + len(variable); total != want {
+		t.Errorf("packed %d TLVs, want %d", total, want)
+	}
+}
+
+// TestOriginateFragmentedTruncatesAt256: a TLV set needing more than 256
+// fragments is truncated at the 8-bit fragment-ID space — fragments 0..255
+// are originated, the overflow is logged as the only error, nothing panics,
+// and purgeStaleFragments purges none of the surviving fragments.
+func TestOriginateFragmentedTruncatesAt256(t *testing.T) {
+	var logBuf bytes.Buffer
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+		WithLogger(slog.New(slog.NewTextHandler(&logBuf, nil))),
+	)
+	now := time.Now()
+
+	// 1300 TLVs of 252 serialized octets: 5 fit the ~1465-octet budget, so the
+	// packer yields 260 fragments — past the 256 fragment IDs.
+	var variable []packet.TLV
+	for i := 0; i < 1300; i++ {
+		variable = append(variable, &packet.UnknownTLV{TLVType: 200, Value: make([]byte, 250)})
+	}
+	s.originateFragmented(packet.Level2, 0, nil, variable, false, false, now)
+
+	frags := ownFragments(s)
+	if len(frags) != 256 {
+		t.Fatalf("got %d live fragments, want 256", len(frags))
+	}
+	for n := 0; n < 256; n++ {
+		if _, ok := frags[uint8(n)]; !ok {
+			t.Errorf("fragment %d missing", n)
+		}
+	}
+	// No own fragment may be left purged: keep==256 covers the whole ID space.
+	for id, e := range s.dbs[packet.Level2].entries {
+		if e.own && !e.purgedAt.IsZero() {
+			t.Errorf("fragment %v was orphaned as a purge", id)
+		}
+	}
+	// The truncation error is the only anomaly surfaced.
+	errs := 0
+	for _, line := range strings.Split(logBuf.String(), "\n") {
+		if strings.Contains(line, "level=ERROR") {
+			errs++
+			if !strings.Contains(line, "fragments") {
+				t.Errorf("unexpected error logged: %s", line)
+			}
+		}
+	}
+	if errs != 1 {
+		t.Errorf("logged %d errors, want exactly the truncation error", errs)
+	}
+}
+
+// TestOriginateSkipsUnserializableTLV: a TLV whose value exceeds the 255-octet
+// limit cannot serialize (tlvChunks emits such an entry alone by contract);
+// originate must skip the fragment — log, no panic, no stored LSP.
+func TestOriginateSkipsUnserializableTLV(t *testing.T) {
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	now := time.Now()
+	id := lspIDFrag(s.systemID, 0, 1)
+	big := &packet.UnknownTLV{TLVType: 200, Value: make([]byte, 300)}
+
+	s.originate(packet.Level2, id, []packet.TLV{big}, false, false, now)
+
+	if s.dbs[packet.Level2].get(id) != nil {
+		t.Error("fragment with an unserializable TLV was stored")
+	}
+}
+
+// TestOriginateDropsOversizeFragment: individually valid TLVs whose sum
+// overflows ReceiveLSPBufferSize (only reachable when the fixed set alone
+// exceeds the fragment budget) must not be stored or flooded — peers would
+// discard the LSP and the content would silently black-hole.
+func TestOriginateDropsOversizeFragment(t *testing.T) {
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	now := time.Now()
+	id := lspID(s.systemID, 0)
+	var tlvs []packet.TLV
+	for i := 0; i < 7; i++ { // 7 * 252 = 1764 octets > 1492
+		tlvs = append(tlvs, &packet.UnknownTLV{TLVType: 200, Value: make([]byte, 250)})
+	}
+
+	s.originate(packet.Level2, id, tlvs, false, false, now)
+
+	if s.dbs[packet.Level2].get(id) != nil {
+		t.Error("oversize LSP fragment was stored")
 	}
 }

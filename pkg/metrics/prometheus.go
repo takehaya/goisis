@@ -17,6 +17,7 @@ type Prometheus struct {
 	spfDuration    *prometheus.HistogramVec
 	lsdbSize       *prometheus.GaugeVec
 	floodTx        *prometheus.CounterVec
+	fibPending     prometheus.Gauge
 }
 
 // NewPrometheus creates the collectors and registers them in reg (e.g.
@@ -41,8 +42,12 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_flooding_lsp_tx_total",
 			Help: "Count of LSPs transmitted during flooding.",
 		}, []string{"circuit"}),
+		fibPending: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "goisis_fib_pending",
+			Help: "Number of routes whose last FIB write failed and are awaiting retry.",
+		}),
 	}
-	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx)
+	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.fibPending)
 	return p
 }
 
@@ -64,6 +69,11 @@ func (p *Prometheus) LSDBSize(level string, n int) {
 // FloodTx implements server.Metrics.
 func (p *Prometheus) FloodTx(circuit string) {
 	p.floodTx.WithLabelValues(circuit).Inc()
+}
+
+// FIBPending implements server.Metrics.
+func (p *Prometheus) FIBPending(n int) {
+	p.fibPending.Set(float64(n))
 }
 
 var _ server.Metrics = (*Prometheus)(nil)

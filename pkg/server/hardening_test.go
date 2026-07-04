@@ -297,3 +297,66 @@ func TestCleanShutdownPurgesOwnLSP(t *testing.T) {
 	acancel()
 	waitFor(t, "b drops A's LSP after the clean-shutdown purge", func() bool { return !liveLSPFrom(t, b, aSys) })
 }
+
+// TestLSDBEntryLimit: with WithLSDBEntryLimit(n), the update process stops
+// admitting previously-unseen foreign LSP IDs once a level's database holds n
+// entries, while updates to already-stored IDs and this node's own
+// origination remain unaffected.
+func TestLSDBEntryLimit(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: tr, Level2: true, Padding: ptrFalse()}),
+		WithLSDBEntryLimit(3),
+	)
+	c := s.circuits[0]
+	now := time.Now()
+	db := s.dbs[packet.Level2]
+
+	// inject delivers a fabricated foreign node LSP through the receive path.
+	inject := func(last byte, seq uint32) {
+		lsp := &packet.LSP{
+			Level: packet.Level2, RemainingTime: 1000,
+			LSPID:          lspID(packet.SystemID{0, 0, 0, 0, 0, last}, 0),
+			SequenceNumber: seq, ISType: 2,
+		}
+		raw, err := lsp.Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.processLSP(c, raw, lsp, now)
+	}
+
+	// Fill the database to the limit with distinct fabricated IDs.
+	for last := byte(2); last <= 4; last++ {
+		inject(last, 1)
+	}
+	if len(db.entries) != 3 {
+		t.Fatalf("setup: %d entries, want 3", len(db.entries))
+	}
+
+	// A fourth previously-unseen ID must be dropped.
+	inject(5, 1)
+	if len(db.entries) != 3 {
+		t.Errorf("database grew past the limit: %d entries", len(db.entries))
+	}
+	if db.get(lspID(packet.SystemID{0, 0, 0, 0, 0, 5}, 0)) != nil {
+		t.Error("LSP with a new ID was admitted at the entry limit")
+	}
+
+	// An update to an already-stored ID must still be accepted at the limit.
+	inject(4, 2)
+	if e := db.get(lspID(packet.SystemID{0, 0, 0, 0, 0, 4}, 0)); e == nil || e.lsp.SequenceNumber != 2 {
+		t.Errorf("update to a known ID was not admitted at the limit: %+v", e)
+	}
+
+	// Own origination bypasses the cap: it never goes through the receive path.
+	s.regenerateLSPs(false, now)
+	if e := db.get(lspID(s.systemID, 0)); e == nil || !e.own {
+		t.Error("own LSP was not originated with the database at the entry limit")
+	}
+	if len(db.entries) != 4 {
+		t.Errorf("expected 3 foreign + 1 own entries, got %d", len(db.entries))
+	}
+}

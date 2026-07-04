@@ -55,6 +55,7 @@ type IsisServer struct {
 	authKeys          map[packet.Level]authSpec // LSP/SNP authentication per level
 	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
+	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
 }
 
 // markDirty requests an SPF/RIB recompute on the next loop iteration. Called
@@ -96,6 +97,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,
 		fibFilter:         o.fibFilter,
+		lsdbEntryLimit:    o.lsdbEntryLimit,
 	}
 	if spec := o.areaAuth.spec(); spec.on() {
 		s.authKeys[packet.Level1] = spec
@@ -350,6 +352,7 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	for level, db := range s.dbs {
 		s.metrics.LSDBSize(levelLabel(level), len(db.entries))
 	}
+	s.metrics.FIBPending(len(s.fibPending))
 }
 
 // mgmtOperation runs f on the Serve loop and waits for its result. State

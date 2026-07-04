@@ -128,6 +128,55 @@ func TestSPFECMP(t *testing.T) {
 	}
 }
 
+func TestSPFAnycastPrefixMergesNextHops(t *testing.T) {
+	// B(.2) and C(.3) both advertise the SAME prefix (anycast) at equal total
+	// cost via disjoint first hops from A(.1): the route must carry the sorted
+	// union of both next-hop sets, not just whichever advertiser was folded in
+	// first (this is prefix-level ECMP across routers, distinct from node-level
+	// ECMP toward one router).
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	s := spfTestServer(t, self)
+	anycast := v4("10.7.0.0/24", 5)
+	installNode(s, nid(1, 0), false, []edge{{nid(2, 0), 10}, {nid(3, 0), 10}}, nil)
+	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{anycast})
+	installNode(s, nid(3, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{anycast})
+
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	r, ok := routes[netip.MustParsePrefix("10.7.0.0/24")]
+	if !ok {
+		t.Fatal("no route to anycast prefix 10.7.0.0/24")
+	}
+	if r.metric != 15 {
+		t.Errorf("metric = %d, want 15", r.metric)
+	}
+	want := []packet.SystemID{{0, 0, 0, 0, 0, 2}, {0, 0, 0, 0, 0, 3}}
+	if len(r.nextHops) != 2 || r.nextHops[0] != want[0] || r.nextHops[1] != want[1] {
+		t.Errorf("nextHops = %v, want sorted union [..02 ..03]", r.nextHops)
+	}
+}
+
+func TestSPFAnycastPrefixPrefersCheaperAdvertiser(t *testing.T) {
+	// Same anycast topology, but C(.3) advertises the prefix at a higher total
+	// cost: only the cheaper advertiser's first hop is used, no merge.
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	s := spfTestServer(t, self)
+	installNode(s, nid(1, 0), false, []edge{{nid(2, 0), 10}, {nid(3, 0), 10}}, nil)
+	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.7.0.0/24", 5)})
+	installNode(s, nid(3, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.7.0.0/24", 50)})
+
+	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	r, ok := routes[netip.MustParsePrefix("10.7.0.0/24")]
+	if !ok {
+		t.Fatal("no route to anycast prefix 10.7.0.0/24")
+	}
+	if r.metric != 15 {
+		t.Errorf("metric = %d, want 15 (cheaper advertiser)", r.metric)
+	}
+	if len(r.nextHops) != 1 || r.nextHops[0] != (packet.SystemID{0, 0, 0, 0, 0, 2}) {
+		t.Errorf("nextHops = %v, want only the cheaper advertiser's hop [..02]", r.nextHops)
+	}
+}
+
 func TestSPFNoMetricOverflow(t *testing.T) {
 	// A long chain of near-max edges pushes the accumulated distance close to
 	// the reachability ceiling; a large (legal 32-bit) prefix metric must not

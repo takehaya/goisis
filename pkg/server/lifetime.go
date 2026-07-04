@@ -6,16 +6,12 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-// purgeOwn floods a purge for one of our own LSPs: a header-only LSP with
-// remaining lifetime zero and a Purge Originator Identification TLV (RFC
-// 6232/8918). The entry is held for ZeroAgeLifetime so the purge propagates.
-func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time) {
-	db := s.dbs[level]
-	ex := db.get(id)
-	seq := uint32(1)
-	if ex != nil {
-		seq = ex.lsp.SequenceNumber + 1
-	}
+// makePurge builds the header-only purge for an LSP (ISO 10589 7.3.16.4): a
+// purge is flooded with the body removed, so only a Purge Originator
+// Identification TLV (RFC 6232/8918) naming this node — and, when the level
+// is keyed, an Authentication TLV — remain. The caller picks the sequence
+// number: purgeOwn bumps ours, expirePurge keeps the foreign originator's.
+func (s *IsisServer) makePurge(level packet.Level, id packet.LSPID, seq uint32) (*packet.LSP, []byte, error) {
 	lsp := &packet.LSP{
 		Level:          level,
 		RemainingTime:  0,
@@ -32,6 +28,26 @@ func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time
 		lsp.TLVs = append(lsp.TLVs, authTLVPlaceholder(spec))
 	}
 	raw, err := s.serializeLSP(lsp)
+	if err != nil {
+		return nil, nil, err
+	}
+	return lsp, raw, nil
+}
+
+// purgeOwn floods a purge for one of our own LSPs: a header-only LSP with
+// remaining lifetime zero and a Purge Originator Identification TLV (RFC
+// 6232/8918). The entry is held for ZeroAgeLifetime so the purge propagates.
+func (s *IsisServer) purgeOwn(level packet.Level, id packet.LSPID, now time.Time) {
+	db := s.dbs[level]
+	ex := db.get(id)
+	// The LSP is ours, so bump the sequence number to supersede every live
+	// copy. Seqno wrap (ISO 10589 7.3.16.1) is deliberately unhandled; see
+	// newer in lsdb.go.
+	seq := uint32(1)
+	if ex != nil {
+		seq = ex.lsp.SequenceNumber + 1
+	}
+	lsp, raw, err := s.makePurge(level, id, seq)
 	if err != nil {
 		s.logger.Error("serialize purge", "lsp", id, "error", err)
 		return
@@ -67,9 +83,20 @@ func (s *IsisServer) ageLSPs(now time.Time) {
 	}
 }
 
-// expirePurge converts an expired foreign LSP into a purge we flood, so the
-// rest of the network drops it too (ISO 10589 7.3.16.4).
+// expirePurge converts an expired (or equal-seq conflicting) foreign LSP into
+// a purge we flood, so the rest of the network drops it too (ISO 10589
+// 7.3.16.4). The stored entry is rewritten header-only via makePurge — a purge
+// must not carry the original body — keeping the originator's current sequence
+// number (only the originator may advance it; a purge supersedes a live copy
+// at equal seq per 7.3.16.2) and own=false so refresh never treats it as ours.
 func (s *IsisServer) expirePurge(level packet.Level, id packet.LSPID, e *lspEntry, now time.Time) {
+	lsp, raw, err := s.makePurge(level, id, e.lsp.SequenceNumber)
+	if err != nil {
+		s.logger.Error("serialize purge", "lsp", id, "error", err)
+		return
+	}
+	e.lsp = lsp
+	e.raw = raw
 	e.purgedAt = now
 	e.lifetime = 0
 	e.inserted = now

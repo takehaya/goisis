@@ -103,6 +103,15 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		return
 	}
 
+	// Cap the database size against an attacker flooding fabricated LSP IDs
+	// on an unauthenticated segment (see WithLSDBEntryLimit). Only new IDs
+	// count: updates to known IDs never grow the map.
+	if ex == nil && s.lsdbEntryLimit > 0 && len(db.entries) >= s.lsdbEntryLimit {
+		s.logger.Warn("drop LSP: database at entry limit",
+			"circuit", c.cfg.Name, "level", level, "lsp", id, "limit", s.lsdbEntryLimit)
+		return
+	}
+
 	// Install the newer copy.
 	stored := make([]byte, len(raw))
 	copy(stored, raw)
@@ -137,6 +146,8 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 		return
 	}
 	lsp := *ex.lsp
+	// Seqno wrap (ISO 10589 7.3.16.1) is deliberately unhandled; see newer in
+	// lsdb.go.
 	lsp.SequenceNumber = seenSeq + 1
 	lsp.RemainingTime = maxAgeSeconds
 	raw, err := s.serializeLSP(&lsp)

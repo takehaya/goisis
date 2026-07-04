@@ -23,6 +23,10 @@ const (
 	BehaviorEnd SIDBehavior = iota
 	BehaviorEndDT4
 	BehaviorEndDT6
+	// BehaviorEndDT46 is declared for API completeness, but the netlink FIB
+	// cannot program it yet (the vendored netlink library predates the
+	// SEG6_LOCAL_ACTION_END_DT46 action) and rejects it with an error.
+	// Custom FIB implementations may support it.
 	BehaviorEndDT46
 )
 
@@ -36,8 +40,11 @@ type LocalSID struct {
 	Table int
 }
 
-// FIB programs and withdraws routes. Implementations must be safe to call
-// from a single goroutine (the IS-IS management loop drives them).
+// FIB programs and withdraws routes. Implementations are called from a single
+// goroutine — the IS-IS management loop — and MUST NOT block: a blocking
+// Update/Withdraw/Sweep stalls the entire protocol engine (hellos, adjacency
+// expiry, flooding on all circuits). Implementations doing slow I/O should
+// queue work internally and return promptly.
 type FIB interface {
 	// Update installs or replaces the route to prefix with the given
 	// next-hop set (an empty set is equivalent to Withdraw).

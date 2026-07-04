@@ -42,12 +42,18 @@ func (s *UnknownSubTLV) Type() uint8 { return s.SubTLVType }
 
 // Serialize implements SubTLV.
 func (s *UnknownSubTLV) Serialize() ([]byte, error) {
-	if len(s.Value) > 255 {
-		return nil, fmt.Errorf("sub-TLV %d: %w: %d octets", s.SubTLVType, ErrTooLong, len(s.Value))
+	return encodeSubTLV(s.SubTLVType, s.Value)
+}
+
+// encodeSubTLV wraps value in a sub-TLV type+length header (the sub-TLV
+// counterpart of encodeTLV).
+func encodeSubTLV(t uint8, value []byte) ([]byte, error) {
+	if len(value) > 255 {
+		return nil, fmt.Errorf("sub-TLV %d: %w: %d octets", t, ErrTooLong, len(value))
 	}
-	out := make([]byte, 0, 2+len(s.Value))
-	out = append(out, s.SubTLVType, byte(len(s.Value)))
-	return append(out, s.Value...), nil
+	out := make([]byte, 0, 2+len(value))
+	out = append(out, t, byte(len(value)))
+	return append(out, value...), nil
 }
 
 type subTLVDecoder func(value []byte) (SubTLV, error)
