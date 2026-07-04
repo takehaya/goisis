@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,13 +31,14 @@ import (
 
 func main() {
 	apiListen := flag.String("api-listen", "127.0.0.1:50051", "listen address for the Connect/gRPC API")
+	apiAllowRemote := flag.Bool("api-allow-remote", false, "allow binding the API beyond loopback; the API has no authentication or TLS, so it must be protected externally (firewall, network isolation)")
 	configFile := flag.String("f", "", "path to the configuration file")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
-	if err := run(logger, *apiListen, *configFile); err != nil {
+	if err := run(logger, *apiListen, *apiAllowRemote, *configFile); err != nil {
 		logger.Error("goisisd exited with error", "error", err)
 		os.Exit(1)
 	}
@@ -45,8 +47,8 @@ func main() {
 // nonLoopbackAPI reports whether the API listen address is reachable from off
 // the host. The Connect/gRPC API is unauthenticated plaintext h2c, so binding
 // it beyond loopback (a specific external IP, or 0.0.0.0/:: for all interfaces)
-// exposes routing state and warrants an operator warning. A hostname or an
-// unparseable address is left to the operator's judgment.
+// exposes routing state and requires the explicit -api-allow-remote opt-in. A
+// hostname or an unparseable address is left to the operator's judgment.
 func nonLoopbackAPI(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil || host == "" {
@@ -59,7 +61,11 @@ func nonLoopbackAPI(addr string) bool {
 	return !ip.IsLoopback()
 }
 
-func run(logger *slog.Logger, apiListen, configFile string) error {
+func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile string) error {
+	if nonLoopbackAPI(apiListen) && !apiAllowRemote {
+		return fmt.Errorf("refusing to bind the unauthenticated management API beyond loopback (%s); pass -api-allow-remote to accept the exposure", apiListen)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
