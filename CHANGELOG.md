@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/takehaya/goisis/compare/v0.1.0...v0.2.0) (2026-07-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **goisisd:** goisisd exits at startup when -api-listen is bound beyond loopback and -api-allow-remote is not given; previously it started with a warning.
+
+### Features
+
+* **goisisd:** require -api-allow-remote for non-loopback API binds ([6e64af8](https://github.com/takehaya/goisis/commit/6e64af8748fc2bec70470171d5e155bd1f06e1b9))
+
+
+### Bug Fixes
+
+* **fib:** match wrapped errnos and reject End.DT46 explicitly ([a0c8241](https://github.com/takehaya/goisis/commit/a0c8241daea7f0fb07cf7eb768d44cdb3dc038e6))
+* **packet:** preserve unknown SRv6 sub-TLVs and reject duplicate auth TLVs ([36de646](https://github.com/takehaya/goisis/commit/36de6468d9c2ede0b32b4d8724daace74c5b1fd6))
+* **server:** header-only expiry purges, LSDB entry cap, fragment guards ([eccd5ba](https://github.com/takehaya/goisis/commit/eccd5baeccf44c65f0839677a3103fcf8644c128))
+
 ## 0.1.0 (2026-06-19)
 
 
