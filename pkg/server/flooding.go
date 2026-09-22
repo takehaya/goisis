@@ -233,7 +233,23 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 			c.clearSRM(level, id)
 			continue
 		}
-		if err := c.cfg.Transport.Send(c.dest(level), e.wire(now)); err != nil {
+		wire := e.wire(now)
+		// Our own LSPs are sized to fit every circuit (see WithLSPMTU), but a
+		// foreign one is re-flooded from the octets we received and a transit
+		// node may not re-fragment it (ISO 10589 7.3.3). One that overruns this
+		// circuit can therefore never be sent here: drop the flag instead of
+		// retrying it every second forever, and log once per circuit so the
+		// repeat does not amplify into the management loop.
+		if maxSize := c.cfg.Transport.MTU() - 3; len(wire) > maxSize { // 3 = LLC header
+			if !c.oversizeWarned {
+				c.oversizeWarned = true
+				s.logger.Warn("LSP exceeds the circuit MTU; not flooded here; suppressing repeats",
+					"circuit", c.cfg.Name, "lsp", id, "size", len(wire), "max", maxSize)
+			}
+			c.clearSRM(level, id)
+			continue
+		}
+		if err := c.cfg.Transport.Send(c.dest(level), wire); err != nil {
 			s.logger.Error("send LSP", "circuit", c.cfg.Name, "lsp", id, "error", err)
 			continue
 		}

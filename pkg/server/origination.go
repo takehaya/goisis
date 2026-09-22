@@ -193,14 +193,14 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 }
 
 // originateFragmented splits a node's (or pseudonode's) TLV set across LSP
-// fragments so each fragment fits the architectural buffer, originates each, and
+// fragments so each fragment fits this node's LSP buffer, originates each, and
 // purges any higher-numbered fragments left over from a larger prior
 // origination. The fixed TLVs stay in fragment 0; att and the overload bit
 // apply to fragment 0 only.
 func (s *IsisServer) originateFragmented(level packet.Level, pseudonode uint8, fixed, variable []packet.TLV, att, forceRefresh bool, now time.Time) {
 	// Reserve the LSP header and, when the level is authenticated, the
 	// Authentication TLV that originate appends to each fragment.
-	budget := packet.ReceiveLSPBufferSize - packet.HeaderLen(packet.PDUTypeL2LSP)
+	budget := s.lspBufferSize - packet.HeaderLen(packet.PDUTypeL2LSP)
 	if spec := s.authKey(level); spec.on() {
 		budget -= tlvLen(authTLVPlaceholder(spec))
 	}
@@ -333,10 +333,10 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 	// originateFragmented keeps each fragment within the buffer; reaching here
 	// means a single fragment's fixed TLVs plus one variable TLV still overflow
 	// (pathological). Surface it loudly and drop the fragment rather than
-	// storing and flooding an LSP peers discard (ReceiveLSPBufferSize).
-	if len(raw) > packet.ReceiveLSPBufferSize {
+	// storing and flooding an LSP peers discard (see WithLSPMTU).
+	if len(raw) > s.lspBufferSize {
 		s.logger.Error("own LSP fragment exceeds the maximum size; not originated",
-			"lsp", id, "size", len(raw), "max", packet.ReceiveLSPBufferSize)
+			"lsp", id, "size", len(raw), "max", s.lspBufferSize)
 		return
 	}
 	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}

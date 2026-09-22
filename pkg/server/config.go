@@ -244,6 +244,7 @@ type options struct {
 	advertiseFilter   AdvertiseFilter
 	fibFilter         FIBFilter
 	lsdbEntryLimit    int
+	lspMTU            int
 	hasSystemID       bool
 }
 
@@ -409,6 +410,24 @@ func WithDomainAuth(cfg AuthConfig) ServerOption {
 // area's LSP count: a dropped legitimate LSP means an incomplete topology.
 func WithLSDBEntryLimit(n int) ServerOption {
 	return func(o *options) { o.lsdbEntryLimit = n }
+}
+
+// minLSPMTU is the smallest LSP size this node will originate into. ISO 10589
+// requires every LSP to carry the fixed header plus the area-address and
+// protocols-supported TLVs, so anything near that leaves no room for
+// reachability; 512 is a floor below which the configuration is a mistake
+// rather than a tight link.
+const minLSPMTU = 512
+
+// WithLSPMTU caps the size of the LSPs this node originates. Zero (the
+// default) derives the cap from the circuits — the smallest circuit MTU less
+// the 3-octet LLC header, itself capped at the architectural 1492-octet
+// receive buffer. Set it when an interface MTU overstates what the path
+// actually carries (a tunnel that fragments, an overlay adding headers);
+// FRR spells the same knob `lsp-mtu`. NewIsisServer rejects a resulting cap
+// below 512 octets.
+func WithLSPMTU(n int) ServerOption {
+	return func(o *options) { o.lspMTU = n }
 }
 
 // WithOverloadOnStartup sets the overload bit (ISO 10589) in this node's own

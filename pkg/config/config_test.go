@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/packet"
+	"github.com/takehaya/goisis/pkg/server"
 )
 
 func TestAuthAlgorithm(t *testing.T) {
@@ -234,5 +236,36 @@ func TestLevels(t *testing.T) {
 		if tc.ok && (l1 != tc.l1 || l2 != tc.l2) {
 			t.Errorf("levels(%q) = (%v,%v), want (%v,%v)", tc.in, l1, l2, tc.l1, tc.l2)
 		}
+	}
+}
+
+// TestLSPMTU: lsp-mtu reaches server.WithLSPMTU — a workable value builds a
+// server, and one below the 512-octet minimum is refused there.
+func TestLSPMTU(t *testing.T) {
+	c := loadConfig(t, `net: 49.0001.0000.0000.0001.00
+lsp-mtu: 1400
+circuits:
+  - interface: mock0
+`)
+	if c.LSPMTU != 1400 {
+		t.Fatalf("lsp-mtu = %d, want 1400", c.LSPMTU)
+	}
+	c.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	opts, err := c.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	if _, err := server.NewIsisServer(opts...); err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+
+	c.LSPMTU = 400
+	if opts, err = c.Options(); err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	if _, err := server.NewIsisServer(opts...); err == nil {
+		t.Error("lsp-mtu 400 built a server; the value never reached WithLSPMTU")
 	}
 }

@@ -53,6 +53,9 @@ type Config struct {
 	// defense-in-depth guard against LSDB exhaustion; zero or negative
 	// disables the cap. Size it well above the legitimate area's LSP count.
 	LSDBEntryLimit int `yaml:"lsdb-entry-limit"`
+	// LSPMTU caps the size of the LSPs this node originates; zero derives it
+	// from the circuit MTUs.
+	LSPMTU int `yaml:"lsp-mtu"`
 	// OpenCircuit, when non-nil, replaces how Options opens each circuit's
 	// transport and reads its hello source addresses — the only impure part
 	// of Options (the default opens an AF_PACKET socket on the interface).
@@ -197,6 +200,9 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 	}
 	if c.LSDBEntryLimit > 0 {
 		opts = append(opts, server.WithLSDBEntryLimit(c.LSDBEntryLimit))
+	}
+	if c.LSPMTU > 0 {
+		opts = append(opts, server.WithLSPMTU(c.LSPMTU))
 	}
 	if c.OverloadOnStartup != "" {
 		d, err := time.ParseDuration(c.OverloadOnStartup)
