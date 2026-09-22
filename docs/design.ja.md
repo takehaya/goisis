@@ -271,4 +271,5 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
 | コーデック | ユニットテスト + FRR から採取したゴールデン PDU（`test/fixturegen`）+ 継続的 fuzz（冪等性 + no-panic の契約）。 |
 | プロトコル | インプロセステスト: `datalink.Link` のモックトランスポートで結線したサーバー同士が実際に収束します（隣接、フラッディング、経路）。特権不要。ホワイトボックステストは LSP を注入（`injectLSP`）し `computeSPF` を直接呼びます。 |
 | 決定性 | テストは可能な限り sleep ではなく `mgmtOperation` の往復で同期します — それを可能にしているのが単一ループ設計です。 |
+| ベンチマーク | `BenchmarkComputeSPF` が O(V^2) の `popMin` という選択の妥当性を測ります。50/200/1000 ノードの数値は PR に記載します。 |
 | 相互接続 | `test/interop`: veth ペアのホスト側に goisis、対向に本物の FRR isisd コンテナ（broadcast + p2p、認証、SRv6、Flex-Algo、フラグメンテーション、プログラム済み経路経由の ping）。root + docker が必要で、CI では push/PR ごとに実行されます。 |
