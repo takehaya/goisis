@@ -13,12 +13,13 @@ import (
 const maxPathMetric = 0xfe000000
 
 // spfNode is a topology vertex derived from one LSP: its IS-reachability
-// edges, its advertised prefixes, and its overload bit.
+// edges, its advertised prefixes, its overload bit, and its ATT bit.
 type spfNode struct {
 	id       packet.NodeID
 	edges    []spfEdge
 	prefixes []spfPrefix
 	overload bool
+	attached bool
 }
 
 type spfEdge struct {
@@ -60,7 +61,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 	}
 
 	// Pass 1: admit a node from its fragment-0 LSP, which carries the node's
-	// header flags (overload) and, for a Flex-Algo, its SR-Algorithm
+	// header flags (overload, ATT) and, for a Flex-Algo, its SR-Algorithm
 	// participation (Router Capability TLV 242, fragment 0). A node with no
 	// live fragment 0 is not in the topology.
 	nodes := map[packet.NodeID]*spfNode{}
@@ -77,7 +78,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 		if algo != 0 && nid.PseudonodeID() == 0 && !lspParticipatesInAlgo(e, algo) {
 			continue // Flex-Algo prunes non-participating real nodes (pseudonodes are transit)
 		}
-		nodes[nid] = &spfNode{id: nid, overload: e.lsp.Overload}
+		nodes[nid] = &spfNode{id: nid, overload: e.lsp.Overload, attached: e.lsp.AttDefault}
 		have[nid] = map[netip.Prefix]bool{}
 	}
 
@@ -257,16 +258,73 @@ func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) m
 			if sum >= maxPathMetric {
 				continue
 			}
-			total := uint32(sum)
-			cur, ok := routes[p.prefix]
-			if !ok || total < cur.metric {
-				routes[p.prefix] = route{metric: total, level: level, algo: algo, nextHops: nh}
-			} else if total == cur.metric {
-				routes[p.prefix] = route{metric: total, level: level, algo: algo, nextHops: mergeHops(cur.nextHops, nh)}
+			addRoute(routes, p.prefix, route{metric: uint32(sum), level: level, algo: algo, nextHops: nh})
+		}
+	}
+
+	// RFC 1195 §3.2 / ISO 10589 7.2.9.2: a Level-1-only IS has no topology
+	// outside its area, so everything else goes toward the nearest reachable
+	// IS whose L1 LSP has the ATT bit set. An L1L2 IS sets that bit itself and
+	// reaches other areas through its own L2 SPF, so it must not do this.
+	if level == packet.Level1 && algo == 0 && !s.levelCap.has(packet.Level2) {
+		addAttachedDefault(routes, nodes, done, dist, hops)
+	}
+	return routes
+}
+
+// defaultV4 and defaultV6 are the ATT-derived default routes, one per address
+// family. resolveNextHops picks a gateway of the prefix's family, so an
+// attached IS reachable over IPv4 only simply yields no IPv6 default.
+var (
+	defaultV4 = netip.MustParsePrefix("0.0.0.0/0")
+	defaultV6 = netip.MustParsePrefix("::/0")
+)
+
+// addAttachedDefault adds a default route toward the nearest attached IS,
+// with every equidistant attached IS contributing its first hops (ECMP).
+func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*spfNode,
+	done map[packet.NodeID]bool, dist map[packet.NodeID]uint32, hops map[packet.NodeID]map[packet.SystemID]bool,
+) {
+	var best uint32
+	var nh map[packet.SystemID]bool
+	for id := range done {
+		n := nodes[id]
+		// A pseudonode has no ATT bit of its own; an overloaded IS asks not to
+		// carry transit traffic, which is exactly what an exit would do.
+		if n == nil || id.PseudonodeID() != 0 || !n.attached || n.overload {
+			continue
+		}
+		if len(hops[id]) == 0 {
+			continue // self, or no resolvable first hop
+		}
+		switch {
+		case nh == nil || dist[id] < best:
+			best, nh = dist[id], cloneHops(hops[id])
+		case dist[id] == best:
+			for h := range hops[id] {
+				nh[h] = true
 			}
 		}
 	}
-	return routes
+	if nh == nil {
+		return
+	}
+	for _, p := range []netip.Prefix{defaultV4, defaultV6} {
+		addRoute(routes, p, route{metric: best, level: packet.Level1, algo: 0, nextHops: sortedHops(nh)})
+	}
+}
+
+// addRoute merges one computed route for a prefix into the route set: a lower
+// total metric wins outright, an equal one merges the first-hop sets (ECMP).
+func addRoute(routes map[netip.Prefix]route, p netip.Prefix, r route) {
+	cur, ok := routes[p]
+	switch {
+	case !ok || r.metric < cur.metric:
+		routes[p] = r
+	case r.metric == cur.metric:
+		cur.nextHops = mergeHops(cur.nextHops, r.nextHops)
+		routes[p] = cur
+	}
 }
 
 // firstHopsFor returns the first-hop set for neighbor `to` reached from cur.

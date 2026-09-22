@@ -214,3 +214,171 @@ func TestSPFOverloadNoTransit(t *testing.T) {
 		t.Error("transit through an overloaded node should be avoided")
 	}
 }
+
+// attServer returns an IS whose single circuit is Level 1, and Level 2 too
+// when l1l2 is set: levelCap is what tells computeSPF whether we are the
+// L1-only IS that consumes the ATT bit.
+func attServer(t *testing.T, l1l2 bool) *IsisServer {
+	t.Helper()
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
+	return mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: tr, Level1: true, Level2: l1l2, Padding: ptrFalse()}),
+	)
+}
+
+// isReachMetric is isReach for a single neighbor at an explicit metric.
+func isReachMetric(nb packet.SystemID, metric uint32) packet.TLV {
+	return &packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{{NeighborID: nodeID(nb, 0), Metric: metric}}}
+}
+
+// injectL1 installs a synthetic L1 fragment-0 LSP carrying the header flags.
+func injectL1(s *IsisServer, id packet.SystemID, att, overload bool, tlvs []packet.TLV, now time.Time) {
+	injectLSPAt(s, packet.Level1, id, tlvs, now)
+	lsp := s.dbs[packet.Level1].entries[lspID(id, 0)].lsp
+	lsp.AttDefault = att
+	lsp.Overload = overload
+}
+
+// attDefaults returns the two default routes, failing if either is missing.
+func attDefaults(t *testing.T, routes map[netip.Prefix]route) (v4, v6 route) {
+	t.Helper()
+	for _, p := range []netip.Prefix{defaultV4, defaultV6} {
+		if _, ok := routes[p]; !ok {
+			t.Fatalf("no default route for %s; routes=%v", p, routes)
+		}
+	}
+	return routes[defaultV4], routes[defaultV6]
+}
+
+// A Level-1-only IS installs a default route toward the nearest IS that set the
+// ATT bit: B at metric 10, not C at 20 (RFC 1195 §3.2).
+func TestL1OnlyNodeInstallsDefaultViaNearestAttachedIS(t *testing.T) {
+	s := attServer(t, false)
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	b := packet.SystemID{0, 0, 0, 0, 0, 2}
+	c := packet.SystemID{0, 0, 0, 0, 0, 3}
+
+	injectL1(s, self, false, false, []packet.TLV{isReach(b)}, now)
+	injectL1(s, b, true, false, []packet.TLV{isReach(self, c)}, now)
+	injectL1(s, c, true, false, []packet.TLV{isReach(b)}, now)
+
+	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	for _, r := range []route{v4r, v6r} {
+		if r.metric != 10 {
+			t.Errorf("metric = %d, want 10 (distance to the nearest attached IS)", r.metric)
+		}
+		if len(r.nextHops) != 1 || r.nextHops[0] != b {
+			t.Errorf("nextHops = %v, want [..02]", r.nextHops)
+		}
+		if r.level != packet.Level1 || r.algo != 0 {
+			t.Errorf("route = (level %v, algo %d), want (Level1, 0)", r.level, r.algo)
+		}
+	}
+}
+
+// The ATT bit of an overloaded IS is ignored: an IS that asks not to carry
+// transit traffic is not an exit either, so the farther C wins.
+func TestAttachedISWithOverloadBitIsNotUsedAsExit(t *testing.T) {
+	s := attServer(t, false)
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	b := packet.SystemID{0, 0, 0, 0, 0, 2}
+	c := packet.SystemID{0, 0, 0, 0, 0, 3}
+
+	injectL1(s, self, false, false, []packet.TLV{isReach(b, c)}, now)
+	injectL1(s, b, true, true, []packet.TLV{isReach(self)}, now)
+	injectL1(s, c, true, false, []packet.TLV{isReach(self)}, now)
+
+	v4r, _ := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	if len(v4r.nextHops) != 1 || v4r.nextHops[0] != c {
+		t.Errorf("nextHops = %v, want [..03] (the overloaded B is not an exit)", v4r.nextHops)
+	}
+}
+
+// An L1L2 IS is itself attached and reaches other areas through its own L2
+// SPF, so it must not follow someone else's ATT bit.
+func TestL1L2NodeDoesNotInstallDefaultFromATT(t *testing.T) {
+	s := attServer(t, true)
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	b := packet.SystemID{0, 0, 0, 0, 0, 2}
+
+	injectL1(s, self, true, false, []packet.TLV{isReach(b)}, now)
+	injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
+
+	routes := s.computeSPF(packet.Level1, 0, now)
+	if r, ok := routes[defaultV4]; ok {
+		t.Errorf("L1L2 IS installed an ATT default route %v", r)
+	}
+	if r, ok := routes[defaultV6]; ok {
+		t.Errorf("L1L2 IS installed an ATT default route %v", r)
+	}
+}
+
+// An explicitly advertised default competes with the ATT default under the
+// ordinary prefix rule: a lower metric wins outright, an equal one merges.
+func TestExplicitDefaultWithLowerMetricBeatsATTDefault(t *testing.T) {
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	b := packet.SystemID{0, 0, 0, 0, 0, 2}
+	d := packet.SystemID{0, 0, 0, 0, 0, 4}
+
+	// B is attached at distance 10; D is dLink away and advertises 0.0.0.0/0
+	// at metric 0, so the explicit default's total metric is dLink.
+	defaultVia := func(t *testing.T, dLink uint32) route {
+		t.Helper()
+		s := attServer(t, false)
+		now := time.Now()
+		injectL1(s, self, false, false, []packet.TLV{isReach(b), isReachMetric(d, dLink)}, now)
+		injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
+		injectL1(s, d, false, false, []packet.TLV{isReach(self),
+			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{v4("0.0.0.0/0", 0)}}}, now)
+		routes := s.computeSPF(packet.Level1, 0, now)
+		r, ok := routes[defaultV4]
+		if !ok {
+			t.Fatalf("no default route; routes=%v", routes)
+		}
+		return r
+	}
+
+	r := defaultVia(t, 5)
+	if r.metric != 5 {
+		t.Errorf("metric = %d, want 5 (the cheaper explicit default)", r.metric)
+	}
+	if len(r.nextHops) != 1 || r.nextHops[0] != d {
+		t.Errorf("nextHops = %v, want [..04] only", r.nextHops)
+	}
+
+	r = defaultVia(t, 10)
+	if r.metric != 10 {
+		t.Errorf("metric = %d, want 10", r.metric)
+	}
+	if len(r.nextHops) != 2 || r.nextHops[0] != b || r.nextHops[1] != d {
+		t.Errorf("nextHops = %v, want the merged [..02 ..04] at equal metric", r.nextHops)
+	}
+}
+
+// Equidistant attached ISs all contribute their first hops to the default.
+func TestEquidistantAttachedISsGiveECMPDefault(t *testing.T) {
+	s := attServer(t, false)
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	b := packet.SystemID{0, 0, 0, 0, 0, 2}
+	c := packet.SystemID{0, 0, 0, 0, 0, 3}
+
+	injectL1(s, self, false, false, []packet.TLV{isReach(b, c)}, now)
+	injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
+	injectL1(s, c, true, false, []packet.TLV{isReach(self)}, now)
+
+	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	for _, r := range []route{v4r, v6r} {
+		if r.metric != 10 {
+			t.Errorf("metric = %d, want 10", r.metric)
+		}
+		if len(r.nextHops) != 2 || r.nextHops[0] != b || r.nextHops[1] != c {
+			t.Errorf("nextHops = %v, want [..02 ..03]", r.nextHops)
+		}
+	}
+}
