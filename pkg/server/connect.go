@@ -360,7 +360,7 @@ func uint8FromProto(v uint32, field string) (uint8, error) {
 
 func (h *connectHandler) WatchEvent(
 	ctx context.Context,
-	_ *connect.Request[goisisv1.WatchEventRequest],
+	req *connect.Request[goisisv1.WatchEventRequest],
 	stream *connect.ServerStream[goisisv1.WatchEventResponse],
 ) error {
 	sub, err := h.s.Subscribe(ctx)
@@ -368,6 +368,13 @@ func (h *connectHandler) WatchEvent(
 		return toConnectError(err)
 	}
 	defer sub.Unsubscribe()
+	if req.Msg.GetIncludeInitial() {
+		for _, ev := range sub.Initial {
+			if err := stream.Send(eventToProto(ev)); err != nil {
+				return err
+			}
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():

@@ -106,6 +106,9 @@ s.ClearAdjacency(ctx, "eth0", nil) // nil: サーキット上の全隣接
 sub, err := s.Subscribe(ctx)
 if err != nil { return err }
 defer sub.Unsubscribe()
+for _, ev := range sub.Initial {  // 現在の隣接、続いて経路
+    // 以下のイベントと同じ形。ここでは ev.Withdrawn は立たない
+}
 for ev := range sub.Events {
     switch {
     case ev.Adjacency != nil:               // 隣接の状態変化
@@ -114,6 +117,12 @@ for ev := range sub.Events {
     }
 }
 ```
+
+`sub.Initial` は watcher を登録するのと同じ管理オペレーションで撮った隣接と
+経路のスナップショットです。したがってスナップショットと `Events` の間に隙間は
+なく、`ListRoutes` のあとに `Subscribe` する場合と違って途中の変化を取りこぼし
+ません。RPC では `WatchEventRequest.include_initial`(`goisis monitor
+--initial`)で要求します。
 
 サブスクリプションのバッファは有限で、追いつけない購読者は(コントロールプレーンを
 止める代わりに)切断されます(チャネルがクローズし `sub.Lagged()` が true を返す)。

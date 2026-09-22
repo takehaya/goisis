@@ -2001,9 +2001,13 @@ func (*ClearAdjacencyResponse) Descriptor() ([]byte, []int) {
 }
 
 type WatchEventRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// include_initial asks for a snapshot of the current adjacencies and routes
+	// before the live events. The snapshot is taken as the subscription is
+	// registered, so it leaves no gap that a separate List call would.
+	IncludeInitial bool `protobuf:"varint,1,opt,name=include_initial,json=includeInitial,proto3" json:"include_initial,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *WatchEventRequest) Reset() {
@@ -2034,6 +2038,13 @@ func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use WatchEventRequest.ProtoReflect.Descriptor instead.
 func (*WatchEventRequest) Descriptor() ([]byte, []int) {
 	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *WatchEventRequest) GetIncludeInitial() bool {
+	if x != nil {
+		return x.IncludeInitial
+	}
+	return false
 }
 
 type WatchEventResponse struct {
@@ -2328,8 +2339,9 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x15ClearAdjacencyRequest\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x1b\n" +
 	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\"\x18\n" +
-	"\x16ClearAdjacencyResponse\"\x13\n" +
-	"\x11WatchEventRequest\"\x87\x01\n" +
+	"\x16ClearAdjacencyResponse\"<\n" +
+	"\x11WatchEventRequest\x12'\n" +
+	"\x0finclude_initial\x18\x01 \x01(\bR\x0eincludeInitial\"\x87\x01\n" +
 	"\x12WatchEventResponse\x129\n" +
 	"\tadjacency\x18\x01 \x01(\v2\x19.goisis.v1.AdjacencyEventH\x00R\tadjacency\x12-\n" +
 	"\x05route\x18\x02 \x01(\v2\x15.goisis.v1.RouteEventH\x00R\x05routeB\a\n" +

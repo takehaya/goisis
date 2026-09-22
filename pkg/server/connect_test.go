@@ -3,11 +3,16 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
+	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -131,5 +136,53 @@ func TestParseSystemID(t *testing.T) {
 		if tc.ok && got != tc.want {
 			t.Errorf("parseSystemID(%q) = %v, want %v", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestWatchEventIncludeInitialOverConnect asserts a client that asks for the
+// snapshot receives it before any live event, so it can prime itself from the
+// stream alone.
+func TestWatchEventIncludeInitialOverConnect(t *testing.T) {
+	dst := netip.MustParsePrefix("10.9.9.0/24")
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	// There is no peer to converge with, so seed the RIB with what SPF would
+	// have computed. Seeding in the same operation that finds no recompute
+	// pending is what keeps it: a pending one would replace the whole map.
+	waitFor(t, "startup SPF to settle", func() bool {
+		seeded := false
+		_ = s.mgmtOperation(ctx, func() error {
+			if !s.spfDirty {
+				s.rib[dst] = RouteInfo{Prefix: dst, Metric: 10, Level: packet.Level2}
+				seeded = true
+			}
+			return nil
+		})
+		return seeded
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle(NewConnectHandler(s))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := goisisv1connect.NewIsisServiceClient(ts.Client(), ts.URL)
+
+	stream, err := client.WatchEvent(ctx, connect.NewRequest(&goisisv1.WatchEventRequest{IncludeInitial: true}))
+	if err != nil {
+		t.Fatalf("WatchEvent: %v", err)
+	}
+	defer func() { _ = stream.Close() }()
+	if !stream.Receive() {
+		t.Fatalf("Receive: %v", stream.Err())
+	}
+	if got := stream.Msg().GetRoute().GetRoute().GetPrefix(); got != dst.String() {
+		t.Errorf("first event = %+v, want snapshot route %s", stream.Msg(), dst)
 	}
 }

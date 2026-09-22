@@ -143,7 +143,8 @@ exactly these as ambient capabilities.
 
 The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 `global`, `circuit`, `neighbor`, `database`, `route`, `prefix`, `overload`,
-`locator`, `flex-algo`, and `monitor` (streams `WatchEvent`).
+`locator`, `flex-algo`, and `monitor` (streams `WatchEvent`; `--initial` prints
+the current adjacencies and routes before following changes).
 
 `--addr` also takes `unix:///absolute/path` to reach a daemon started with
 `goisisd -api-listen unix:///run/goisis/goisisd.sock`. The API is
