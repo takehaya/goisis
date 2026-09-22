@@ -133,6 +133,23 @@ func (c *circuit) infoFor(adj *adjacency, l packet.Level) AdjacencyInfo {
 	}
 }
 
+// upAdjacencyFrom reports whether src is the SNPA of an adjacency that is Up
+// at this level on the circuit. ISO 10589 7.3.15.1/7.3.15.2 accept an LSP or
+// an SNP only from such a source: a station that never sent a hello must not
+// be able to reach the update process.
+func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) bool {
+	if c.cfg.P2P {
+		adj := c.p2pAdj
+		return adj != nil && adj.state == AdjUp && adj.levels.has(level) && adj.snpa == src
+	}
+	for _, adj := range c.adjs[level] {
+		if adj.snpa == src && adj.state == AdjUp {
+			return true
+		}
+	}
+	return false
+}
+
 // upAdjacencies returns the Up adjacencies at a level (broadcast).
 func (c *circuit) upAdjacencies(l packet.Level) []*adjacency {
 	var out []*adjacency
