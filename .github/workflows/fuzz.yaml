@@ -16,22 +16,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - FuzzDecodePDU
-          - FuzzDecodeTLVs
+        include:
+          - target: FuzzDecodePDU
+            pkg: ./pkg/packet/
+          - target: FuzzDecodeTLVs
+            pkg: ./pkg/packet/
+          - target: FuzzHandleRx
+            pkg: ./pkg/server/
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: Fuzz ${{ matrix.target }}
-        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m ./pkg/packet/
+        run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.pkg }}
       - name: Upload crashers
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-corpus-${{ matrix.target }}
-          path: pkg/packet/testdata/fuzz/
+          path: ${{ matrix.pkg }}testdata/fuzz/
           if-no-files-found: ignore
       # Open (or update) a tracking issue so a nightly crash is not lost in the
       # Actions tab. One open issue per target — re-crashes add a comment rather
@@ -41,6 +45,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ matrix.target }}
+          PKG: ${{ matrix.pkg }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh label create fuzz --color FBCA04 --description "fuzz-found crash" 2>/dev/null || true
@@ -49,5 +54,5 @@ jobs:
             gh issue comment "$n" --body "Reproduced again: $RUN_URL"
           else
             gh issue create --label fuzz --title "fuzz: $TARGET found a crash" \
-              --body "Nightly fuzz of \`$TARGET\` crashed. The reproducing input is in the run artifact \`fuzz-corpus-$TARGET\` ($RUN_URL). Download it into \`pkg/packet/testdata/fuzz/$TARGET/\`, then run \`go test -run '$TARGET/<hash>' ./pkg/packet/\` to reproduce — committing that file turns the crash into a permanent regression test."
+              --body "Nightly fuzz of \`$TARGET\` crashed. The reproducing input is in the run artifact \`fuzz-corpus-$TARGET\` ($RUN_URL). Download it into \`${PKG#./}testdata/fuzz/$TARGET/\`, then run \`go test -run '$TARGET/<hash>' $PKG\` to reproduce — committing that file turns the crash into a permanent regression test."
           fi
