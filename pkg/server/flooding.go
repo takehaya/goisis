@@ -223,6 +223,9 @@ func (s *IsisServer) floodTransmit(now time.Time) {
 // arrived. On a LAN the flag is cleared after one send (the DIS CSNP provides
 // reliability); on p2p it is rescheduled until a PSNP acknowledges it.
 func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) {
+	if !c.floodReady(level) {
+		return // p2p with no Up adjacency: the flags are re-armed when one comes Up
+	}
 	db := s.dbs[level]
 	for id, when := range c.srm[level] {
 		if now.Before(when) {
@@ -265,8 +268,8 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 // transmitPSNP sends one PSNP describing every LSP flagged SSN on the circuit
 // (acknowledgements on p2p, requests on a LAN), then clears the flags.
 func (s *IsisServer) transmitPSNP(c *circuit, level packet.Level, now time.Time) {
-	if len(c.ssn[level]) == 0 {
-		return
+	if len(c.ssn[level]) == 0 || !c.floodReady(level) {
+		return // p2p with no Up adjacency: an acknowledgement to nobody
 	}
 	db := s.dbs[level]
 	var entries []packet.LSPEntry

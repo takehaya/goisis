@@ -330,8 +330,8 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		// Only the current neighbor can take our adjacency down this way; a
 		// third router's hello on a misconfigured shared segment is ignored.
 		if adj := c.p2pAdj; adj != nil && adj.systemID == h.SourceID {
+			c.p2pAdj = nil // detach first: teardown re-originates our LSP
 			s.teardownP2PAdj(c, adj, "p2p adjacency down: neighbor handshakes with another router")
-			c.p2pAdj = nil
 		}
 		return
 	}
@@ -407,13 +407,15 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 }
 
 // teardownP2PAdj reports a point-to-point neighbor going down for the given
-// reason and asks for a re-origination so our LSP drops its stale IS
-// reachability. The caller owns c.p2pAdj: it either clears it or replaces it.
+// reason, drops the flooding flags aimed at it, and asks for a re-origination
+// so our LSP drops its stale IS reachability. The caller owns c.p2pAdj: it
+// either clears it or replaces it.
 func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency, reason string) {
 	s.logger.Info(reason, "circuit", c.cfg.Name, "neighbor", adj.systemID)
 	for _, l := range adj.levels.levels() {
 		s.emitAdjacencyDown(c, adj, l)
 	}
+	c.clearFlags()
 	s.requestLSPRegen()
 }
 
@@ -438,12 +440,10 @@ func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
 func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 	if c.cfg.P2P {
 		if adj := c.p2pAdj; adj != nil && expired(adj, now) {
-			s.logger.Info("p2p adjacency expired", "circuit", c.cfg.Name, "neighbor", adj.systemID)
-			for _, l := range adj.levels.levels() {
-				s.emitAdjacencyDown(c, adj, l)
-			}
+			// Detach first: teardown re-originates, and our LSP must no longer
+			// see the dead neighbor.
 			c.p2pAdj = nil
-			s.requestLSPRegen()
+			s.teardownP2PAdj(c, adj, "p2p adjacency expired")
 		}
 		return
 	}

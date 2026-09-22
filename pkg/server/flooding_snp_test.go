@@ -374,7 +374,8 @@ func TestProcessLSPAcknowledgesUnknownPurgeWithoutStoringIt(t *testing.T) {
 	now := time.Now()
 	unknown := lspID(packet.SystemID{9, 9, 9, 9, 9, 9}, 0)
 
-	s, c := snpServer(t, true) // p2p
+	s, c := snpServer(t, true)                          // p2p
+	upP2PAdj(c, packet.SystemID{0, 0, 0, 0, 0, 2}, now) // an LSP only ever arrives over one
 	stop := capturePSNPs(t, c)
 
 	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: unknown, SequenceNumber: 3, ISType: 2}

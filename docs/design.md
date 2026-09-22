@@ -201,7 +201,10 @@ Two invariants matter beyond the codec:
   purges are held for ZeroAgeLifetime after going to zero.
 - **Flooding.** Per-circuit SRM/SSN flag sets drive retransmission: LAN
   reliability comes from the DIS's periodic CSNPs, p2p reliability from
-  PSNP acknowledgements with a minimum retransmission interval. Purges are
+  PSNP acknowledgements with a minimum retransmission interval. A p2p circuit
+  transmits nothing without an Up adjacency, and drops its flags when the
+  adjacency goes down (ISO 10589 7.3.17 re-arms them when one comes Up).
+  Purges are
   flooded header-only (POI + authentication when keyed), for both our own
   LSPs and expired foreign ones.
 - **Origination.** Own LSPs are rebuilt from config + adjacency state and

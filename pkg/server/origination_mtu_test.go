@@ -95,6 +95,7 @@ func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
 	)
 	now := time.Now()
 	c := s.circuits[0]
+	upP2PAdj(c, packet.SystemID{0, 0, 0, 0, 0, 9}, now) // p2p floods only to an Up neighbor
 
 	// 1400 octets: past this circuit's 997-octet budget, inside the 1492-octet
 	// buffer, so a wider circuit would flood it unchanged.
