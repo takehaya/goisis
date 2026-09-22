@@ -10,8 +10,10 @@ options. ([日本語](configuration.ja.md))
 | `net` | string (required) | Network Entity Title: area address + 6-octet system ID. The last octet (NSEL) must be `00`, e.g. `49.0001.0000.0000.0001.00`. |
 | `hostname` | string | Dynamic hostname advertised in LSPs (RFC 5301). |
 | `fib` | bool | Program computed routes into the Linux kernel FIB tagged `proto isis`. Requires `CAP_NET_ADMIN`. Default `false` (control-plane only). |
+| `fib-table` | int | Routing table the routes are programmed into when `fib` is set. Default `254` (main). |
 | `overload-on-startup` | duration | Set the overload bit for this long after startup, then clear it (e.g. `30s`). While set, peers route no transit traffic through this node. |
 | `lsp-mtu` | int | Maximum size of LSPs this node originates; defaults to the smallest circuit MTU minus the LLC header, capped at 1492. |
+| `lsdb-entry-limit` | int | Cap on the LSPs held per level, guarding against LSDB exhaustion. Size it well above the area's legitimate LSP count. Default `0` (no cap). |
 | `area-password` | string | Authenticate Level-1 LSPs and SNPs with this key. |
 | `area-accept-passwords` | list of string | Extra keys accepted on received Level-1 LSPs and SNPs (same algorithm and key ID); never used to sign. See [Key rotation](#key-rotation). |
 | `area-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `area-password md5`), or `sha1`/`sha256`/`sha384`/`sha512` (RFC 5310). |
@@ -21,9 +23,10 @@ options. ([日本語](configuration.ja.md))
 > FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
 > interop goisis↔goisis, not with FRR.
 | `circuits` | list (required) | Interfaces to run IS-IS on; see below. |
-| `prefixes` | list of CIDR | Extra prefixes to originate. Connected subnets of the circuits are advertised automatically. |
+| `prefixes` | list | Extra prefixes to originate, each a bare CIDR (`10.1.1.1/32`, metric 10) or a mapping `{prefix: 10.1.1.1/32, metric: 20}`. Connected subnets of the circuits are advertised automatically. |
 | `srv6` | object | SRv6 locators; see below. |
 | `flex-algo` | list | Flexible Algorithm definitions; see below. |
+| `policy` | object | Prefix-lists gating origination and FIB programming; see [`policy`](#policy). |
 
 ## `circuits[]`
 
@@ -34,6 +37,9 @@ options. ([日本語](configuration.ja.md))
 | `p2p` | bool | Point-to-point procedures (RFC 5303 three-way) instead of broadcast/DIS. |
 | `priority` | uint8 | DIS election priority on a LAN, 0–127 (default 64). |
 | `metric` | uint32 | Circuit wide metric (default 10). |
+| `hello-interval` | duration | Time between hellos, e.g. `1s`, `500ms` (default `3s`). |
+| `hold-multiplier` | int | Advertised holding time is `hello-interval x hold-multiplier` (default 10). |
+| `padding` | bool | Pad hellos toward the MTU to detect MTU mismatches, per ISO 10589 (default `true`). |
 | `hello-password` | string | Enables HMAC hello authentication. Hellos are signed with it and received hellos must carry a matching digest or they are dropped. |
 | `hello-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `isis password md5`), or an HMAC-SHA variant (RFC 5310). |
 | `hello-accept-passwords` | list of string | Extra keys accepted on received hellos; never used to sign. See [Key rotation](#key-rotation). |

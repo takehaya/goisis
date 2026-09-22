@@ -9,10 +9,15 @@ hostname: r1
 # CAP_NET_ADMIN. Omit or set false to run control-plane only (e.g. when
 # consuming routes via the WatchEvent API into your own dataplane).
 fib: true
+# fib-table: 100   # routing table to program (default 254, main)
 
 # Set the overload bit for this long after startup, then clear it, so peers
 # route no transit traffic through this node until routes have settled.
 # overload-on-startup: 30s
+
+# Cap the LSPs held per level, guarding against LSDB exhaustion. Size it well
+# above the area's legitimate LSP count; 0 (the default) disables the cap.
+# lsdb-entry-limit: 10000
 
 # HMAC authentication of LSPs/SNPs. area-password covers Level 1, domain-password
 # covers Level 2. The algorithm defaults to HMAC-MD5 (RFC 5304, interops with
@@ -29,13 +34,19 @@ circuits:
     # p2p: true     # point-to-point instead of broadcast/LAN
     # priority: 64  # DIS election priority on a LAN (0-127)
     # metric: 10    # circuit wide metric
+    # hello-interval: 3s   # time between hellos
+    # hold-multiplier: 10  # holding time = hello-interval x hold-multiplier
+    # padding: true        # pad hellos toward the MTU (ISO 10589)
     # hello-password: s3cret   # HMAC-MD5 hello authentication (RFC 5304)
 
 # Static prefixes to originate (connected subnets of the circuits above are
 # advertised automatically).
+# Each entry is a bare CIDR (metric 10) or a mapping with an explicit metric.
 prefixes:
   - 10.1.1.1/32
   - 2001:db8:1::1/128
+  # - prefix: 10.2.2.2/32
+  #   metric: 20
 
 # Route policy (prefix-lists). IS-IS floods one consistent LSDB per area, so
 # there is no policy on the flooded link state — only at the edges:

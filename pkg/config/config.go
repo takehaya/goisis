@@ -13,8 +13,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -23,11 +21,14 @@ import (
 
 // Config is the goisisd file configuration.
 type Config struct {
-	NET      string           `yaml:"net"`
-	Hostname string           `yaml:"hostname"`
-	FIB      bool             `yaml:"fib"`
+	NET      string `yaml:"net"`
+	Hostname string `yaml:"hostname"`
+	FIB      bool   `yaml:"fib"`
+	// FIBTable is the routing table computed routes are programmed into when
+	// FIB is set; zero selects the main table.
+	FIBTable int              `yaml:"fib-table"`
 	Circuits []CircuitConfig  `yaml:"circuits"`
-	Prefixes []string         `yaml:"prefixes"`
+	Prefixes []PrefixConfig   `yaml:"prefixes"`
 	SRv6     *SRv6Config      `yaml:"srv6"`
 	FlexAlgo []FlexAlgoConfig `yaml:"flex-algo"`
 	// Policy filters which prefixes are originated (advertise) and which
@@ -68,6 +69,34 @@ type Config struct {
 type SRv6Config struct {
 	// Locators are IPv6 locator prefixes advertised in the SRv6 Locator TLV.
 	Locators []string `yaml:"locators"`
+}
+
+// PrefixConfig is one prefix originated by this node. It is written either as
+// a bare CIDR string or as a mapping carrying an explicit metric.
+type PrefixConfig struct {
+	Prefix string `yaml:"prefix"`
+	// Metric is the advertised metric; zero selects server.DefaultMetric.
+	Metric uint32 `yaml:"metric"`
+}
+
+// UnmarshalYAML accepts the scalar shorthand ("10.1.1.1/32") as well as the
+// mapping form, so a list mixing the two — and every configuration written
+// before the metric existed — parses.
+func (p *PrefixConfig) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&p.Prefix)
+	}
+	// A defined type without the method, so Decode does not recurse into it.
+	type plain PrefixConfig
+	return n.Decode((*plain)(p))
+}
+
+// metric returns the metric to advertise this prefix at.
+func (p PrefixConfig) metric() uint32 {
+	if p.Metric == 0 {
+		return server.DefaultMetric
+	}
+	return p.Metric
 }
 
 // FlexAlgoConfig configures one Flexible Algorithm (RFC 9350).
@@ -117,6 +146,13 @@ type CircuitConfig struct {
 	P2P       bool   `yaml:"p2p"`
 	Priority  *uint8 `yaml:"priority"`
 	Metric    uint32 `yaml:"metric"`
+	// HelloInterval is a Go duration (e.g. "1s", "500ms"); empty selects the
+	// server default. HoldMultiplier scales it into the advertised holding
+	// time; zero selects the default. Padding pads hellos toward the MTU;
+	// nil selects the default (true).
+	HelloInterval  string `yaml:"hello-interval"`
+	HoldMultiplier int    `yaml:"hold-multiplier"`
+	Padding        *bool  `yaml:"padding"`
 	// HelloPassword enables HMAC authentication of hellos. The algorithm
 	// defaults to HMAC-MD5 (RFC 5304); hello-auth-algorithm selects an HMAC-SHA
 	// variant (RFC 5310) with hello-key-id. hello-accept-passwords are extra
@@ -161,14 +197,14 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		opts = append(opts, server.WithHostname(c.Hostname))
 	}
 	if c.FIB {
-		opts = append(opts, server.WithFIB(fib.NewNetlink(unix.RT_TABLE_MAIN)))
+		opts = append(opts, server.WithFIB(c.netlinkFIB()))
 	}
 	for _, p := range c.Prefixes {
-		prefix, err := netip.ParsePrefix(p)
+		prefix, err := netip.ParsePrefix(p.Prefix)
 		if err != nil {
-			return nil, fmt.Errorf("prefix %q: %w", p, err)
+			return nil, fmt.Errorf("prefix %q: %w", p.Prefix, err)
 		}
-		opts = append(opts, server.WithAdvertisedPrefix(prefix, 10))
+		opts = append(opts, server.WithAdvertisedPrefix(prefix, p.metric()))
 	}
 	if c.SRv6 != nil {
 		for _, l := range c.SRv6.Locators {
@@ -271,6 +307,11 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 	return opts, nil
 }
 
+// netlinkFIB builds the Linux FIB this configuration programs routes into.
+func (c *Config) netlinkFIB() *fib.Netlink {
+	return fib.NewNetlink(c.FIBTable)
+}
+
 // connectedPrefixes returns an interface's directly-connected subnets (IPv4
 // and global IPv6), masked to their network address.
 func connectedPrefixes(name string) []netip.Prefix {
@@ -322,6 +363,14 @@ func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.A
 	if err != nil {
 		return server.CircuitConfig{}, fmt.Errorf("circuit %q hello-auth-algorithm: %w", cc.Interface, err)
 	}
+	// Parsed before open so a malformed duration fails without leaking a socket.
+	var hello time.Duration
+	if cc.HelloInterval != "" {
+		hello, err = time.ParseDuration(cc.HelloInterval)
+		if err != nil {
+			return server.CircuitConfig{}, fmt.Errorf("circuit %q hello-interval: %w", cc.Interface, err)
+		}
+	}
 	tr, v4, v6, err := open(cc.Interface)
 	if err != nil {
 		return server.CircuitConfig{}, err
@@ -333,6 +382,9 @@ func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.A
 		Level1:               l1,
 		Level2:               l2,
 		Priority:             cc.Priority,
+		HelloInterval:        hello,
+		HoldingMultiplier:    cc.HoldMultiplier,
+		Padding:              cc.Padding,
 		Metric:               cc.Metric,
 		IPv4Addrs:            v4,
 		IPv6Addrs:            v6,

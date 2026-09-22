@@ -5,8 +5,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -352,5 +356,129 @@ circuits:
 			}
 			return false
 		})
+	}
+}
+
+// TestPrefixConfigAcceptsStringAndMapping originates one prefix in each of the
+// two spellings and checks the peer's routes: the bare CIDR keeps the default
+// metric, the mapping carries its own. Both route metrics include the one-hop
+// distance (the peer's default circuit metric, 10).
+func TestPrefixConfigAcceptsStringAndMapping(t *testing.T) {
+	ta := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xa}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xb}, 1500)
+	datalink.Link(ta, tb)
+	open := mockCircuits(map[string]mockCircuit{
+		"ifa": {tr: ta, v4: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+		"ifb": {tr: tb, v4: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
+	})
+	cfgA := loadConfig(t, `net: 49.0001.0000.0000.000a.00
+prefixes:
+  - 10.1.1.1/32
+  - prefix: 10.2.2.2/32
+    metric: 20
+circuits:
+  - interface: ifa
+    level: "2"
+    p2p: true
+`)
+	if want := []PrefixConfig{{Prefix: "10.1.1.1/32"}, {Prefix: "10.2.2.2/32", Metric: 20}}; !slices.Equal(cfgA.Prefixes, want) {
+		t.Fatalf("prefixes = %+v, want %+v", cfgA.Prefixes, want)
+	}
+	cfgB := loadConfig(t, `net: 49.0001.0000.0000.000b.00
+circuits:
+  - interface: ifb
+    level: "2"
+    p2p: true
+`)
+
+	ctx := t.Context()
+	var sb *server.IsisServer
+	for i, cfg := range []*Config{cfgA, cfgB} {
+		cfg.OpenCircuit = open
+		opts, err := cfg.Options()
+		if err != nil {
+			t.Fatalf("Options[%d]: %v", i, err)
+		}
+		s, err := server.NewIsisServer(opts...)
+		if err != nil {
+			t.Fatalf("NewIsisServer[%d]: %v", i, err)
+		}
+		go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+		sb = s
+	}
+
+	for _, tc := range []struct {
+		prefix string
+		metric uint32
+	}{
+		{"10.1.1.1/32", server.DefaultMetric + 10},
+		{"10.2.2.2/32", 20 + 10},
+	} {
+		waitFor(t, fmt.Sprintf("B to learn %s at metric %d", tc.prefix, tc.metric), func() bool {
+			routes, err := sb.ListRoutes(ctx)
+			if err != nil {
+				return false
+			}
+			for _, r := range routes {
+				if r.Prefix == netip.MustParsePrefix(tc.prefix) && r.Metric == tc.metric {
+					return true
+				}
+			}
+			return false
+		})
+	}
+}
+
+// TestCircuitTimersAndPaddingFromYAML checks the hello timers and padding reach
+// the circuit configuration, and that a malformed interval is rejected with the
+// circuit named.
+func TestCircuitTimersAndPaddingFromYAML(t *testing.T) {
+	open := mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	c := loadConfig(t, `net: 49.0001.0000.0000.0001.00
+circuits:
+  - interface: mock0
+    hello-interval: 500ms
+    hold-multiplier: 4
+    padding: false
+`)
+	cfg, err := c.Circuits[0].circuit(open)
+	if err != nil {
+		t.Fatalf("circuit: %v", err)
+	}
+	if cfg.HelloInterval != 500*time.Millisecond || cfg.HoldingMultiplier != 4 {
+		t.Errorf("hello timers = %v x %d, want 500ms x 4", cfg.HelloInterval, cfg.HoldingMultiplier)
+	}
+	if cfg.Padding == nil || *cfg.Padding {
+		t.Errorf("padding = %v, want an explicit false", cfg.Padding)
+	}
+
+	c.OpenCircuit = open
+	c.Circuits[0].HelloInterval = "abc"
+	_, err = c.Options()
+	if err == nil || !strings.Contains(err.Error(), "mock0") {
+		t.Errorf("Options with a malformed hello-interval: err = %v, want one naming mock0", err)
+	}
+}
+
+// TestFIBTable checks fib-table selects the routing table routes are programmed
+// into, and that omitting it keeps the main table.
+func TestFIBTable(t *testing.T) {
+	c := loadConfig(t, `net: 49.0001.0000.0000.0001.00
+fib: true
+fib-table: 100
+circuits:
+  - interface: mock0
+`)
+	if !c.FIB {
+		t.Fatal("fib not parsed")
+	}
+	if got := c.netlinkFIB().Table(); got != 100 {
+		t.Errorf("fib table = %d, want 100", got)
+	}
+	c.FIBTable = 0
+	if got := c.netlinkFIB().Table(); got != unix.RT_TABLE_MAIN {
+		t.Errorf("default fib table = %d, want %d (main)", got, unix.RT_TABLE_MAIN)
 	}
 }

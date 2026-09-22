@@ -10,8 +10,10 @@
 | `net` | string(必須) | Network Entity Title: エリアアドレス + 6 オクテットのシステム ID。末尾オクテット(NSEL)は `00` であること。例: `49.0001.0000.0000.0001.00`。 |
 | `hostname` | string | LSP で広報する動的ホスト名(RFC 5301)。 |
 | `fib` | bool | 計算した経路を `proto isis` タグでカーネル FIB に書き込む。`CAP_NET_ADMIN` が必要。デフォルト `false`(コントロールプレーンのみ)。 |
+| `fib-table` | int | `fib` 有効時に経路を書き込むルーティングテーブル。デフォルト `254`(main)。 |
 | `overload-on-startup` | duration | 起動後この時間だけオーバーロードビットを立て、その後解除する(例 `30s`)。立っている間、ピアはこのノードを経由する中継トラフィックを流さない。 |
 | `lsp-mtu` | int | このノードが生成する LSP の最大サイズ。デフォルトは最小のサーキット MTU から LLC ヘッダを引いた値(上限 1492)。 |
+| `lsdb-entry-limit` | int | レベルごとに保持する LSP 数の上限。LSDB の枯渇に対する防御で、エリア本来の LSP 数より十分大きく取る。デフォルト `0`(上限なし)。 |
 | `area-password` | string | Level-1 の LSP/SNP をこの鍵で認証。 |
 | `area-accept-passwords` | string のリスト | 受信した Level-1 LSP/SNP で追加で受け付ける鍵(アルゴリズムと鍵 ID は同じ)。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
 | `area-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `area-password md5`)/ `sha1`/`sha256`/`sha384`/`sha512`(RFC 5310)。 |
@@ -21,9 +23,10 @@
 > FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
 > goisis 同士で相互運用します。
 | `circuits` | list(必須) | IS-IS を動かすインターフェース。下記参照。 |
-| `prefixes` | CIDR のリスト | 追加で広報する prefix。サーキットの接続サブネットは自動で広報される。 |
+| `prefixes` | list | 追加で広報する prefix。各要素は CIDR 文字列(`10.1.1.1/32`、メトリック 10)か、マッピング `{prefix: 10.1.1.1/32, metric: 20}`。サーキットの接続サブネットは自動で広報される。 |
 | `srv6` | object | SRv6 locator。下記参照。 |
 | `flex-algo` | list | Flexible Algorithm 定義。下記参照。 |
+| `policy` | object | 広報と FIB 書き込みを制御する prefix-list。[`policy`](#policy) を参照。 |
 
 ## `circuits[]`
 
@@ -34,6 +37,9 @@
 | `p2p` | bool | ブロードキャスト/DIS の代わりにポイントツーポイント手順(RFC 5303 three-way)。 |
 | `priority` | uint8 | LAN での DIS 選出プライオリティ、0–127(デフォルト 64)。 |
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
+| `hello-interval` | duration | hello の送出間隔。例 `1s`、`500ms`(デフォルト `3s`)。 |
+| `hold-multiplier` | int | 広報する holding time は `hello-interval x hold-multiplier`(デフォルト 10)。 |
+| `padding` | bool | MTU 不一致を検出するため hello を MTU までパディングする(ISO 10589、デフォルト `true`)。 |
 | `hello-password` | string | HMAC による hello 認証を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。 |
 | `hello-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `isis password md5`)/ HMAC-SHA 系(RFC 5310)。 |
 | `hello-accept-passwords` | string のリスト | 受信 hello で追加で受け付ける鍵。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
