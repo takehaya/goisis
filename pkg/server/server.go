@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/takehaya/goisis/internal/version"
+	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -338,14 +339,36 @@ func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
 	}
 }
 
+// readerRetryDelay paces the retries after a transient Recv error, so a
+// circuit whose socket keeps failing does not spin.
+const readerRetryDelay = time.Second
+
 // readLoop receives frames on a circuit and forwards them to the event loop
-// until the transport closes or the context is cancelled.
+// until the transport closes or the context is cancelled. Any other Recv
+// error is treated as transient and retried: returning would leave the
+// circuit sending hellos it can never hear an answer to until a restart.
 func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
+	warned := false
 	for {
 		frame, err := c.cfg.Transport.Recv()
 		if err != nil {
-			return
+			if errors.Is(err, datalink.ErrClosed) {
+				return
+			}
+			// Warn once per outage, not once per retry: a link that stays
+			// down would otherwise fill the log for as long as it is down.
+			if !warned {
+				s.logger.Warn("circuit receive error, retrying", "circuit", c.cfg.Name, "error", err)
+				warned = true
+			}
+			select {
+			case <-time.After(readerRetryDelay):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
+		warned = false
 		select {
 		case s.eventCh <- &rxEvent{circuit: c, frame: frame}:
 		case <-ctx.Done():
