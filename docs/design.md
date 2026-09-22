@@ -75,7 +75,7 @@ protocol state.
 | Goroutine | Count | May touch state? | Job |
 |-----------|-------|------------------|-----|
 | **Serve loop** | 1 | **yes — the only one** | Decodes and authenticates received PDUs, handles events, timers, and management ops; runs SPF; writes the FIB; emits watch events and metrics. |
-| Circuit readers | 1 per circuit | no | `Recv` a raw frame and forward it to the loop as an `rxEvent`. Nothing else — no decoding, no state. |
+| Circuit readers | 1 per circuit | no | `Recv` a raw frame and forward it to the loop as an `rxEvent`; a transient `Recv` error is logged and retried after a second. Nothing else — no decoding, no state. |
 | Consumers | any | no | Callers of the public API and watch subscribers. They never see internal state — only snapshots and events. |
 
 Decoding runs on the loop (`handleRx`): padding is trimmed to the declared

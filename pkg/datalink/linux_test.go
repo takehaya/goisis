@@ -3,6 +3,7 @@
 package datalink
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"testing"
@@ -95,5 +96,41 @@ func TestLinuxTransportLoopback(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for frame on peer")
+	}
+}
+
+// TestLinuxTransportCloseUnblocksRecv pins the Recv contract: only a Close
+// reports ErrClosed, both to a reader already blocked in Recv and to one
+// calling Recv afterwards. The underlying socket signals the two cases with
+// different (and unexported) errors, so neither is matchable by identity.
+func TestLinuxTransportCloseUnblocksRecv(t *testing.T) {
+	requireRoot(t)
+	a, _ := setupVeth(t)
+
+	ta, err := OpenLinux(a)
+	if err != nil {
+		t.Fatalf("open %s: %v", a, err)
+	}
+
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := ta.Recv()
+		blocked <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // let the reader reach the socket
+
+	if err := ta.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, ErrClosed) {
+			t.Errorf("Recv blocked across Close = %v, want ErrClosed", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not unblock Recv")
+	}
+	if _, err := ta.Recv(); !errors.Is(err, ErrClosed) {
+		t.Errorf("Recv after Close = %v, want ErrClosed", err)
 	}
 }

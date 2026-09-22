@@ -5,6 +5,7 @@ package datalink
 import (
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	"github.com/mdlayher/packet"
 	"golang.org/x/net/bpf"
@@ -38,9 +39,10 @@ func mustAssemble(insns []bpf.Instruction) []bpf.RawInstruction {
 // transport joins all three IS-IS groups so it receives L1, L2, and
 // AllISs (p2p) frames regardless of circuit type.
 type LinuxTransport struct {
-	conn *packet.Conn
-	ifi  *net.Interface
-	snpa isispkt.SNPA
+	conn   *packet.Conn
+	ifi    *net.Interface
+	snpa   isispkt.SNPA
+	closed atomic.Bool
 }
 
 // OpenLinux opens an AF_PACKET transport on the named interface. It requires
@@ -107,13 +109,22 @@ func (t *LinuxTransport) Send(dst isispkt.SNPA, pdu []byte) error {
 }
 
 // Recv implements Transport: it returns the next IS-IS PDU with the LLC
-// header stripped.
+// header stripped. Only a Close yields ErrClosed; a transient socket error
+// (ENOBUFS under load, ENETDOWN while the interface bounces) is returned as
+// itself so the caller retries instead of abandoning the circuit.
 func (t *LinuxTransport) Recv() (Frame, error) {
 	buf := make([]byte, t.ifi.MTU+len(llcHeader)+64)
 	for {
 		n, addr, err := t.conn.ReadFrom(buf)
 		if err != nil {
-			return Frame{}, ErrClosed
+			// The error cannot tell us a Close happened: mdlayher/socket
+			// wakes a blocked reader with internal/poll's unexported "use of
+			// closed file" and answers a later read with EBADF — neither is
+			// net.ErrClosed. Our own flag is the reliable signal.
+			if t.closed.Load() {
+				return Frame{}, ErrClosed
+			}
+			return Frame{}, fmt.Errorf("datalink: recv: %w", err)
 		}
 		if n < len(llcHeader) {
 			continue // too short to carry an LLC header
@@ -135,4 +146,7 @@ func (t *LinuxTransport) LocalSNPA() isispkt.SNPA { return t.snpa }
 func (t *LinuxTransport) MTU() int { return t.ifi.MTU }
 
 // Close implements Transport.
-func (t *LinuxTransport) Close() error { return t.conn.Close() }
+func (t *LinuxTransport) Close() error {
+	t.closed.Store(true) // before the close, so a woken Recv sees it
+	return t.conn.Close()
+}

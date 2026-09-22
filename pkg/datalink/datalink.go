@@ -44,7 +44,10 @@ type Transport interface {
 
 	// Recv returns the next IS-IS PDU. It is called from a dedicated
 	// per-circuit reader goroutine and MAY block until a PDU arrives or
-	// the transport is closed (ErrClosed).
+	// the transport is closed. ErrClosed means the transport is gone and
+	// the reader stops; every other error is transient and the reader
+	// retries, so an implementation MUST NOT report a transient socket
+	// failure as ErrClosed.
 	Recv() (Frame, error)
 
 	// LocalSNPA returns the circuit's own MAC.
