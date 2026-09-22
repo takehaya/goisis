@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -204,4 +208,73 @@ func TestParseOnOff(t *testing.T) {
 			t.Errorf("parseOnOff(%q) = %t, want %t", tc.in, got, tc.want)
 		}
 	}
+}
+
+// TestPrintResponseOutputFlag: the root's persistent -o reaches a subcommand,
+// where "json" marshals the response message and anything but "table" is
+// rejected rather than silently falling back.
+func TestPrintResponseOutputFlag(t *testing.T) {
+	msg := &goisisv1.GetLsdbResponse{Lsps: []*goisisv1.Lsp{{
+		LspId:    "0000.0000.0001.00-00",
+		Hostname: "r1",
+		Tlvs:     []string{"Dynamic Hostname: r1"},
+	}}}
+
+	run := func(t *testing.T, args ...string) (string, error) {
+		t.Helper()
+		var buf bytes.Buffer
+		root := newRootCmd()
+		root.SetOut(&buf)
+		root.SetErr(&buf)
+		root.AddCommand(&cobra.Command{
+			Use: "probe",
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return printResponse(cmd, msg, func() error {
+					cmd.Println("TABLE")
+					return nil
+				})
+			},
+		})
+		root.SetArgs(args)
+		err := root.Execute()
+		return buf.String(), err
+	}
+
+	t.Run("json", func(t *testing.T) {
+		out, err := run(t, "probe", "-o", "json")
+		if err != nil {
+			t.Fatalf("probe -o json: %v", err)
+		}
+		var got struct {
+			Lsps []struct {
+				Hostname string   `json:"hostname"`
+				Tlvs     []string `json:"tlvs"`
+			} `json:"lsps"`
+		}
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+		}
+		if len(got.Lsps) != 1 || got.Lsps[0].Hostname != "r1" {
+			t.Errorf("lsps = %+v, want one LSP with hostname r1", got.Lsps)
+		}
+		if len(got.Lsps[0].Tlvs) != 1 {
+			t.Errorf("tlvs = %q, want the rendered TLV line", got.Lsps[0].Tlvs)
+		}
+	})
+
+	t.Run("table by default", func(t *testing.T) {
+		out, err := run(t, "probe")
+		if err != nil {
+			t.Fatalf("probe: %v", err)
+		}
+		if out != "TABLE\n" {
+			t.Errorf("output = %q, want the table renderer's output", out)
+		}
+	})
+
+	t.Run("unknown format", func(t *testing.T) {
+		if _, err := run(t, "probe", "-o", "yaml"); err == nil {
+			t.Error("-o yaml was accepted, want an error")
+		}
+	})
 }

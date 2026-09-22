@@ -95,9 +95,16 @@ type LSPInfo struct {
 	Remaining      uint16
 	Checksum       uint16
 	Own            bool
+	// Hostname is the originator's dynamic hostname (TLV 137), empty when it
+	// advertises none.
+	Hostname string
+	// TLVs renders the LSP's TLVs in wire order for display; a TLV carrying a
+	// list renders one line per entry, so there are usually more lines than
+	// TLVs.
+	TLVs []string
 }
 
-func (db *lsdb) snapshot(now time.Time) []LSPInfo {
+func (db *lsdb) snapshot(now time.Time, hostnames map[packet.SystemID]string) []LSPInfo {
 	out := make([]LSPInfo, 0, len(db.entries))
 	for id, e := range db.entries {
 		out = append(out, LSPInfo{
@@ -107,6 +114,8 @@ func (db *lsdb) snapshot(now time.Time) []LSPInfo {
 			Remaining:      e.remaining(now),
 			Checksum:       e.lsp.Checksum(),
 			Own:            e.own,
+			Hostname:       hostnames[id.NodeID().SystemID()],
+			TLVs:           tlvSummaries(e.lsp.TLVs),
 		})
 	}
 	return out

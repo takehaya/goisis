@@ -303,14 +303,17 @@ func (x *Circuit) GetMetric() uint32 {
 
 // Adjacency is one IS-IS adjacency.
 type Adjacency struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Interface     string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
-	Level         Level                  `protobuf:"varint,2,opt,name=level,proto3,enum=goisis.v1.Level" json:"level,omitempty"`
-	SystemId      string                 `protobuf:"bytes,3,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
-	Snpa          string                 `protobuf:"bytes,4,opt,name=snpa,proto3" json:"snpa,omitempty"`
-	State         string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"` // Down, Init, Up
-	Priority      uint32                 `protobuf:"varint,6,opt,name=priority,proto3" json:"priority,omitempty"`
-	HoldingTime   uint32                 `protobuf:"varint,7,opt,name=holding_time,json=holdingTime,proto3" json:"holding_time,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Interface   string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	Level       Level                  `protobuf:"varint,2,opt,name=level,proto3,enum=goisis.v1.Level" json:"level,omitempty"`
+	SystemId    string                 `protobuf:"bytes,3,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
+	Snpa        string                 `protobuf:"bytes,4,opt,name=snpa,proto3" json:"snpa,omitempty"`
+	State       string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"` // Down, Init, Up
+	Priority    uint32                 `protobuf:"varint,6,opt,name=priority,proto3" json:"priority,omitempty"`
+	HoldingTime uint32                 `protobuf:"varint,7,opt,name=holding_time,json=holdingTime,proto3" json:"holding_time,omitempty"`
+	// hostname is the neighbor's dynamic hostname (TLV 137, RFC 5301), empty
+	// until its LSP arrives or when it advertises no name.
+	Hostname      string `protobuf:"bytes,8,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -394,6 +397,13 @@ func (x *Adjacency) GetHoldingTime() uint32 {
 	return 0
 }
 
+func (x *Adjacency) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
 // Lsp is one entry in the link-state database.
 type Lsp struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -403,8 +413,15 @@ type Lsp struct {
 	RemainingLifetime uint32                 `protobuf:"varint,4,opt,name=remaining_lifetime,json=remainingLifetime,proto3" json:"remaining_lifetime,omitempty"`
 	Checksum          uint32                 `protobuf:"varint,5,opt,name=checksum,proto3" json:"checksum,omitempty"`
 	Own               bool                   `protobuf:"varint,6,opt,name=own,proto3" json:"own,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// hostname is the originator's dynamic hostname (TLV 137, RFC 5301), empty
+	// when it advertises none.
+	Hostname string `protobuf:"bytes,7,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// tlvs renders the LSP's TLVs in wire order for display; a TLV carrying a
+	// list renders one line per entry, so there are usually more lines than
+	// TLVs.
+	Tlvs          []string `protobuf:"bytes,8,rep,name=tlvs,proto3" json:"tlvs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Lsp) Reset() {
@@ -477,6 +494,20 @@ func (x *Lsp) GetOwn() bool {
 		return x.Own
 	}
 	return false
+}
+
+func (x *Lsp) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *Lsp) GetTlvs() []string {
+	if x != nil {
+		return x.Tlvs
+	}
+	return nil
 }
 
 // NextHop is one resolved next hop for a route.
@@ -2246,7 +2277,7 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x06level1\x18\x03 \x01(\bR\x06level1\x12\x16\n" +
 	"\x06level2\x18\x04 \x01(\bR\x06level2\x12\x1a\n" +
 	"\bpriority\x18\x05 \x01(\rR\bpriority\x12\x16\n" +
-	"\x06metric\x18\x06 \x01(\rR\x06metric\"\xd7\x01\n" +
+	"\x06metric\x18\x06 \x01(\rR\x06metric\"\xf3\x01\n" +
 	"\tAdjacency\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12&\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x1b\n" +
@@ -2254,14 +2285,17 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x04snpa\x18\x04 \x01(\tR\x04snpa\x12\x14\n" +
 	"\x05state\x18\x05 \x01(\tR\x05state\x12\x1a\n" +
 	"\bpriority\x18\x06 \x01(\rR\bpriority\x12!\n" +
-	"\fholding_time\x18\a \x01(\rR\vholdingTime\"\xca\x01\n" +
+	"\fholding_time\x18\a \x01(\rR\vholdingTime\x12\x1a\n" +
+	"\bhostname\x18\b \x01(\tR\bhostname\"\xfa\x01\n" +
 	"\x03Lsp\x12&\n" +
 	"\x05level\x18\x01 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x15\n" +
 	"\x06lsp_id\x18\x02 \x01(\tR\x05lspId\x12'\n" +
 	"\x0fsequence_number\x18\x03 \x01(\rR\x0esequenceNumber\x12-\n" +
 	"\x12remaining_lifetime\x18\x04 \x01(\rR\x11remainingLifetime\x12\x1a\n" +
 	"\bchecksum\x18\x05 \x01(\rR\bchecksum\x12\x10\n" +
-	"\x03own\x18\x06 \x01(\bR\x03own\"A\n" +
+	"\x03own\x18\x06 \x01(\bR\x03own\x12\x1a\n" +
+	"\bhostname\x18\a \x01(\tR\bhostname\x12\x12\n" +
+	"\x04tlvs\x18\b \x03(\tR\x04tlvs\"A\n" +
 	"\aNextHop\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x18\n" +
 	"\agateway\x18\x02 \x01(\tR\agateway\"\xae\x01\n" +

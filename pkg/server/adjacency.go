@@ -66,6 +66,9 @@ type AdjacencyInfo struct {
 	State     AdjState
 	Priority  uint8
 	Holding   uint16
+	// Hostname is the neighbor's dynamic hostname (TLV 137) as advertised in
+	// its LSP, empty until that LSP arrives or when it carries no name.
+	Hostname string
 }
 
 // levelSet is a small set of levels.

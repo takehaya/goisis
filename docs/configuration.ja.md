@@ -145,6 +145,10 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 `overload` / `locator` / `flex-algo` / `monitor`(`WatchEvent` をストリーミング。
 `--initial` を付けると変化を追う前に現在の隣接と経路を出力)。
 
+`-o json` を付けると、一覧・表示系コマンドは表の代わりに RPC のレスポンスを
+JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
+の行の下にその TLV を並べるので、パケットキャプチャなしで対向の広告内容を読めます。
+
 `--addr` は `unix:///絶対パス` も取り、`goisisd -api-listen
 unix:///run/goisis/goisisd.sock` で起動したデーモンに接続します。API は無認証
 なので、共有ホストでは unix ソケットが最も手軽な保護手段です。ソケットはモード

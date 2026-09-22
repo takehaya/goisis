@@ -97,6 +97,8 @@ func (h *connectHandler) GetLsdb(
 			RemainingLifetime: uint32(l.Remaining),
 			Checksum:          uint32(l.Checksum),
 			Own:               l.Own,
+			Hostname:          l.Hostname,
+			Tlvs:              l.TLVs,
 		})
 	}
 	return connect.NewResponse(&goisisv1.GetLsdbResponse{Lsps: out}), nil
@@ -424,6 +426,7 @@ func adjacencyToProto(a AdjacencyInfo) *goisisv1.Adjacency {
 		State:       a.State.String(),
 		Priority:    uint32(a.Priority),
 		HoldingTime: uint32(a.Holding),
+		Hostname:    a.Hostname,
 	}
 }
 
