@@ -207,18 +207,30 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 			s.processP2PHello(c, frame.Src, h)
 		}
 	case *packet.LSP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, true) {
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, true) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processLSP(c, raw, h, time.Now())
 		}
 	case *packet.CSNP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) {
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processCSNP(c, h, time.Now())
 		}
 	case *packet.PSNP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) {
+		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processPSNP(c, h, time.Now())
 		}
 	}
+}
+
+// adjacencyGate admits an LSP or SNP only from a source with an Up adjacency
+// at that level (ISO 10589 7.3.15.1/7.3.15.2). Hellos are exempt: they are how
+// adjacencies form in the first place.
+func (s *IsisServer) adjacencyGate(c *circuit, pt packet.PDUType, level packet.Level, src packet.SNPA) bool {
+	if c.upAdjacencyFrom(level, src) {
+		return true
+	}
+	s.logger.Debug("drop PDU from a source without an Up adjacency",
+		"circuit", c.cfg.Name, "pdu", pt, "level", level, "src", src)
+	return false
 }
 
 // processLANHello runs the broadcast adjacency state machine for one hello.
