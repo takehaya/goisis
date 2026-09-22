@@ -19,14 +19,14 @@ options. ([日本語](configuration.ja.md))
 | `area-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `area-password md5`), or `sha1`/`sha256`/`sha384`/`sha512` (RFC 5310). |
 | `area-key-id` | uint16 | RFC 5310 key ID (SHA only). |
 | `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | The same, for Level-2. |
-
-> FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
-> interop goisis↔goisis, not with FRR.
 | `circuits` | list (required) | Interfaces to run IS-IS on; see below. |
 | `prefixes` | list | Extra prefixes to originate, each a bare CIDR (`10.1.1.1/32`, metric 10) or a mapping `{prefix: 10.1.1.1/32, metric: 20}`. Connected subnets of the circuits are advertised automatically. |
 | `srv6` | object | SRv6 locators; see below. |
 | `flex-algo` | list | Flexible Algorithm definitions; see below. |
 | `policy` | object | Prefix-lists gating origination and FIB programming; see [`policy`](#policy). |
+
+> FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
+> interop goisis↔goisis, not with FRR.
 
 ## `circuits[]`
 
@@ -148,8 +148,8 @@ exactly these as ambient capabilities.
 
 The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 `global`, `circuit`, `neighbor`, `database`, `route`, `prefix`, `overload`,
-`locator`, `flex-algo`, and `monitor` (streams `WatchEvent`; `--initial` prints
-the current adjacencies and routes before following changes).
+`locator`, `flex-algo`, `monitor` (streams `WatchEvent`; `--initial` prints the
+current adjacencies and routes before following changes), and `version`.
 
 `-o json` prints the RPC response of any list or show command as JSON instead
 of a table, for scripts and `jq`. `goisis database --detail` additionally prints
@@ -177,10 +177,12 @@ $ goisis neighbor clear --interface eth0      # add --system-id for one neighbor
 ## Metrics
 
 `goisisd` serves Prometheus metrics at `/metrics`:
-`goisis_adjacency_transitions_total`, `goisis_spf_duration_seconds`,
-`goisis_lsdb_lsps`, `goisis_flooding_lsp_tx_total`,
+`goisis_adjacency_transitions_total{circuit,level,state}`,
+`goisis_spf_duration_seconds{level}`, `goisis_lsdb_lsps{level}`,
+`goisis_flooding_lsp_tx_total{circuit}`, `goisis_fib_pending`,
 `goisis_pdu_rx_total{circuit,type}`, `goisis_pdu_drops_total{circuit,reason}`
 (reasons: `decode`, `auth`, `no_adjacency`, `checksum`, `lsdb_limit`,
-`unknown_purge`, `own_sysid_purge`, `own_lsp_reclaimed`), `goisis_adjacencies{circuit,level}`,
-`goisis_routes{level,algorithm}`, `goisis_fib_errors_total{op}` (ops: `update`,
-`withdraw`, `add_sid`, `remove_sid`) and `goisis_event_queue_depth`.
+`unknown_purge`, `own_sysid_purge`, `own_lsp_reclaimed`),
+`goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
+`goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
+`remove_sid`) and `goisis_event_queue_depth`.

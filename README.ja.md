@@ -10,12 +10,13 @@ Go で書かれた IS-IS ルーティングプロトコル実装 —
 ## 機能
 
 - デュアルスタック(IPv4/IPv6)L1/L2 ルーティング — ワイドメトリック、レベル別 SPF、ECMP、オーバーロードビット、netlink FIB
-- SRv6 locator(RFC 9352)と Flexible Algorithm(RFC 9350)
-- Connect RPC API + CLI、`WatchEvent` ストリーミング
+- ATT によるデフォルト経路と L1→L2 伝播、SPF back-off と LSP 生成スロットリング
+- 隣接ごとの End.X SID 付き SRv6 locator(RFC 9352)と Flexible Algorithm(RFC 9350)
+- Connect RPC API(TCP / unix ソケット)+ CLI、`WatchEvent` ストリーミングと実行時再構成
 - hello と LSP/SNP の HMAC 認証(RFC 5304/5310)
 - Prometheus メトリクス、FRR との常時相互運用
 
-> L2 シングルエリアの MVP。マルチトポロジ・graceful restart・BFD は見送り。
+> シングルエリアの MVP。L2→L1 リーク・マルチトポロジ・graceful restart・BFD は見送り。
 
 ## インストール
 
@@ -31,7 +32,7 @@ $ go install github.com/takehaya/goisis/cmd/goisis@latest
 
 ```console
 $ sudo goisisd -f examples/goisisd.yaml   # デーモン起動
-$ goisis neighbor                         # 他に: database, route, locator, flex-algo, monitor
+$ goisis neighbor                         # 他に: database, route, prefix, overload, locator, flex-algo, monitor
 ```
 
 最小限の `goisisd.yaml`:

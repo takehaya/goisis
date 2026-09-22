@@ -19,14 +19,14 @@
 | `area-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `area-password md5`)/ `sha1`/`sha256`/`sha384`/`sha512`(RFC 5310)。 |
 | `area-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
 | `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | Level-2 用に同じ。 |
-
-> FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
-> goisis 同士で相互運用します。
 | `circuits` | list(必須) | IS-IS を動かすインターフェース。下記参照。 |
 | `prefixes` | list | 追加で広報する prefix。各要素は CIDR 文字列(`10.1.1.1/32`、メトリック 10)か、マッピング `{prefix: 10.1.1.1/32, metric: 20}`。サーキットの接続サブネットは自動で広報される。 |
 | `srv6` | object | SRv6 locator。下記参照。 |
 | `flex-algo` | list | Flexible Algorithm 定義。下記参照。 |
 | `policy` | object | 広報と FIB 書き込みを制御する prefix-list。[`policy`](#policy) を参照。 |
+
+> FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
+> goisis 同士で相互運用します。
 
 ## `circuits[]`
 
@@ -147,7 +147,7 @@ ambient capability として付与します。
 CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマンド:
 `global` / `circuit` / `neighbor` / `database` / `route` / `prefix` /
 `overload` / `locator` / `flex-algo` / `monitor`(`WatchEvent` をストリーミング。
-`--initial` を付けると変化を追う前に現在の隣接と経路を出力)。
+`--initial` を付けると変化を追う前に現在の隣接と経路を出力)/ `version`。
 
 `-o json` を付けると、一覧・表示系コマンドは表の代わりに RPC のレスポンスを
 JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
@@ -174,10 +174,12 @@ $ goisis neighbor clear --interface eth0      # --system-id で 1 隣接のみ
 ## メトリクス
 
 `goisisd` は `/metrics` で Prometheus メトリクスを公開します:
-`goisis_adjacency_transitions_total` / `goisis_spf_duration_seconds` /
-`goisis_lsdb_lsps` / `goisis_flooding_lsp_tx_total` /
+`goisis_adjacency_transitions_total{circuit,level,state}` /
+`goisis_spf_duration_seconds{level}` / `goisis_lsdb_lsps{level}` /
+`goisis_flooding_lsp_tx_total{circuit}` / `goisis_fib_pending` /
 `goisis_pdu_rx_total{circuit,type}` / `goisis_pdu_drops_total{circuit,reason}`
 (reason は `decode` / `auth` / `no_adjacency` / `checksum` / `lsdb_limit` /
-`unknown_purge` / `own_sysid_purge`, `own_lsp_reclaimed`) / `goisis_adjacencies{circuit,level}` /
-`goisis_routes{level,algorithm}` / `goisis_fib_errors_total{op}` (op は
-`update` / `withdraw` / `add_sid` / `remove_sid`) / `goisis_event_queue_depth`。
+`unknown_purge` / `own_sysid_purge` / `own_lsp_reclaimed`) /
+`goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
+`goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
+`remove_sid`) / `goisis_event_queue_depth`。

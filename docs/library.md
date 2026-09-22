@@ -30,7 +30,9 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithSRv6LocatorForAlgo(netip.Prefix, algo)` | Advertise a Flex-Algo locator. |
 | `WithFlexAlgo(FlexAlgoConfig)` | Participate in / advertise a Flexible Algorithm. |
 | `WithOverloadOnStartup(time.Duration)` | Set the OL bit for a window after startup. |
-| `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | HMAC authentication of L1 / L2 LSPs and SNPs. `AuthConfig.AcceptSecrets` (and `CircuitConfig.HelloAcceptPasswords` for hellos) are extra keys accepted on receive but never used to sign, so a key can be rotated node by node. |
+| `WithLSPMTU(int)` | Cap the size of the LSPs this node originates; 0 (default) derives it from the circuit MTUs, capped at 1492. Rejected below 512. |
+| `WithLSDBEntryLimit(int)` | Cap the LSPs held per level as defense in depth against LSDB exhaustion; 0 (default) disables it. |
+| `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | HMAC authentication of L1 / L2 LSPs and SNPs. `AuthConfig.AcceptSecrets` (and `CircuitConfig.HelloAcceptPasswords` for hellos) are extra keys accepted on receive but never used to sign, so a key can be rotated node by node. `WithAreaPassword` / `WithDomainPassword(string)` are the HMAC-MD5 shorthands. |
 | `WithFIB(fib.FIB)` | Forwarding sink (default `fib.Noop`). |
 | `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | Export policy: which prefixes to originate. |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB policy: which computed routes to program (rejected ones stay in the RIB). |
@@ -39,15 +41,19 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 
 `CircuitConfig` carries `Name`, an injected `datalink.Transport` (use
 `datalink.OpenLinux(ifname)` on Linux, or a mock in tests), `P2P`, `Level1`/
-`Level2`, `Priority`, `Metric`, `IPv4Addrs`/`IPv6Addrs`, `Padding`, and the
-hello authentication keys (`HelloPassword`, `HelloAcceptPasswords`,
+`Level2`, `Priority`, `Metric`, `HelloInterval`, `HoldingMultiplier`,
+`Padding`, `IPv4Addrs`/`IPv6Addrs`, `ConnectedPrefixes` (the circuit's directly
+connected subnets, withdrawn with the circuit when its addresses change), and
+the hello authentication keys (`HelloPassword`, `HelloAcceptPasswords`,
 `HelloAuthAlgorithm`, `HelloKeyID`).
 
 ## Reading state
 
 All take a `context.Context` and return typed snapshots:
 `GetGlobal`, `ListCircuits`, `ListAdjacencies`, `ListLSDB`, `ListRoutes`,
-`ListLocators`, `ListFlexAlgos`.
+`ListLocators`, `ListFlexAlgos`. Each `LocatorInfo` carries the locator's End
+SID and its `EndXSIDs` — one End.X SID per Up adjacency, with that neighbor's
+System ID and the circuit it sits on.
 
 ## Route policy
 
@@ -165,8 +171,11 @@ type FIB interface {
 }
 ```
 
-`LocalSID.Behavior` says which endpoint behavior to instantiate; `Nexthop` and
-`Interface` carry the adjacency an End.X SID forwards to. The bundled
+`LocalSID.Behavior` says which endpoint behavior to instantiate
+(`BehaviorEnd`, `BehaviorEndX`, `BehaviorEndDT4`/`DT6`/`DT46`); `Table` is the
+lookup table for the decapsulating ones, and `Nexthop` (the neighbor's IPv6
+address, normally link-local) and `Interface` carry the adjacency a
+`BehaviorEndX` SID forwards to. The bundled
 `fib.Netlink` programs Linux `proto isis` routes and `seg6local` End and End.X
 SIDs. `fib.Noop` discards everything (pair it with `Subscribe` to consume
 routes yourself — see [`examples/watchroutes`](../examples/watchroutes)).

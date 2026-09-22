@@ -97,6 +97,7 @@ case ev := <-s.eventCh:   // a protocol event (received frame, ...)
 case t := <-ticker.C:     // 1s housekeeping tick
 case <-hold.C:            // SPF back-off hold expired
 }
+s.drainLSPGen(time.Now())                        // coalesced own-LSP regeneration
 if s.spfDirty && !holding { s.updateRIB(...) }   // event-driven SPF with an RFC 8405-lite hold
 ```
 
@@ -115,8 +116,8 @@ the Serve goroutine, you do not touch `IsisServer` fields.**
   that loop iteration; changes arriving during the following 200 ms hold
   coalesce into one more recompute when the hold expires (a two-state
   RFC 8405 back-off without its LONG_WAIT stage).
-- **Housekeeping (1s tick).** Hellos, adjacency expiry, the drain of any
-  pending own-LSP regeneration, LSP aging/refresh, SRM/SSN retransmission,
+- **Housekeeping (1s tick).** Hellos, adjacency expiry, LSP aging/refresh,
+  SRM/SSN retransmission,
   periodic CSNPs on circuits where we are DIS, local SID re-assertion, and
   gauge emission.
 - **Interface events.** Addresses and connected subnets are not read once at
@@ -208,13 +209,22 @@ Two invariants matter beyond the codec:
   the raw bytes (see above). `newer()` implements the ISO 10589 ordering;
   purges are held for ZeroAgeLifetime after going to zero.
 - **Flooding.** Per-circuit SRM/SSN flag sets drive retransmission: LAN
-  reliability comes from the DIS's periodic CSNPs, p2p reliability from
-  PSNP acknowledgements with a minimum retransmission interval. A p2p circuit
-  transmits nothing without an Up adjacency, and drops its flags when the
-  adjacency goes down (ISO 10589 7.3.17 re-arms them when one comes Up).
-  Purges are
-  flooded header-only (POI + authentication when keyed), for both our own
-  LSPs and expired foreign ones.
+  reliability comes from the DIS's periodic CSNPs — split into per-PDU LSP-ID
+  ranges so a database larger than one PDU still fits the MTU, and the only
+  answer to a PSNP request, since only the Designated IS processes PSNPs on a
+  broadcast circuit (ISO 10589 7.3.15.2 b). p2p reliability comes from PSNP
+  acknowledgements with a minimum retransmission interval. The update process
+  accepts an LSP, CSNP or PSNP only from a source SNPA with an Up adjacency
+  (ISO 10589 7.3.15.1/7.3.15.2). A p2p circuit transmits nothing without an Up
+  adjacency and drops its flags when the adjacency goes down; when one comes Up
+  the whole database at that level is re-flagged and a CSNP sent
+  (`syncCircuitLevel`, ISO 10589 7.3.17) — p2p has no periodic CSNP to repair a
+  gap later. An LSP too large for a circuit is dropped on that circuit once
+  with a warning instead of retried forever. Purges are flooded header-only
+  (POI + authentication when keyed), for both our own LSPs and expired foreign
+  ones; a purge for an LSP ID the database does not hold is acknowledged but
+  never stored (7.3.16.4 a), and one naming our own System ID that we do not
+  own is purged rather than re-flooded (7.3.16.4 c).
 - **Origination.** Own LSPs are rebuilt from config + adjacency state and
   compared against the stored copy — unchanged content is not re-flooded.
   Event-driven regenerations coalesce to at most one per second
@@ -223,7 +233,10 @@ Two invariants matter beyond the codec:
   TLV sets that exceed the LSP buffer — 1492 bytes, or less when the
   circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
   fragment 0 plus spill fragments 1..255; stale fragments are purged when the
-  set shrinks.
+  set shrinks. Re-origination is also where End.X SIDs are reconciled: every Up
+  adjacency holds one SID per locator, taken from that locator's function
+  space, and a SID whose adjacency is gone is released and removed from the
+  FIB.
 - **SPF.** Dijkstra per `(level, algorithm)` over a topology built from the
   LSDB, with the ISO two-way connectivity check, pseudonode zero-cost edges,
   overload-bit transit avoidance, 64-bit metric accumulation with an
@@ -273,10 +286,11 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No multi-topology (RFC 5120) | The SPF/RIB key is `(level, algorithm)`; MT-IDs are parsed where they appear but not threaded through the pipeline. Adding MT means widening that key — a known, contained change. |
 | No graceful restart (RFC 5306) | A peer that crash-restarts and re-originates at sequence 1 is out-shouted by our stored higher-seq copy until it ages out (up to MaxAge, 1200s). Clean shutdowns purge, so this affects only ungraceful restarts. |
 | No BFD | Failure detection is hello-based (hold time). |
-| No runtime circuit add/remove or config reload | Prefixes, locators, Flex-Algos and the overload bit can be changed at runtime; changing circuits or authentication keys requires a restart. |
+| No runtime circuit add/remove or config reload | Prefixes, locators, Flex-Algos, the overload bit and adjacency resets change at runtime, and a circuit's addresses and carrier are followed live (`SetCircuitAddresses` / `SetCircuitLinkState`). Adding or removing a circuit, or changing an authentication key, still needs a restart — accept lists (`*-accept-passwords`) make a key change a rolling restart rather than a flag day. |
 | Sequence-number wrap unhandled | ISO 10589's exhaustion procedure at 2³² is documented-not-implemented; at the 900s refresh rate that is ~120k years away. |
 | Flex-Algo computes IGP metric only | FAD constraints (admin groups, SRLG, delay) are preserved on the wire, not evaluated. |
 | Synchronous egress/FIB on the loop | See [Sink contracts](#sink-contracts): non-blocking is a contract on implementations, not enforced by structure. |
+| No RFC 8405 LONG_WAIT | SPF back-off is two-state (recompute immediately, then coalesce for 200 ms). The escalation to a long wait under sustained churn is deliberately omitted: a second threshold would only delay convergence further at MVP scale. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. Fine for MVP-scale areas. |
 | No RFC 7987 lifetime floor | Received-LSP aging follows the advertised remaining lifetime as-is. |
 | End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.X/End.DT4/End.DT6 work. |

@@ -10,12 +10,14 @@ IS-IS routing protocol implementation in Go — the IS-IS counterpart of
 ## Features
 
 - Dual-stack (IPv4/IPv6) L1/L2 routing — wide metrics, per-level SPF, ECMP, overload bit, netlink FIB
-- SRv6 locators (RFC 9352) and Flexible Algorithm (RFC 9350)
-- Connect RPC API + CLI, with `WatchEvent` streaming
+- ATT default routes and L1→L2 propagation; SPF back-off and LSP generation throttling
+- SRv6 locators with per-adjacency End.X SIDs (RFC 9352) and Flexible Algorithm (RFC 9350)
+- Connect RPC API (TCP or unix socket) + CLI, with `WatchEvent` streaming and runtime reconfiguration
 - HMAC authentication (RFC 5304/5310) of hellos and LSPs/SNPs
 - Prometheus metrics, and continuous interop against FRR
 
-> L2 single-area MVP; multi-topology, graceful restart, and BFD are deferred.
+> Single-area MVP: L2→L1 leaking, multi-topology, graceful restart, and BFD are
+> deferred.
 
 ## Install
 
@@ -31,7 +33,7 @@ root or grant them with `setcap cap_net_raw,cap_net_admin+ep`.
 
 ```console
 $ sudo goisisd -f examples/goisisd.yaml   # run the daemon
-$ goisis neighbor                         # also: database, route, locator, flex-algo, monitor
+$ goisis neighbor                         # also: database, route, prefix, overload, locator, flex-algo, monitor
 ```
 
 A minimal `goisisd.yaml`:
