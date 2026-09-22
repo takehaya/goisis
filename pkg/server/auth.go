@@ -4,15 +4,46 @@ import "github.com/takehaya/goisis/pkg/packet"
 
 // authSpec is the resolved HMAC configuration for one authentication scope (a
 // hello circuit, or a level's LSPs/SNPs). A zero spec (nil key) means the scope
-// is unauthenticated.
+// is unauthenticated. key signs; acceptKeys are additional keys honored on
+// receive, which is what lets a key be rotated without every node switching at
+// the same instant (RFC 5304/5310 leave key management to the operator).
 type authSpec struct {
-	algo  packet.AuthAlgorithm
-	keyID uint16
-	key   []byte
+	algo       packet.AuthAlgorithm
+	keyID      uint16
+	key        []byte
+	acceptKeys [][]byte
 }
 
 // on reports whether authentication is configured for the scope.
 func (a authSpec) on() bool { return len(a.key) > 0 }
+
+// verify reports whether a PDU carries a valid digest for the signing key or
+// for any accept key.
+func (a authSpec) verify(pdu []byte, tlvOffset int, isLSP bool) bool {
+	if packet.VerifyAuth(pdu, tlvOffset, a.algo, a.keyID, a.key, isLSP) {
+		return true
+	}
+	for _, k := range a.acceptKeys {
+		if packet.VerifyAuth(pdu, tlvOffset, a.algo, a.keyID, k, isLSP) {
+			return true
+		}
+	}
+	return false
+}
+
+// acceptKeys converts configured accept-list passwords to keys. An empty entry
+// is dropped rather than turned into an empty HMAC key, which would accept any
+// PDU an attacker signed with the empty key.
+func acceptKeys(passwords []string) [][]byte {
+	var keys [][]byte
+	for _, pw := range passwords {
+		if pw == "" {
+			continue
+		}
+		keys = append(keys, []byte(pw))
+	}
+	return keys
+}
 
 // authKey returns the LSP/SNP authentication spec for a level (zero if none).
 func (s *IsisServer) authKey(level packet.Level) authSpec { return s.authKeys[level] }
@@ -22,7 +53,12 @@ func (c *circuit) helloSpec() authSpec {
 	if c.cfg.HelloPassword == "" {
 		return authSpec{}
 	}
-	return authSpec{algo: c.cfg.HelloAuthAlgorithm, keyID: c.cfg.HelloKeyID, key: []byte(c.cfg.HelloPassword)}
+	return authSpec{
+		algo:       c.cfg.HelloAuthAlgorithm,
+		keyID:      c.cfg.HelloKeyID,
+		key:        []byte(c.cfg.HelloPassword),
+		acceptKeys: acceptKeys(c.cfg.HelloAcceptPasswords),
+	}
 }
 
 // authTLVPlaceholder builds a zeroed Authentication TLV for a spec; the digest
@@ -54,7 +90,7 @@ func (s *IsisServer) pduAuthOK(raw []byte, pt packet.PDUType, level packet.Level
 	if !spec.on() {
 		return true
 	}
-	if !packet.VerifyAuth(raw, packet.HeaderLen(pt), spec.algo, spec.keyID, spec.key, isLSP) {
+	if !spec.verify(raw, packet.HeaderLen(pt), isLSP) {
 		s.logger.Debug("drop PDU failing authentication", "type", pt, "level", level)
 		return false
 	}

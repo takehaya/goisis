@@ -56,7 +56,7 @@ func (s *IsisServer) helloAuthOK(c *circuit, raw []byte, pt packet.PDUType) bool
 	if !spec.on() {
 		return true
 	}
-	if !packet.VerifyAuth(raw, packet.HeaderLen(pt), spec.algo, spec.keyID, spec.key, false) {
+	if !spec.verify(raw, packet.HeaderLen(pt), false) {
 		s.logger.Debug("drop hello failing authentication", "circuit", c.cfg.Name)
 		return false
 	}

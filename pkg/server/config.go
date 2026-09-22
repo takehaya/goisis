@@ -59,10 +59,14 @@ type CircuitConfig struct {
 	// matching digest or they are dropped (no adjacency). HelloAuthAlgorithm
 	// selects the HMAC algorithm (default HMAC-MD5, RFC 5304; FRR's `isis
 	// password md5`); HelloKeyID is the RFC 5310 key identifier for the SHA
-	// family (ignored for MD5).
-	HelloPassword      string
-	HelloAuthAlgorithm packet.AuthAlgorithm
-	HelloKeyID         uint16
+	// family (ignored for MD5). HelloAcceptPasswords are additional keys
+	// accepted on received hellos (same algorithm and key ID) but never used
+	// to sign: during a rotation a circuit keeps accepting the peer's old key
+	// while it signs with the new one.
+	HelloPassword        string
+	HelloAuthAlgorithm   packet.AuthAlgorithm
+	HelloKeyID           uint16
+	HelloAcceptPasswords []string
 }
 
 func (c *CircuitConfig) levels() []packet.Level {
@@ -259,11 +263,14 @@ type FIBFilter func(RouteInfo) bool
 // AuthConfig describes an HMAC authentication key for one scope. Algorithm
 // selects HMAC-MD5 (RFC 5304, the default) or an HMAC-SHA variant (RFC 5310);
 // KeyID is the RFC 5310 key identifier (ignored for MD5). Secret is the shared
-// key; an empty Secret disables authentication for the scope.
+// key; an empty Secret disables authentication for the scope. AcceptSecrets are
+// additional keys accepted on receive but never used to sign, so a key can be
+// rotated node by node instead of everywhere at once.
 type AuthConfig struct {
-	Algorithm packet.AuthAlgorithm
-	KeyID     uint16
-	Secret    string
+	Algorithm     packet.AuthAlgorithm
+	KeyID         uint16
+	Secret        string
+	AcceptSecrets []string
 }
 
 // spec resolves an AuthConfig to an internal authSpec.
@@ -271,7 +278,7 @@ func (a AuthConfig) spec() authSpec {
 	if a.Secret == "" {
 		return authSpec{}
 	}
-	return authSpec{algo: a.Algorithm, keyID: a.KeyID, key: []byte(a.Secret)}
+	return authSpec{algo: a.Algorithm, keyID: a.KeyID, key: []byte(a.Secret), acceptKeys: acceptKeys(a.AcceptSecrets)}
 }
 
 // WithLogger sets the logger used by the server. Defaults to slog.Default().

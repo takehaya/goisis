@@ -12,9 +12,10 @@ options. ([日本語](configuration.ja.md))
 | `fib` | bool | Program computed routes into the Linux kernel FIB tagged `proto isis`. Requires `CAP_NET_ADMIN`. Default `false` (control-plane only). |
 | `overload-on-startup` | duration | Set the overload bit for this long after startup, then clear it (e.g. `30s`). While set, peers route no transit traffic through this node. |
 | `area-password` | string | Authenticate Level-1 LSPs and SNPs with this key. |
+| `area-accept-passwords` | list of string | Extra keys accepted on received Level-1 LSPs and SNPs (same algorithm and key ID); never used to sign. See [Key rotation](#key-rotation). |
 | `area-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `area-password md5`), or `sha1`/`sha256`/`sha384`/`sha512` (RFC 5310). |
 | `area-key-id` | uint16 | RFC 5310 key ID (SHA only). |
-| `domain-password` / `domain-auth-algorithm` / `domain-key-id` | | The same, for Level-2. |
+| `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | The same, for Level-2. |
 
 > FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
 > interop goisis↔goisis, not with FRR.
@@ -34,11 +35,19 @@ options. ([日本語](configuration.ja.md))
 | `metric` | uint32 | Circuit wide metric (default 10). |
 | `hello-password` | string | Enables HMAC hello authentication. Hellos are signed with it and received hellos must carry a matching digest or they are dropped. |
 | `hello-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `isis password md5`), or an HMAC-SHA variant (RFC 5310). |
+| `hello-accept-passwords` | list of string | Extra keys accepted on received hellos; never used to sign. See [Key rotation](#key-rotation). |
 | `hello-key-id` | uint16 | RFC 5310 key ID (SHA only). |
 
 IPv4 and link-local IPv6 addresses configured on the interface are advertised in
 hellos (TLV 132/232) and used as next hops; their connected subnets are
 originated automatically (and never installed over the kernel's connected route).
+
+## Key rotation
+
+A node signs with one key and accepts several, so a key changes without a flag
+day: 1. add the new key to `*-accept-passwords` on every node; 2. switch
+`*-password` to the new key, node by node; 3. remove the old key from the accept
+lists once every node signs with the new one.
 
 ## `srv6`
 

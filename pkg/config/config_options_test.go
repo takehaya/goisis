@@ -274,3 +274,83 @@ hostname: rb
 		return false
 	})
 }
+
+// TestOptionsKeyRotation builds two servers from YAML mid-rotation: A signs
+// hellos, L1 and L2 LSPs with the new keys, B still signs with the old ones,
+// and each lists the other's keys under *-accept-passwords. The adjacency comes
+// up and both levels' LSPs install, so all three accept lists reached the
+// server options.
+func TestOptionsKeyRotation(t *testing.T) {
+	ta := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xa}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xb}, 1500)
+	datalink.Link(ta, tb)
+	open := mockCircuits(map[string]mockCircuit{
+		"ifa": {tr: ta, v4: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+		"ifb": {tr: tb, v4: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
+	})
+	node := func(net, iface, sign, accept string) string {
+		return "net: " + net + `
+area-password: ` + sign + `
+area-accept-passwords:
+  - ` + accept + `
+domain-password: ` + sign + `
+domain-accept-passwords:
+  - ` + accept + `
+circuits:
+  - interface: ` + iface + `
+    level: "12"
+    p2p: true
+    hello-password: ` + sign + `
+    hello-accept-passwords:
+      - ` + accept + `
+`
+	}
+	cfgA := loadConfig(t, node("49.0001.0000.0000.000a.00", "ifa", "newkey", "oldkey"))
+	cfgB := loadConfig(t, node("49.0001.0000.0000.000b.00", "ifb", "oldkey", "newkey"))
+
+	ctx := t.Context()
+	var servers [2]*server.IsisServer
+	for i, cfg := range []*Config{cfgA, cfgB} {
+		cfg.OpenCircuit = open
+		opts, err := cfg.Options()
+		if err != nil {
+			t.Fatalf("Options[%d]: %v", i, err)
+		}
+		s, err := server.NewIsisServer(opts...)
+		if err != nil {
+			t.Fatalf("NewIsisServer[%d]: %v", i, err)
+		}
+		go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+		servers[i] = s
+	}
+	sb := servers[1]
+	sysA := packet.SystemID{0, 0, 0, 0, 0, 0xa}
+
+	waitFor(t, "adjacency up on B despite the rotated hello key", func() bool {
+		adjs, err := sb.ListAdjacencies(ctx)
+		if err != nil {
+			return false
+		}
+		for _, a := range adjs {
+			if a.SystemID == sysA && a.State == server.AdjUp {
+				return true
+			}
+		}
+		return false
+	})
+	// L1 exercises the area accept list, L2 the domain one.
+	for _, level := range []packet.Level{packet.Level1, packet.Level2} {
+		waitFor(t, fmt.Sprintf("B to install A's %v LSP despite the rotated key", level), func() bool {
+			lsps, err := sb.ListLSDB(ctx)
+			if err != nil {
+				return false
+			}
+			for _, l := range lsps {
+				if l.Level == level && !l.Own && l.LSPID.NodeID().SystemID() == sysA {
+					return true
+				}
+			}
+			return false
+		})
+	}
+}
