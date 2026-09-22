@@ -279,7 +279,8 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | Synchronous egress/FIB on the loop | See [Sink contracts](#sink-contracts): non-blocking is a contract on implementations, not enforced by structure. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. Fine for MVP-scale areas. |
 | No RFC 7987 lifetime floor | Received-LSP aging follows the advertised remaining lifetime as-is. |
-| End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.DT4/End.DT6 work. |
+| End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.X/End.DT4/End.DT6 work. |
+| End.X SIDs are unprotected | One End.X SID per (locator, adjacency), advertised with flags and weight zero: no backup (B) flag, no SID sets (S), and no persistence across restarts (P), so a restart reallocates function values. TI-LFA, which is what the B flag would feed, is out of scope. |
 
 ## Testing strategy
 

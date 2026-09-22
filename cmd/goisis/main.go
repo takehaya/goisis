@@ -360,9 +360,12 @@ func newLocatorCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "PREFIX\tALGO\tEND-SID")
+				_, _ = fmt.Fprintln(w, "PREFIX\tALGO\tSID\tBEHAVIOR\tADJACENCY")
 				for _, l := range res.Msg.GetLocators() {
-					_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", l.GetPrefix(), l.GetAlgorithm(), l.GetEndSid())
+					_, _ = fmt.Fprintf(w, "%s\t%d\t%s\tEnd\t\n", l.GetPrefix(), l.GetAlgorithm(), l.GetEndSid())
+					for _, e := range l.GetEndXSids() {
+						_, _ = fmt.Fprintf(w, "\t\t%s\tEnd.X\t%s on %s\n", e.GetSid(), e.GetNeighbor(), e.GetInterface())
+					}
 				}
 				return w.Flush()
 			})

@@ -142,9 +142,26 @@ func (n *Netlink) RemoveLocalSID(sid netip.Addr) error {
 func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 	enc := &netlink.SEG6LocalEncap{Flags: [nl.SEG6_LOCAL_MAX]bool{}}
 	enc.Flags[nl.SEG6_LOCAL_ACTION] = true
+	// seg6local routes attach to the loopback device, except End.X, which
+	// points at the neighbor's link on the circuit the adjacency is on.
+	dev := "lo"
 	switch sid.Behavior {
 	case BehaviorEnd:
 		enc.Action = nl.SEG6_LOCAL_ACTION_END
+	case BehaviorEndX:
+		if !sid.Nexthop.Is6() {
+			return nil, fmt.Errorf("fib: End.X SID %s needs an IPv6 next hop", sid.SID)
+		}
+		enc.Action = nl.SEG6_LOCAL_ACTION_END_X
+		enc.Flags[nl.SEG6_LOCAL_NH6] = true
+		enc.In6Addr = sid.Nexthop.AsSlice()
+		// Not SEG6_LOCAL_OIF: the kernel's End.X action accepts only NH6, and
+		// rejects the route outright if any other attribute is set. The egress
+		// link is expressed as the route's device instead, which is also what
+		// gives a link-local next hop its scope.
+		if sid.Interface != "" {
+			dev = sid.Interface
+		}
 	case BehaviorEndDT4:
 		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT4
 		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
@@ -159,16 +176,15 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 	default:
 		return nil, fmt.Errorf("fib: unsupported SID behavior %d", sid.Behavior)
 	}
-	// seg6local routes attach to the loopback device.
-	lo, err := netlink.LinkByName("lo")
+	link, err := netlink.LinkByName(dev)
 	if err != nil {
-		return nil, fmt.Errorf("fib: loopback for local SID: %w", err)
+		return nil, fmt.Errorf("fib: interface %q for local SID: %w", dev, err)
 	}
 	return &netlink.Route{
 		Dst:       &net.IPNet{IP: sid.SID.AsSlice(), Mask: net.CIDRMask(128, 128)},
 		Protocol:  rtprotoISIS,
 		Table:     n.table,
-		LinkIndex: lo.Attrs().Index,
+		LinkIndex: link.Attrs().Index,
 		Encap:     enc,
 	}, nil
 }

@@ -53,6 +53,7 @@ type IsisServer struct {
 	nextLSPGen    time.Time               // earliest time drainLSPGen may honor that request
 	watchers      map[*watcher]struct{}   // WatchEvent subscribers
 	algoWarned    map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
+	endXSIDs      map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
@@ -111,6 +112,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		fibInstalled:      map[netip.Prefix]bool{},
 		watchers:          map[*watcher]struct{}{},
 		algoWarned:        map[algoKey]bool{},
+		endXSIDs:          map[endXKey]endXSID{},
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,
@@ -307,34 +309,40 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	}
 }
 
-// localSIDs returns the local End SID address for each advertised SRv6 locator.
+// localSIDs returns every SID this node instantiates locally: the End SID of
+// each advertised SRv6 locator, plus the End.X SID of each adjacency.
 func (s *IsisServer) localSIDs() []netip.Addr {
-	out := make([]netip.Addr, 0, len(s.locators))
+	out := make([]netip.Addr, 0, len(s.locators)+len(s.endXSIDs))
 	for _, lc := range s.locators {
 		out = append(out, lc.endSID())
+	}
+	for _, e := range s.endXSIDs {
+		out = append(out, e.sid)
 	}
 	return out
 }
 
 // installLocalSIDs (re-)programs the local End SID for every advertised SRv6
-// locator. AddLocalSID is idempotent (RouteReplace), so this is safe to call
-// repeatedly; it both retries a failed initial install and repairs a SID
-// deleted out-of-band while the daemon runs.
+// locator and every allocated End.X SID. AddLocalSID is idempotent
+// (RouteReplace), so this is safe to call repeatedly; it both retries a failed
+// initial install and repairs a SID deleted out-of-band while the daemon runs.
 func (s *IsisServer) installLocalSIDs() {
-	for _, sid := range s.localSIDs() {
+	for _, lc := range s.locators {
+		sid := lc.endSID()
 		if err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd}); err != nil {
 			s.logger.Error("install local End SID", "sid", sid, "error", err)
 			s.metrics.FIBError(fibOpAddSID)
 		}
 	}
+	s.installEndXSIDs()
 }
 
-// removeLocalSIDs withdraws every local End SID this node installed, so a clean
+// removeLocalSIDs withdraws every local SID this node installed, so a clean
 // shutdown leaves no orphaned seg6local routes in the kernel.
 func (s *IsisServer) removeLocalSIDs() {
 	for _, sid := range s.localSIDs() {
 		if err := s.fib.RemoveLocalSID(sid); err != nil {
-			s.logger.Error("remove local End SID", "sid", sid, "error", err)
+			s.logger.Error("remove local SID", "sid", sid, "error", err)
 			s.metrics.FIBError(fibOpRemoveSID)
 		}
 	}
@@ -441,7 +449,7 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	s.ageLSPs(now)
 	s.refreshOwnLSPs(now)
 	s.floodTransmit(now)
-	if len(s.locators) > 0 {
+	if len(s.locators) > 0 || len(s.endXSIDs) > 0 {
 		s.installLocalSIDs()
 	}
 	for level, db := range s.dbs {
@@ -577,6 +585,9 @@ type LocatorInfo struct {
 	Prefix    netip.Prefix
 	Algorithm uint8
 	EndSID    netip.Addr
+	// EndXSIDs are the adjacency-scoped End.X SIDs allocated from this
+	// locator, one per Up adjacency.
+	EndXSIDs []EndXSIDInfo
 }
 
 // ListLocators returns the SRv6 locators this node advertises.
@@ -584,7 +595,12 @@ func (s *IsisServer) ListLocators(ctx context.Context) ([]LocatorInfo, error) {
 	var out []LocatorInfo
 	err := s.mgmtOperation(ctx, func() error {
 		for _, lc := range s.locators {
-			out = append(out, LocatorInfo{Prefix: lc.Prefix.Masked(), Algorithm: lc.Algo, EndSID: lc.endSID()})
+			out = append(out, LocatorInfo{
+				Prefix:    lc.Prefix.Masked(),
+				Algorithm: lc.Algo,
+				EndSID:    lc.endSID(),
+				EndXSIDs:  s.endXSIDInfos(lc.Prefix.Masked()),
+			})
 		}
 		return nil
 	})

@@ -649,7 +649,10 @@ type Locator struct {
 	// algorithm is 0 (normal SPF) or a Flexible Algorithm (128-255).
 	Algorithm uint32 `protobuf:"varint,2,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
 	// end_sid is the local End SID instantiated at the locator's base address.
-	EndSid        string `protobuf:"bytes,3,opt,name=end_sid,json=endSid,proto3" json:"end_sid,omitempty"`
+	EndSid string `protobuf:"bytes,3,opt,name=end_sid,json=endSid,proto3" json:"end_sid,omitempty"`
+	// end_x_sids are the adjacency-scoped End.X SIDs allocated from this
+	// locator, one per Up adjacency (RFC 9352 section 8).
+	EndXSids      []*EndXSid `protobuf:"bytes,4,rep,name=end_x_sids,json=endXSids,proto3" json:"end_x_sids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -705,6 +708,85 @@ func (x *Locator) GetEndSid() string {
 	return ""
 }
 
+func (x *Locator) GetEndXSids() []*EndXSid {
+	if x != nil {
+		return x.EndXSids
+	}
+	return nil
+}
+
+// EndXSid is an SRv6 End.X SID: a locator SID bound to one adjacency.
+type EndXSid struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Sid   string                 `protobuf:"bytes,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	// neighbor is the System ID of the adjacency the SID forwards to.
+	Neighbor string `protobuf:"bytes,2,opt,name=neighbor,proto3" json:"neighbor,omitempty"`
+	// interface is the circuit that adjacency is on.
+	Interface string `protobuf:"bytes,3,opt,name=interface,proto3" json:"interface,omitempty"`
+	// algorithm is the locator's algorithm the SID is bound to.
+	Algorithm     uint32 `protobuf:"varint,4,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EndXSid) Reset() {
+	*x = EndXSid{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EndXSid) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EndXSid) ProtoMessage() {}
+
+func (x *EndXSid) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EndXSid.ProtoReflect.Descriptor instead.
+func (*EndXSid) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *EndXSid) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *EndXSid) GetNeighbor() string {
+	if x != nil {
+		return x.Neighbor
+	}
+	return ""
+}
+
+func (x *EndXSid) GetInterface() string {
+	if x != nil {
+		return x.Interface
+	}
+	return ""
+}
+
+func (x *EndXSid) GetAlgorithm() uint32 {
+	if x != nil {
+		return x.Algorithm
+	}
+	return 0
+}
+
 // FlexAlgoDefinition is the elected Flexible Algorithm Definition (RFC 9350).
 type FlexAlgoDefinition struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -720,7 +802,7 @@ type FlexAlgoDefinition struct {
 
 func (x *FlexAlgoDefinition) Reset() {
 	*x = FlexAlgoDefinition{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[9]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -732,7 +814,7 @@ func (x *FlexAlgoDefinition) String() string {
 func (*FlexAlgoDefinition) ProtoMessage() {}
 
 func (x *FlexAlgoDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[9]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -745,7 +827,7 @@ func (x *FlexAlgoDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlexAlgoDefinition.ProtoReflect.Descriptor instead.
 func (*FlexAlgoDefinition) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{9}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FlexAlgoDefinition) GetMetricType() uint32 {
@@ -791,7 +873,7 @@ type FlexAlgo struct {
 
 func (x *FlexAlgo) Reset() {
 	*x = FlexAlgo{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[10]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -803,7 +885,7 @@ func (x *FlexAlgo) String() string {
 func (*FlexAlgo) ProtoMessage() {}
 
 func (x *FlexAlgo) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[10]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -816,7 +898,7 @@ func (x *FlexAlgo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlexAlgo.ProtoReflect.Descriptor instead.
 func (*FlexAlgo) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{10}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FlexAlgo) GetAlgorithm() uint32 {
@@ -855,7 +937,7 @@ type ListCircuitsRequest struct {
 
 func (x *ListCircuitsRequest) Reset() {
 	*x = ListCircuitsRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[11]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -867,7 +949,7 @@ func (x *ListCircuitsRequest) String() string {
 func (*ListCircuitsRequest) ProtoMessage() {}
 
 func (x *ListCircuitsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[11]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -880,7 +962,7 @@ func (x *ListCircuitsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCircuitsRequest.ProtoReflect.Descriptor instead.
 func (*ListCircuitsRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{11}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{12}
 }
 
 type ListCircuitsResponse struct {
@@ -892,7 +974,7 @@ type ListCircuitsResponse struct {
 
 func (x *ListCircuitsResponse) Reset() {
 	*x = ListCircuitsResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[12]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +986,7 @@ func (x *ListCircuitsResponse) String() string {
 func (*ListCircuitsResponse) ProtoMessage() {}
 
 func (x *ListCircuitsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[12]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +999,7 @@ func (x *ListCircuitsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCircuitsResponse.ProtoReflect.Descriptor instead.
 func (*ListCircuitsResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{12}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListCircuitsResponse) GetCircuits() []*Circuit {
@@ -935,7 +1017,7 @@ type ListAdjacenciesRequest struct {
 
 func (x *ListAdjacenciesRequest) Reset() {
 	*x = ListAdjacenciesRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[13]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -947,7 +1029,7 @@ func (x *ListAdjacenciesRequest) String() string {
 func (*ListAdjacenciesRequest) ProtoMessage() {}
 
 func (x *ListAdjacenciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[13]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -960,7 +1042,7 @@ func (x *ListAdjacenciesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAdjacenciesRequest.ProtoReflect.Descriptor instead.
 func (*ListAdjacenciesRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{13}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{14}
 }
 
 type ListAdjacenciesResponse struct {
@@ -972,7 +1054,7 @@ type ListAdjacenciesResponse struct {
 
 func (x *ListAdjacenciesResponse) Reset() {
 	*x = ListAdjacenciesResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[14]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -984,7 +1066,7 @@ func (x *ListAdjacenciesResponse) String() string {
 func (*ListAdjacenciesResponse) ProtoMessage() {}
 
 func (x *ListAdjacenciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[14]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -997,7 +1079,7 @@ func (x *ListAdjacenciesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAdjacenciesResponse.ProtoReflect.Descriptor instead.
 func (*ListAdjacenciesResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{14}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ListAdjacenciesResponse) GetAdjacencies() []*Adjacency {
@@ -1015,7 +1097,7 @@ type GetLsdbRequest struct {
 
 func (x *GetLsdbRequest) Reset() {
 	*x = GetLsdbRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[15]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1027,7 +1109,7 @@ func (x *GetLsdbRequest) String() string {
 func (*GetLsdbRequest) ProtoMessage() {}
 
 func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[15]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1040,7 +1122,7 @@ func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLsdbRequest.ProtoReflect.Descriptor instead.
 func (*GetLsdbRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{15}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{16}
 }
 
 type GetLsdbResponse struct {
@@ -1052,7 +1134,7 @@ type GetLsdbResponse struct {
 
 func (x *GetLsdbResponse) Reset() {
 	*x = GetLsdbResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[16]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1064,7 +1146,7 @@ func (x *GetLsdbResponse) String() string {
 func (*GetLsdbResponse) ProtoMessage() {}
 
 func (x *GetLsdbResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[16]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1077,7 +1159,7 @@ func (x *GetLsdbResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLsdbResponse.ProtoReflect.Descriptor instead.
 func (*GetLsdbResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{16}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetLsdbResponse) GetLsps() []*Lsp {
@@ -1095,7 +1177,7 @@ type ListRoutesRequest struct {
 
 func (x *ListRoutesRequest) Reset() {
 	*x = ListRoutesRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[17]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1189,7 @@ func (x *ListRoutesRequest) String() string {
 func (*ListRoutesRequest) ProtoMessage() {}
 
 func (x *ListRoutesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[17]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1202,7 @@ func (x *ListRoutesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutesRequest.ProtoReflect.Descriptor instead.
 func (*ListRoutesRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{17}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{18}
 }
 
 type ListRoutesResponse struct {
@@ -1132,7 +1214,7 @@ type ListRoutesResponse struct {
 
 func (x *ListRoutesResponse) Reset() {
 	*x = ListRoutesResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[18]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1144,7 +1226,7 @@ func (x *ListRoutesResponse) String() string {
 func (*ListRoutesResponse) ProtoMessage() {}
 
 func (x *ListRoutesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[18]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1157,7 +1239,7 @@ func (x *ListRoutesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRoutesResponse.ProtoReflect.Descriptor instead.
 func (*ListRoutesResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{18}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListRoutesResponse) GetRoutes() []*Route {
@@ -1175,7 +1257,7 @@ type ListLocatorsRequest struct {
 
 func (x *ListLocatorsRequest) Reset() {
 	*x = ListLocatorsRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[19]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1187,7 +1269,7 @@ func (x *ListLocatorsRequest) String() string {
 func (*ListLocatorsRequest) ProtoMessage() {}
 
 func (x *ListLocatorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[19]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1200,7 +1282,7 @@ func (x *ListLocatorsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLocatorsRequest.ProtoReflect.Descriptor instead.
 func (*ListLocatorsRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{19}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{20}
 }
 
 type ListLocatorsResponse struct {
@@ -1212,7 +1294,7 @@ type ListLocatorsResponse struct {
 
 func (x *ListLocatorsResponse) Reset() {
 	*x = ListLocatorsResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[20]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1224,7 +1306,7 @@ func (x *ListLocatorsResponse) String() string {
 func (*ListLocatorsResponse) ProtoMessage() {}
 
 func (x *ListLocatorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[20]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1237,7 +1319,7 @@ func (x *ListLocatorsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListLocatorsResponse.ProtoReflect.Descriptor instead.
 func (*ListLocatorsResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{20}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListLocatorsResponse) GetLocators() []*Locator {
@@ -1255,7 +1337,7 @@ type ListFlexAlgosRequest struct {
 
 func (x *ListFlexAlgosRequest) Reset() {
 	*x = ListFlexAlgosRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[21]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1267,7 +1349,7 @@ func (x *ListFlexAlgosRequest) String() string {
 func (*ListFlexAlgosRequest) ProtoMessage() {}
 
 func (x *ListFlexAlgosRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[21]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1280,7 +1362,7 @@ func (x *ListFlexAlgosRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFlexAlgosRequest.ProtoReflect.Descriptor instead.
 func (*ListFlexAlgosRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{21}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{22}
 }
 
 type ListFlexAlgosResponse struct {
@@ -1292,7 +1374,7 @@ type ListFlexAlgosResponse struct {
 
 func (x *ListFlexAlgosResponse) Reset() {
 	*x = ListFlexAlgosResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[22]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1304,7 +1386,7 @@ func (x *ListFlexAlgosResponse) String() string {
 func (*ListFlexAlgosResponse) ProtoMessage() {}
 
 func (x *ListFlexAlgosResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[22]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1317,7 +1399,7 @@ func (x *ListFlexAlgosResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFlexAlgosResponse.ProtoReflect.Descriptor instead.
 func (*ListFlexAlgosResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{22}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListFlexAlgosResponse) GetFlexAlgos() []*FlexAlgo {
@@ -1340,7 +1422,7 @@ type AddLocatorRequest struct {
 
 func (x *AddLocatorRequest) Reset() {
 	*x = AddLocatorRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[23]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1352,7 +1434,7 @@ func (x *AddLocatorRequest) String() string {
 func (*AddLocatorRequest) ProtoMessage() {}
 
 func (x *AddLocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[23]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1365,7 +1447,7 @@ func (x *AddLocatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddLocatorRequest.ProtoReflect.Descriptor instead.
 func (*AddLocatorRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{23}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AddLocatorRequest) GetPrefix() string {
@@ -1390,7 +1472,7 @@ type AddLocatorResponse struct {
 
 func (x *AddLocatorResponse) Reset() {
 	*x = AddLocatorResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[24]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1402,7 +1484,7 @@ func (x *AddLocatorResponse) String() string {
 func (*AddLocatorResponse) ProtoMessage() {}
 
 func (x *AddLocatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[24]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1415,7 +1497,7 @@ func (x *AddLocatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddLocatorResponse.ProtoReflect.Descriptor instead.
 func (*AddLocatorResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{24}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{25}
 }
 
 type DeleteLocatorRequest struct {
@@ -1428,7 +1510,7 @@ type DeleteLocatorRequest struct {
 
 func (x *DeleteLocatorRequest) Reset() {
 	*x = DeleteLocatorRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[25]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1522,7 @@ func (x *DeleteLocatorRequest) String() string {
 func (*DeleteLocatorRequest) ProtoMessage() {}
 
 func (x *DeleteLocatorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[25]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1453,7 +1535,7 @@ func (x *DeleteLocatorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteLocatorRequest.ProtoReflect.Descriptor instead.
 func (*DeleteLocatorRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{25}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DeleteLocatorRequest) GetPrefix() string {
@@ -1471,7 +1553,7 @@ type DeleteLocatorResponse struct {
 
 func (x *DeleteLocatorResponse) Reset() {
 	*x = DeleteLocatorResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[26]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1483,7 +1565,7 @@ func (x *DeleteLocatorResponse) String() string {
 func (*DeleteLocatorResponse) ProtoMessage() {}
 
 func (x *DeleteLocatorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[26]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1496,7 +1578,7 @@ func (x *DeleteLocatorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteLocatorResponse.ProtoReflect.Descriptor instead.
 func (*DeleteLocatorResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{26}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{27}
 }
 
 type AddFlexAlgoRequest struct {
@@ -1515,7 +1597,7 @@ type AddFlexAlgoRequest struct {
 
 func (x *AddFlexAlgoRequest) Reset() {
 	*x = AddFlexAlgoRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[27]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1527,7 +1609,7 @@ func (x *AddFlexAlgoRequest) String() string {
 func (*AddFlexAlgoRequest) ProtoMessage() {}
 
 func (x *AddFlexAlgoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[27]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1540,7 +1622,7 @@ func (x *AddFlexAlgoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddFlexAlgoRequest.ProtoReflect.Descriptor instead.
 func (*AddFlexAlgoRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{27}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *AddFlexAlgoRequest) GetAlgorithm() uint32 {
@@ -1579,7 +1661,7 @@ type AddFlexAlgoResponse struct {
 
 func (x *AddFlexAlgoResponse) Reset() {
 	*x = AddFlexAlgoResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[28]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1591,7 +1673,7 @@ func (x *AddFlexAlgoResponse) String() string {
 func (*AddFlexAlgoResponse) ProtoMessage() {}
 
 func (x *AddFlexAlgoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[28]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1604,7 +1686,7 @@ func (x *AddFlexAlgoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddFlexAlgoResponse.ProtoReflect.Descriptor instead.
 func (*AddFlexAlgoResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{28}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{29}
 }
 
 type DeleteFlexAlgoRequest struct {
@@ -1617,7 +1699,7 @@ type DeleteFlexAlgoRequest struct {
 
 func (x *DeleteFlexAlgoRequest) Reset() {
 	*x = DeleteFlexAlgoRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[29]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1629,7 +1711,7 @@ func (x *DeleteFlexAlgoRequest) String() string {
 func (*DeleteFlexAlgoRequest) ProtoMessage() {}
 
 func (x *DeleteFlexAlgoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[29]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1642,7 +1724,7 @@ func (x *DeleteFlexAlgoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFlexAlgoRequest.ProtoReflect.Descriptor instead.
 func (*DeleteFlexAlgoRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{29}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DeleteFlexAlgoRequest) GetAlgorithm() uint32 {
@@ -1660,7 +1742,7 @@ type DeleteFlexAlgoResponse struct {
 
 func (x *DeleteFlexAlgoResponse) Reset() {
 	*x = DeleteFlexAlgoResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[30]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1672,7 +1754,7 @@ func (x *DeleteFlexAlgoResponse) String() string {
 func (*DeleteFlexAlgoResponse) ProtoMessage() {}
 
 func (x *DeleteFlexAlgoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[30]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1685,7 +1767,7 @@ func (x *DeleteFlexAlgoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFlexAlgoResponse.ProtoReflect.Descriptor instead.
 func (*DeleteFlexAlgoResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{30}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{31}
 }
 
 type AddPrefixRequest struct {
@@ -1700,7 +1782,7 @@ type AddPrefixRequest struct {
 
 func (x *AddPrefixRequest) Reset() {
 	*x = AddPrefixRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1712,7 +1794,7 @@ func (x *AddPrefixRequest) String() string {
 func (*AddPrefixRequest) ProtoMessage() {}
 
 func (x *AddPrefixRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1725,7 +1807,7 @@ func (x *AddPrefixRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPrefixRequest.ProtoReflect.Descriptor instead.
 func (*AddPrefixRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{31}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AddPrefixRequest) GetPrefix() string {
@@ -1750,7 +1832,7 @@ type AddPrefixResponse struct {
 
 func (x *AddPrefixResponse) Reset() {
 	*x = AddPrefixResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1762,7 +1844,7 @@ func (x *AddPrefixResponse) String() string {
 func (*AddPrefixResponse) ProtoMessage() {}
 
 func (x *AddPrefixResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1775,7 +1857,7 @@ func (x *AddPrefixResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPrefixResponse.ProtoReflect.Descriptor instead.
 func (*AddPrefixResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{32}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{33}
 }
 
 type DeletePrefixRequest struct {
@@ -1788,7 +1870,7 @@ type DeletePrefixRequest struct {
 
 func (x *DeletePrefixRequest) Reset() {
 	*x = DeletePrefixRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1800,7 +1882,7 @@ func (x *DeletePrefixRequest) String() string {
 func (*DeletePrefixRequest) ProtoMessage() {}
 
 func (x *DeletePrefixRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1813,7 +1895,7 @@ func (x *DeletePrefixRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePrefixRequest.ProtoReflect.Descriptor instead.
 func (*DeletePrefixRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{33}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *DeletePrefixRequest) GetPrefix() string {
@@ -1831,7 +1913,7 @@ type DeletePrefixResponse struct {
 
 func (x *DeletePrefixResponse) Reset() {
 	*x = DeletePrefixResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1843,7 +1925,7 @@ func (x *DeletePrefixResponse) String() string {
 func (*DeletePrefixResponse) ProtoMessage() {}
 
 func (x *DeletePrefixResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1856,7 +1938,7 @@ func (x *DeletePrefixResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePrefixResponse.ProtoReflect.Descriptor instead.
 func (*DeletePrefixResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{34}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{35}
 }
 
 type SetOverloadRequest struct {
@@ -1869,7 +1951,7 @@ type SetOverloadRequest struct {
 
 func (x *SetOverloadRequest) Reset() {
 	*x = SetOverloadRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1881,7 +1963,7 @@ func (x *SetOverloadRequest) String() string {
 func (*SetOverloadRequest) ProtoMessage() {}
 
 func (x *SetOverloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1894,7 +1976,7 @@ func (x *SetOverloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetOverloadRequest.ProtoReflect.Descriptor instead.
 func (*SetOverloadRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{35}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SetOverloadRequest) GetOverload() bool {
@@ -1912,7 +1994,7 @@ type SetOverloadResponse struct {
 
 func (x *SetOverloadResponse) Reset() {
 	*x = SetOverloadResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1924,7 +2006,7 @@ func (x *SetOverloadResponse) String() string {
 func (*SetOverloadResponse) ProtoMessage() {}
 
 func (x *SetOverloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1937,7 +2019,7 @@ func (x *SetOverloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetOverloadResponse.ProtoReflect.Descriptor instead.
 func (*SetOverloadResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{36}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{37}
 }
 
 type ClearAdjacencyRequest struct {
@@ -1953,7 +2035,7 @@ type ClearAdjacencyRequest struct {
 
 func (x *ClearAdjacencyRequest) Reset() {
 	*x = ClearAdjacencyRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1965,7 +2047,7 @@ func (x *ClearAdjacencyRequest) String() string {
 func (*ClearAdjacencyRequest) ProtoMessage() {}
 
 func (x *ClearAdjacencyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1978,7 +2060,7 @@ func (x *ClearAdjacencyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearAdjacencyRequest.ProtoReflect.Descriptor instead.
 func (*ClearAdjacencyRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{37}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ClearAdjacencyRequest) GetInterface() string {
@@ -2003,7 +2085,7 @@ type ClearAdjacencyResponse struct {
 
 func (x *ClearAdjacencyResponse) Reset() {
 	*x = ClearAdjacencyResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2015,7 +2097,7 @@ func (x *ClearAdjacencyResponse) String() string {
 func (*ClearAdjacencyResponse) ProtoMessage() {}
 
 func (x *ClearAdjacencyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2028,7 +2110,7 @@ func (x *ClearAdjacencyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearAdjacencyResponse.ProtoReflect.Descriptor instead.
 func (*ClearAdjacencyResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{38}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{39}
 }
 
 type WatchEventRequest struct {
@@ -2043,7 +2125,7 @@ type WatchEventRequest struct {
 
 func (x *WatchEventRequest) Reset() {
 	*x = WatchEventRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2055,7 +2137,7 @@ func (x *WatchEventRequest) String() string {
 func (*WatchEventRequest) ProtoMessage() {}
 
 func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2068,7 +2150,7 @@ func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventRequest.ProtoReflect.Descriptor instead.
 func (*WatchEventRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{39}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *WatchEventRequest) GetIncludeInitial() bool {
@@ -2091,7 +2173,7 @@ type WatchEventResponse struct {
 
 func (x *WatchEventResponse) Reset() {
 	*x = WatchEventResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2103,7 +2185,7 @@ func (x *WatchEventResponse) String() string {
 func (*WatchEventResponse) ProtoMessage() {}
 
 func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2116,7 +2198,7 @@ func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventResponse.ProtoReflect.Descriptor instead.
 func (*WatchEventResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{40}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *WatchEventResponse) GetEvent() isWatchEventResponse_Event {
@@ -2170,7 +2252,7 @@ type AdjacencyEvent struct {
 
 func (x *AdjacencyEvent) Reset() {
 	*x = AdjacencyEvent{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2182,7 +2264,7 @@ func (x *AdjacencyEvent) String() string {
 func (*AdjacencyEvent) ProtoMessage() {}
 
 func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2195,7 +2277,7 @@ func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjacencyEvent.ProtoReflect.Descriptor instead.
 func (*AdjacencyEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{41}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *AdjacencyEvent) GetAdjacency() *Adjacency {
@@ -2217,7 +2299,7 @@ type RouteEvent struct {
 
 func (x *RouteEvent) Reset() {
 	*x = RouteEvent{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2229,7 +2311,7 @@ func (x *RouteEvent) String() string {
 func (*RouteEvent) ProtoMessage() {}
 
 func (x *RouteEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2242,7 +2324,7 @@ func (x *RouteEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteEvent.ProtoReflect.Descriptor instead.
 func (*RouteEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{42}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *RouteEvent) GetRoute() *Route {
@@ -2304,11 +2386,18 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x06metric\x18\x02 \x01(\rR\x06metric\x12&\n" +
 	"\x05level\x18\x03 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12/\n" +
 	"\tnext_hops\x18\x04 \x03(\v2\x12.goisis.v1.NextHopR\bnextHops\x12\x1c\n" +
-	"\talgorithm\x18\x05 \x01(\rR\talgorithm\"X\n" +
+	"\talgorithm\x18\x05 \x01(\rR\talgorithm\"\x8a\x01\n" +
 	"\aLocator\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x1c\n" +
 	"\talgorithm\x18\x02 \x01(\rR\talgorithm\x12\x17\n" +
-	"\aend_sid\x18\x03 \x01(\tR\x06endSid\"\x8e\x01\n" +
+	"\aend_sid\x18\x03 \x01(\tR\x06endSid\x120\n" +
+	"\n" +
+	"end_x_sids\x18\x04 \x03(\v2\x12.goisis.v1.EndXSidR\bendXSids\"s\n" +
+	"\aEndXSid\x12\x10\n" +
+	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x1a\n" +
+	"\bneighbor\x18\x02 \x01(\tR\bneighbor\x12\x1c\n" +
+	"\tinterface\x18\x03 \x01(\tR\tinterface\x12\x1c\n" +
+	"\talgorithm\x18\x04 \x01(\rR\talgorithm\"\x8e\x01\n" +
 	"\x12FlexAlgoDefinition\x12\x1f\n" +
 	"\vmetric_type\x18\x01 \x01(\rR\n" +
 	"metricType\x12\x1b\n" +
@@ -2426,7 +2515,7 @@ func file_goisis_v1_goisis_proto_rawDescGZIP() []byte {
 }
 
 var file_goisis_v1_goisis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_goisis_v1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_goisis_v1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_goisis_v1_goisis_proto_goTypes = []any{
 	(Level)(0),                      // 0: goisis.v1.Level
 	(*GetIsisRequest)(nil),          // 1: goisis.v1.GetIsisRequest
@@ -2438,40 +2527,41 @@ var file_goisis_v1_goisis_proto_goTypes = []any{
 	(*NextHop)(nil),                 // 7: goisis.v1.NextHop
 	(*Route)(nil),                   // 8: goisis.v1.Route
 	(*Locator)(nil),                 // 9: goisis.v1.Locator
-	(*FlexAlgoDefinition)(nil),      // 10: goisis.v1.FlexAlgoDefinition
-	(*FlexAlgo)(nil),                // 11: goisis.v1.FlexAlgo
-	(*ListCircuitsRequest)(nil),     // 12: goisis.v1.ListCircuitsRequest
-	(*ListCircuitsResponse)(nil),    // 13: goisis.v1.ListCircuitsResponse
-	(*ListAdjacenciesRequest)(nil),  // 14: goisis.v1.ListAdjacenciesRequest
-	(*ListAdjacenciesResponse)(nil), // 15: goisis.v1.ListAdjacenciesResponse
-	(*GetLsdbRequest)(nil),          // 16: goisis.v1.GetLsdbRequest
-	(*GetLsdbResponse)(nil),         // 17: goisis.v1.GetLsdbResponse
-	(*ListRoutesRequest)(nil),       // 18: goisis.v1.ListRoutesRequest
-	(*ListRoutesResponse)(nil),      // 19: goisis.v1.ListRoutesResponse
-	(*ListLocatorsRequest)(nil),     // 20: goisis.v1.ListLocatorsRequest
-	(*ListLocatorsResponse)(nil),    // 21: goisis.v1.ListLocatorsResponse
-	(*ListFlexAlgosRequest)(nil),    // 22: goisis.v1.ListFlexAlgosRequest
-	(*ListFlexAlgosResponse)(nil),   // 23: goisis.v1.ListFlexAlgosResponse
-	(*AddLocatorRequest)(nil),       // 24: goisis.v1.AddLocatorRequest
-	(*AddLocatorResponse)(nil),      // 25: goisis.v1.AddLocatorResponse
-	(*DeleteLocatorRequest)(nil),    // 26: goisis.v1.DeleteLocatorRequest
-	(*DeleteLocatorResponse)(nil),   // 27: goisis.v1.DeleteLocatorResponse
-	(*AddFlexAlgoRequest)(nil),      // 28: goisis.v1.AddFlexAlgoRequest
-	(*AddFlexAlgoResponse)(nil),     // 29: goisis.v1.AddFlexAlgoResponse
-	(*DeleteFlexAlgoRequest)(nil),   // 30: goisis.v1.DeleteFlexAlgoRequest
-	(*DeleteFlexAlgoResponse)(nil),  // 31: goisis.v1.DeleteFlexAlgoResponse
-	(*AddPrefixRequest)(nil),        // 32: goisis.v1.AddPrefixRequest
-	(*AddPrefixResponse)(nil),       // 33: goisis.v1.AddPrefixResponse
-	(*DeletePrefixRequest)(nil),     // 34: goisis.v1.DeletePrefixRequest
-	(*DeletePrefixResponse)(nil),    // 35: goisis.v1.DeletePrefixResponse
-	(*SetOverloadRequest)(nil),      // 36: goisis.v1.SetOverloadRequest
-	(*SetOverloadResponse)(nil),     // 37: goisis.v1.SetOverloadResponse
-	(*ClearAdjacencyRequest)(nil),   // 38: goisis.v1.ClearAdjacencyRequest
-	(*ClearAdjacencyResponse)(nil),  // 39: goisis.v1.ClearAdjacencyResponse
-	(*WatchEventRequest)(nil),       // 40: goisis.v1.WatchEventRequest
-	(*WatchEventResponse)(nil),      // 41: goisis.v1.WatchEventResponse
-	(*AdjacencyEvent)(nil),          // 42: goisis.v1.AdjacencyEvent
-	(*RouteEvent)(nil),              // 43: goisis.v1.RouteEvent
+	(*EndXSid)(nil),                 // 10: goisis.v1.EndXSid
+	(*FlexAlgoDefinition)(nil),      // 11: goisis.v1.FlexAlgoDefinition
+	(*FlexAlgo)(nil),                // 12: goisis.v1.FlexAlgo
+	(*ListCircuitsRequest)(nil),     // 13: goisis.v1.ListCircuitsRequest
+	(*ListCircuitsResponse)(nil),    // 14: goisis.v1.ListCircuitsResponse
+	(*ListAdjacenciesRequest)(nil),  // 15: goisis.v1.ListAdjacenciesRequest
+	(*ListAdjacenciesResponse)(nil), // 16: goisis.v1.ListAdjacenciesResponse
+	(*GetLsdbRequest)(nil),          // 17: goisis.v1.GetLsdbRequest
+	(*GetLsdbResponse)(nil),         // 18: goisis.v1.GetLsdbResponse
+	(*ListRoutesRequest)(nil),       // 19: goisis.v1.ListRoutesRequest
+	(*ListRoutesResponse)(nil),      // 20: goisis.v1.ListRoutesResponse
+	(*ListLocatorsRequest)(nil),     // 21: goisis.v1.ListLocatorsRequest
+	(*ListLocatorsResponse)(nil),    // 22: goisis.v1.ListLocatorsResponse
+	(*ListFlexAlgosRequest)(nil),    // 23: goisis.v1.ListFlexAlgosRequest
+	(*ListFlexAlgosResponse)(nil),   // 24: goisis.v1.ListFlexAlgosResponse
+	(*AddLocatorRequest)(nil),       // 25: goisis.v1.AddLocatorRequest
+	(*AddLocatorResponse)(nil),      // 26: goisis.v1.AddLocatorResponse
+	(*DeleteLocatorRequest)(nil),    // 27: goisis.v1.DeleteLocatorRequest
+	(*DeleteLocatorResponse)(nil),   // 28: goisis.v1.DeleteLocatorResponse
+	(*AddFlexAlgoRequest)(nil),      // 29: goisis.v1.AddFlexAlgoRequest
+	(*AddFlexAlgoResponse)(nil),     // 30: goisis.v1.AddFlexAlgoResponse
+	(*DeleteFlexAlgoRequest)(nil),   // 31: goisis.v1.DeleteFlexAlgoRequest
+	(*DeleteFlexAlgoResponse)(nil),  // 32: goisis.v1.DeleteFlexAlgoResponse
+	(*AddPrefixRequest)(nil),        // 33: goisis.v1.AddPrefixRequest
+	(*AddPrefixResponse)(nil),       // 34: goisis.v1.AddPrefixResponse
+	(*DeletePrefixRequest)(nil),     // 35: goisis.v1.DeletePrefixRequest
+	(*DeletePrefixResponse)(nil),    // 36: goisis.v1.DeletePrefixResponse
+	(*SetOverloadRequest)(nil),      // 37: goisis.v1.SetOverloadRequest
+	(*SetOverloadResponse)(nil),     // 38: goisis.v1.SetOverloadResponse
+	(*ClearAdjacencyRequest)(nil),   // 39: goisis.v1.ClearAdjacencyRequest
+	(*ClearAdjacencyResponse)(nil),  // 40: goisis.v1.ClearAdjacencyResponse
+	(*WatchEventRequest)(nil),       // 41: goisis.v1.WatchEventRequest
+	(*WatchEventResponse)(nil),      // 42: goisis.v1.WatchEventResponse
+	(*AdjacencyEvent)(nil),          // 43: goisis.v1.AdjacencyEvent
+	(*RouteEvent)(nil),              // 44: goisis.v1.RouteEvent
 }
 var file_goisis_v1_goisis_proto_depIdxs = []int32{
 	3,  // 0: goisis.v1.GetIsisResponse.global:type_name -> goisis.v1.Global
@@ -2479,55 +2569,56 @@ var file_goisis_v1_goisis_proto_depIdxs = []int32{
 	0,  // 2: goisis.v1.Lsp.level:type_name -> goisis.v1.Level
 	0,  // 3: goisis.v1.Route.level:type_name -> goisis.v1.Level
 	7,  // 4: goisis.v1.Route.next_hops:type_name -> goisis.v1.NextHop
-	0,  // 5: goisis.v1.FlexAlgo.level:type_name -> goisis.v1.Level
-	10, // 6: goisis.v1.FlexAlgo.definition:type_name -> goisis.v1.FlexAlgoDefinition
-	4,  // 7: goisis.v1.ListCircuitsResponse.circuits:type_name -> goisis.v1.Circuit
-	5,  // 8: goisis.v1.ListAdjacenciesResponse.adjacencies:type_name -> goisis.v1.Adjacency
-	6,  // 9: goisis.v1.GetLsdbResponse.lsps:type_name -> goisis.v1.Lsp
-	8,  // 10: goisis.v1.ListRoutesResponse.routes:type_name -> goisis.v1.Route
-	9,  // 11: goisis.v1.ListLocatorsResponse.locators:type_name -> goisis.v1.Locator
-	11, // 12: goisis.v1.ListFlexAlgosResponse.flex_algos:type_name -> goisis.v1.FlexAlgo
-	42, // 13: goisis.v1.WatchEventResponse.adjacency:type_name -> goisis.v1.AdjacencyEvent
-	43, // 14: goisis.v1.WatchEventResponse.route:type_name -> goisis.v1.RouteEvent
-	5,  // 15: goisis.v1.AdjacencyEvent.adjacency:type_name -> goisis.v1.Adjacency
-	8,  // 16: goisis.v1.RouteEvent.route:type_name -> goisis.v1.Route
-	1,  // 17: goisis.v1.IsisService.GetIsis:input_type -> goisis.v1.GetIsisRequest
-	12, // 18: goisis.v1.IsisService.ListCircuits:input_type -> goisis.v1.ListCircuitsRequest
-	14, // 19: goisis.v1.IsisService.ListAdjacencies:input_type -> goisis.v1.ListAdjacenciesRequest
-	16, // 20: goisis.v1.IsisService.GetLsdb:input_type -> goisis.v1.GetLsdbRequest
-	18, // 21: goisis.v1.IsisService.ListRoutes:input_type -> goisis.v1.ListRoutesRequest
-	20, // 22: goisis.v1.IsisService.ListLocators:input_type -> goisis.v1.ListLocatorsRequest
-	22, // 23: goisis.v1.IsisService.ListFlexAlgos:input_type -> goisis.v1.ListFlexAlgosRequest
-	24, // 24: goisis.v1.IsisService.AddLocator:input_type -> goisis.v1.AddLocatorRequest
-	26, // 25: goisis.v1.IsisService.DeleteLocator:input_type -> goisis.v1.DeleteLocatorRequest
-	28, // 26: goisis.v1.IsisService.AddFlexAlgo:input_type -> goisis.v1.AddFlexAlgoRequest
-	30, // 27: goisis.v1.IsisService.DeleteFlexAlgo:input_type -> goisis.v1.DeleteFlexAlgoRequest
-	32, // 28: goisis.v1.IsisService.AddPrefix:input_type -> goisis.v1.AddPrefixRequest
-	34, // 29: goisis.v1.IsisService.DeletePrefix:input_type -> goisis.v1.DeletePrefixRequest
-	36, // 30: goisis.v1.IsisService.SetOverload:input_type -> goisis.v1.SetOverloadRequest
-	38, // 31: goisis.v1.IsisService.ClearAdjacency:input_type -> goisis.v1.ClearAdjacencyRequest
-	40, // 32: goisis.v1.IsisService.WatchEvent:input_type -> goisis.v1.WatchEventRequest
-	2,  // 33: goisis.v1.IsisService.GetIsis:output_type -> goisis.v1.GetIsisResponse
-	13, // 34: goisis.v1.IsisService.ListCircuits:output_type -> goisis.v1.ListCircuitsResponse
-	15, // 35: goisis.v1.IsisService.ListAdjacencies:output_type -> goisis.v1.ListAdjacenciesResponse
-	17, // 36: goisis.v1.IsisService.GetLsdb:output_type -> goisis.v1.GetLsdbResponse
-	19, // 37: goisis.v1.IsisService.ListRoutes:output_type -> goisis.v1.ListRoutesResponse
-	21, // 38: goisis.v1.IsisService.ListLocators:output_type -> goisis.v1.ListLocatorsResponse
-	23, // 39: goisis.v1.IsisService.ListFlexAlgos:output_type -> goisis.v1.ListFlexAlgosResponse
-	25, // 40: goisis.v1.IsisService.AddLocator:output_type -> goisis.v1.AddLocatorResponse
-	27, // 41: goisis.v1.IsisService.DeleteLocator:output_type -> goisis.v1.DeleteLocatorResponse
-	29, // 42: goisis.v1.IsisService.AddFlexAlgo:output_type -> goisis.v1.AddFlexAlgoResponse
-	31, // 43: goisis.v1.IsisService.DeleteFlexAlgo:output_type -> goisis.v1.DeleteFlexAlgoResponse
-	33, // 44: goisis.v1.IsisService.AddPrefix:output_type -> goisis.v1.AddPrefixResponse
-	35, // 45: goisis.v1.IsisService.DeletePrefix:output_type -> goisis.v1.DeletePrefixResponse
-	37, // 46: goisis.v1.IsisService.SetOverload:output_type -> goisis.v1.SetOverloadResponse
-	39, // 47: goisis.v1.IsisService.ClearAdjacency:output_type -> goisis.v1.ClearAdjacencyResponse
-	41, // 48: goisis.v1.IsisService.WatchEvent:output_type -> goisis.v1.WatchEventResponse
-	33, // [33:49] is the sub-list for method output_type
-	17, // [17:33] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	10, // 5: goisis.v1.Locator.end_x_sids:type_name -> goisis.v1.EndXSid
+	0,  // 6: goisis.v1.FlexAlgo.level:type_name -> goisis.v1.Level
+	11, // 7: goisis.v1.FlexAlgo.definition:type_name -> goisis.v1.FlexAlgoDefinition
+	4,  // 8: goisis.v1.ListCircuitsResponse.circuits:type_name -> goisis.v1.Circuit
+	5,  // 9: goisis.v1.ListAdjacenciesResponse.adjacencies:type_name -> goisis.v1.Adjacency
+	6,  // 10: goisis.v1.GetLsdbResponse.lsps:type_name -> goisis.v1.Lsp
+	8,  // 11: goisis.v1.ListRoutesResponse.routes:type_name -> goisis.v1.Route
+	9,  // 12: goisis.v1.ListLocatorsResponse.locators:type_name -> goisis.v1.Locator
+	12, // 13: goisis.v1.ListFlexAlgosResponse.flex_algos:type_name -> goisis.v1.FlexAlgo
+	43, // 14: goisis.v1.WatchEventResponse.adjacency:type_name -> goisis.v1.AdjacencyEvent
+	44, // 15: goisis.v1.WatchEventResponse.route:type_name -> goisis.v1.RouteEvent
+	5,  // 16: goisis.v1.AdjacencyEvent.adjacency:type_name -> goisis.v1.Adjacency
+	8,  // 17: goisis.v1.RouteEvent.route:type_name -> goisis.v1.Route
+	1,  // 18: goisis.v1.IsisService.GetIsis:input_type -> goisis.v1.GetIsisRequest
+	13, // 19: goisis.v1.IsisService.ListCircuits:input_type -> goisis.v1.ListCircuitsRequest
+	15, // 20: goisis.v1.IsisService.ListAdjacencies:input_type -> goisis.v1.ListAdjacenciesRequest
+	17, // 21: goisis.v1.IsisService.GetLsdb:input_type -> goisis.v1.GetLsdbRequest
+	19, // 22: goisis.v1.IsisService.ListRoutes:input_type -> goisis.v1.ListRoutesRequest
+	21, // 23: goisis.v1.IsisService.ListLocators:input_type -> goisis.v1.ListLocatorsRequest
+	23, // 24: goisis.v1.IsisService.ListFlexAlgos:input_type -> goisis.v1.ListFlexAlgosRequest
+	25, // 25: goisis.v1.IsisService.AddLocator:input_type -> goisis.v1.AddLocatorRequest
+	27, // 26: goisis.v1.IsisService.DeleteLocator:input_type -> goisis.v1.DeleteLocatorRequest
+	29, // 27: goisis.v1.IsisService.AddFlexAlgo:input_type -> goisis.v1.AddFlexAlgoRequest
+	31, // 28: goisis.v1.IsisService.DeleteFlexAlgo:input_type -> goisis.v1.DeleteFlexAlgoRequest
+	33, // 29: goisis.v1.IsisService.AddPrefix:input_type -> goisis.v1.AddPrefixRequest
+	35, // 30: goisis.v1.IsisService.DeletePrefix:input_type -> goisis.v1.DeletePrefixRequest
+	37, // 31: goisis.v1.IsisService.SetOverload:input_type -> goisis.v1.SetOverloadRequest
+	39, // 32: goisis.v1.IsisService.ClearAdjacency:input_type -> goisis.v1.ClearAdjacencyRequest
+	41, // 33: goisis.v1.IsisService.WatchEvent:input_type -> goisis.v1.WatchEventRequest
+	2,  // 34: goisis.v1.IsisService.GetIsis:output_type -> goisis.v1.GetIsisResponse
+	14, // 35: goisis.v1.IsisService.ListCircuits:output_type -> goisis.v1.ListCircuitsResponse
+	16, // 36: goisis.v1.IsisService.ListAdjacencies:output_type -> goisis.v1.ListAdjacenciesResponse
+	18, // 37: goisis.v1.IsisService.GetLsdb:output_type -> goisis.v1.GetLsdbResponse
+	20, // 38: goisis.v1.IsisService.ListRoutes:output_type -> goisis.v1.ListRoutesResponse
+	22, // 39: goisis.v1.IsisService.ListLocators:output_type -> goisis.v1.ListLocatorsResponse
+	24, // 40: goisis.v1.IsisService.ListFlexAlgos:output_type -> goisis.v1.ListFlexAlgosResponse
+	26, // 41: goisis.v1.IsisService.AddLocator:output_type -> goisis.v1.AddLocatorResponse
+	28, // 42: goisis.v1.IsisService.DeleteLocator:output_type -> goisis.v1.DeleteLocatorResponse
+	30, // 43: goisis.v1.IsisService.AddFlexAlgo:output_type -> goisis.v1.AddFlexAlgoResponse
+	32, // 44: goisis.v1.IsisService.DeleteFlexAlgo:output_type -> goisis.v1.DeleteFlexAlgoResponse
+	34, // 45: goisis.v1.IsisService.AddPrefix:output_type -> goisis.v1.AddPrefixResponse
+	36, // 46: goisis.v1.IsisService.DeletePrefix:output_type -> goisis.v1.DeletePrefixResponse
+	38, // 47: goisis.v1.IsisService.SetOverload:output_type -> goisis.v1.SetOverloadResponse
+	40, // 48: goisis.v1.IsisService.ClearAdjacency:output_type -> goisis.v1.ClearAdjacencyResponse
+	42, // 49: goisis.v1.IsisService.WatchEvent:output_type -> goisis.v1.WatchEventResponse
+	34, // [34:50] is the sub-list for method output_type
+	18, // [18:34] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_goisis_v1_goisis_proto_init() }
@@ -2535,7 +2626,7 @@ func file_goisis_v1_goisis_proto_init() {
 	if File_goisis_v1_goisis_proto != nil {
 		return
 	}
-	file_goisis_v1_goisis_proto_msgTypes[40].OneofWrappers = []any{
+	file_goisis_v1_goisis_proto_msgTypes[41].OneofWrappers = []any{
 		(*WatchEventResponse_Adjacency)(nil),
 		(*WatchEventResponse_Route)(nil),
 	}
@@ -2545,7 +2636,7 @@ func file_goisis_v1_goisis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_goisis_v1_goisis_proto_rawDesc), len(file_goisis_v1_goisis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   43,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

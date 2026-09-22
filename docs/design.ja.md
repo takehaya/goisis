@@ -274,7 +274,8 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
 | ループ上の同期送信/FIB | [シンクの契約](#シンクの契約)参照: ノンブロッキングは実装への契約であり、構造による強制ではありません。 |
 | 変更ごとの全再計算 | インクリメンタル SPF はなく、トポロジ変更のたびに `(レベル, アルゴリズム)` のトポロジを再構築します。MVP 規模のエリアには十分です。 |
 | RFC 7987 の lifetime 下限なし | 受信 LSP のエージングは広告された remaining lifetime にそのまま従います。 |
-| End.DT46 | `fib` API では宣言されていますが netlink FIB ではプログラムできません（vendored ライブラリに該当 seg6local アクションがないため）。End/End.DT4/End.DT6 は動きます。 |
+| End.DT46 | `fib` API では宣言されていますが netlink FIB ではプログラムできません（vendored ライブラリに該当 seg6local アクションがないため）。End/End.X/End.DT4/End.DT6 は動きます。 |
+| End.X SID は無保護 | End.X SID は (locator, 隣接) ごとに 1 つで、flags と weight は 0 で広報します。backup (B)・SID セット (S)・再起動をまたぐ永続化 (P) はいずれも扱わないため、再起動すると function 値は割り当て直しになります。B フラグの利用先である TI-LFA は対象外です。 |
 
 ## テスト戦略
 

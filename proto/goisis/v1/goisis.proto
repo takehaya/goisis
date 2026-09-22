@@ -129,6 +129,20 @@ message Locator {
   uint32 algorithm = 2;
   // end_sid is the local End SID instantiated at the locator's base address.
   string end_sid = 3;
+  // end_x_sids are the adjacency-scoped End.X SIDs allocated from this
+  // locator, one per Up adjacency (RFC 9352 section 8).
+  repeated EndXSid end_x_sids = 4;
+}
+
+// EndXSid is an SRv6 End.X SID: a locator SID bound to one adjacency.
+message EndXSid {
+  string sid = 1;
+  // neighbor is the System ID of the adjacency the SID forwards to.
+  string neighbor = 2;
+  // interface is the circuit that adjacency is on.
+  string interface = 3;
+  // algorithm is the locator's algorithm the SID is bound to.
+  uint32 algorithm = 4;
 }
 
 // FlexAlgoDefinition is the elected Flexible Algorithm Definition (RFC 9350).

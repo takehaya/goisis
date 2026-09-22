@@ -69,6 +69,10 @@ Router Capability TLV(242)に SRv6 Capabilities sub-TLV を載せます。TLV 27
 ピア向けに IPv6 到達性(TLV 236)へもミラーされます。`fib: true` のとき End SID は
 `seg6local` End ルートとして設置されます。
 
+各隣接には locator ごとに End.X SID も割り当てます。値は locator の function 空間の 1 番から取り、
+隣接の IS reachability エントリに載せます(RFC 9352 §8)。`fib: true` なら各 End.X SID は
+その隣接向けの `seg6local` End.X 経路になります。設定項目はありません。
+
 Flexible Algorithm に紐づく locator はここではなく `flex-algo` 配下の `locator` で
 設定します(下記)。`srv6.locators` はアルゴリズム 0 の locator です。
 

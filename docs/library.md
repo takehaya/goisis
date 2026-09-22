@@ -26,7 +26,7 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithCircuit(CircuitConfig)` | Add a circuit (see below). |
 | `WithAdvertisedPrefix(netip.Prefix, metric)` | Originate a prefix (TLV 135/236). |
 | `WithConnectedPrefix(netip.Prefix)` | Mark a prefix connected — never installed into the FIB. |
-| `WithSRv6Locator(netip.Prefix)` | Advertise an algorithm-0 SRv6 locator. |
+| `WithSRv6Locator(netip.Prefix)` | Advertise an algorithm-0 SRv6 locator (with an End SID, and an End.X SID per adjacency). |
 | `WithSRv6LocatorForAlgo(netip.Prefix, algo)` | Advertise a Flex-Algo locator. |
 | `WithFlexAlgo(FlexAlgoConfig)` | Participate in / advertise a Flexible Algorithm. |
 | `WithOverloadOnStartup(time.Duration)` | Set the OL bit for a window after startup. |
@@ -160,13 +160,15 @@ type FIB interface {
     Update(prefix netip.Prefix, nexthops []Nexthop) error
     Withdraw(prefix netip.Prefix) error
     Sweep(keep func(netip.Prefix) bool) error // drop stale routes at startup
-    AddLocalSID(sid LocalSID) error            // SRv6 End SID
+    AddLocalSID(sid LocalSID) error            // SRv6 End / End.X SID
     RemoveLocalSID(sid netip.Addr) error
 }
 ```
 
-The bundled `fib.Netlink` programs Linux `proto isis` routes and `seg6local`
-End SIDs. `fib.Noop` discards everything (pair it with `Subscribe` to consume
+`LocalSID.Behavior` says which endpoint behavior to instantiate; `Nexthop` and
+`Interface` carry the adjacency an End.X SID forwards to. The bundled
+`fib.Netlink` programs Linux `proto isis` routes and `seg6local` End and End.X
+SIDs. `fib.Noop` discards everything (pair it with `Subscribe` to consume
 routes yourself — see [`examples/watchroutes`](../examples/watchroutes)).
 
 ## Custom metrics
