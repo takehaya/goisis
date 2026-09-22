@@ -198,7 +198,7 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 		s.logger.Error("re-originate own LSP", "lsp", id, "error", err)
 		return
 	}
-	db.entries[id] = &lspEntry{lsp: &lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
+	db.entries[id] = &lspEntry{lsp: &lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true, refreshAt: refreshDeadline(now)}
 	s.logger.Info("re-originate LSP", "level", level, "lsp", id, "seq", lsp.SequenceNumber)
 	s.markDirty()
 	s.floodLSP(level, id, nil, now)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand/v2"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -70,7 +71,7 @@ func (s *IsisServer) ageLSPs(now time.Time) {
 					delete(db.entries, id)
 					s.markDirty()
 				}
-			case e.own && now.Sub(e.inserted) >= refreshSeconds*time.Second:
+			case e.own && !now.Before(e.refreshAt):
 				// handled by refreshOwnLSPs to keep aging side-effect-free
 			case e.remaining(now) == 0:
 				if e.own {
@@ -105,12 +106,20 @@ func (s *IsisServer) expirePurge(level packet.Level, id packet.LSPID, e *lspEntr
 	s.floodLSP(level, id, nil, now)
 }
 
-// refreshOwnLSPs re-originates own LSPs that are within the refresh window so
+// refreshDeadline returns when an own LSP originated at now must be
+// re-originated: maximumLSPGenerationInterval less a jitter of up to 25 % (ISO
+// 10589 10.1). Without the jitter, nodes that booted together refresh — and
+// flood — in lockstep for as long as they run.
+func refreshDeadline(now time.Time) time.Time {
+	return now.Add(refreshSeconds*time.Second - rand.N(refreshSeconds/4*time.Second))
+}
+
+// refreshOwnLSPs re-originates own LSPs that reached their refresh deadline so
 // their lifetime never reaches zero.
 func (s *IsisServer) refreshOwnLSPs(now time.Time) {
 	for _, db := range s.dbs {
 		for _, e := range db.entries {
-			if e.own && e.purgedAt.IsZero() && now.Sub(e.inserted) >= refreshSeconds*time.Second {
+			if e.own && e.purgedAt.IsZero() && !now.Before(e.refreshAt) {
 				s.regenerateLSPs(true, now)
 				return
 			}

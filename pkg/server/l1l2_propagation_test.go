@@ -114,6 +114,7 @@ func TestL1L2NodeAdvertisesL1PrefixesInL2LSP(t *testing.T) {
 	)
 	s.regenerateLSPs(false, now) // our own L1 LSP, listing B across the p2p circuit
 	s.updateRIB(now)
+	s.drainLSPGen(now) // the export change is re-originated at the next drain
 
 	got := l2OwnReach(t, s)
 	for _, p := range []string{"10.1.0.0/24", "2001:db8:1::/64"} {
@@ -131,6 +132,9 @@ func TestL1L2NodeAdvertisesL1PrefixesInL2LSP(t *testing.T) {
 	// must find the same export set and leave the LSP alone.
 	seq := l2OwnSeq(t, s)
 	s.updateRIB(now)
+	// Past the minimum generation interval, so the throttle is not what keeps
+	// the LSP still.
+	s.drainLSPGen(now.Add(minLSPGenInterval))
 	if got := l2OwnSeq(t, s); got != seq {
 		t.Errorf("own L2 LSP re-originated on an unchanged export set (seq %d -> %d)", seq, got)
 	}
@@ -146,6 +150,7 @@ func TestL1ExportIsWithdrawnWhenTheL1RouteDisappears(t *testing.T) {
 	})
 	s.regenerateLSPs(false, now)
 	s.updateRIB(now)
+	s.drainLSPGen(now)
 	if _, ok := l2OwnReach(t, s)[p]; !ok {
 		t.Fatalf("%s was not exported to Level 2 in the first place", p)
 	}
@@ -153,6 +158,7 @@ func TestL1ExportIsWithdrawnWhenTheL1RouteDisappears(t *testing.T) {
 
 	delete(s.dbs[packet.Level1].entries, lspID(l1l2PeerB, 0))
 	s.updateRIB(now)
+	s.drainLSPGen(now.Add(minLSPGenInterval))
 
 	if m, ok := l2OwnReach(t, s)[p]; ok {
 		t.Errorf("%s still advertised at metric %v after its Level-1 route went away", p, m)
@@ -191,6 +197,7 @@ func TestDefaultRouteIsNotExportedToL2(t *testing.T) {
 	}})
 	s.regenerateLSPs(false, now)
 	s.updateRIB(now)
+	s.drainLSPGen(now)
 
 	got := l2OwnReach(t, s)
 	if m, ok := got[defaultV4]; ok {

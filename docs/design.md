@@ -115,9 +115,10 @@ the Serve goroutine, you do not touch `IsisServer` fields.**
   that loop iteration; changes arriving during the following 200 ms hold
   coalesce into one more recompute when the hold expires (a two-state
   RFC 8405 back-off without its LONG_WAIT stage).
-- **Housekeeping (1s tick).** Hellos, adjacency expiry, LSP aging/refresh,
-  SRM/SSN retransmission, periodic CSNPs on circuits where we are DIS, local
-  SID re-assertion, and gauge emission.
+- **Housekeeping (1s tick).** Hellos, adjacency expiry, the drain of any
+  pending own-LSP regeneration, LSP aging/refresh, SRM/SSN retransmission,
+  periodic CSNPs on circuits where we are DIS, local SID re-assertion, and
+  gauge emission.
 
 ### Fan-out without back-pressure
 
@@ -205,6 +206,9 @@ Two invariants matter beyond the codec:
   LSPs and expired foreign ones.
 - **Origination.** Own LSPs are rebuilt from config + adjacency state and
   compared against the stored copy — unchanged content is not re-flooded.
+  Event-driven regenerations coalesce to at most one per second
+  (minimumLSPGenerationInterval), and the 900 s refresh is jittered up to
+  25 % early so nodes that booted together do not refresh in lockstep.
   TLV sets that exceed the LSP buffer — 1492 bytes, or less when the
   circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
   fragment 0 plus spill fragments 1..255; stale fragments are purged when the
