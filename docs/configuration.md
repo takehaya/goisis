@@ -136,21 +136,25 @@ exactly these as ambient capabilities.
 ## CLI
 
 The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
-`global`, `circuit`, `neighbor`, `database`, `route`, `locator`, `flex-algo`,
-and `monitor` (streams `WatchEvent`).
+`global`, `circuit`, `neighbor`, `database`, `route`, `prefix`, `overload`,
+`locator`, `flex-algo`, and `monitor` (streams `WatchEvent`).
 
 `--addr` also takes `unix:///absolute/path` to reach a daemon started with
 `goisisd -api-listen unix:///run/goisis/goisisd.sock`. The API is
 unauthenticated, so on a shared host a unix socket is the cheapest protection:
 the socket is created mode `0660` and its directory guards who may connect.
 
-`locator` and `flex-algo` also reconfigure the daemon at runtime:
+`prefix`, `overload`, `neighbor clear`, `locator` and `flex-algo` also
+reconfigure the daemon at runtime:
 
 ```console
 $ goisis flex-algo add 128 --priority 100 --advertise
 $ goisis locator add fc00:0:128::/48 --algo 128
 $ goisis locator delete fc00:0:128::/48
 $ goisis flex-algo delete 128
+$ goisis prefix add 10.9.9.0/24 --metric 10   # and: goisis prefix delete 10.9.9.0/24
+$ goisis overload on                          # maintenance; "off" clears it
+$ goisis neighbor clear --interface eth0      # add --system-id for one neighbor
 ```
 
 ## Metrics

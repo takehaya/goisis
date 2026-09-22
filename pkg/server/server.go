@@ -53,6 +53,7 @@ type IsisServer struct {
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
+	overloadManual    bool                      // OL bit set by hand (SetOverload), independent of the startup window
 	authKeys          map[packet.Level]authSpec // LSP/SNP authentication per level
 	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
@@ -315,7 +316,7 @@ func (s *IsisServer) removeLocalSIDs() {
 
 // overloaded reports whether the overload bit should be set in our own LSP.
 func (s *IsisServer) overloaded(now time.Time) bool {
-	return !s.overloadUntil.IsZero() && now.Before(s.overloadUntil)
+	return s.overloadManual || (!s.overloadUntil.IsZero() && now.Before(s.overloadUntil))
 }
 
 // purgeOwnLSPs floods a purge for every LSP this node originated, so neighbors
@@ -455,13 +456,16 @@ func (s *IsisServer) mgmtOperation(ctx context.Context, f func() error) error {
 type Global struct {
 	Version  string
 	SystemID packet.SystemID
+	// Overload is the effective overload bit: set by hand or by the startup
+	// window.
+	Overload bool
 }
 
 // GetGlobal returns a snapshot of instance-wide state.
 func (s *IsisServer) GetGlobal(ctx context.Context) (Global, error) {
 	var g Global
 	err := s.mgmtOperation(ctx, func() error {
-		g = Global{Version: version.Version, SystemID: s.systemID}
+		g = Global{Version: version.Version, SystemID: s.systemID, Overload: s.overloaded(time.Now())}
 		return nil
 	})
 	return g, err

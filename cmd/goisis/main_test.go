@@ -183,3 +183,25 @@ func TestNextHops(t *testing.T) {
 		}
 	}
 }
+
+func TestParseOnOff(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+		ok   bool
+	}{
+		{"on", true, true},
+		{"off", false, true},
+		{"true", false, false},
+		{"ON", false, false}, // case-sensitive by design
+		{"", false, false},
+	} {
+		got, err := parseOnOff(tc.in)
+		if (err == nil) != tc.ok {
+			t.Errorf("parseOnOff(%q) ok=%v, want %v (err=%v)", tc.in, err == nil, tc.ok, err)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("parseOnOff(%q) = %t, want %t", tc.in, got, tc.want)
+		}
+	}
+}

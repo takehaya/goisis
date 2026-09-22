@@ -61,6 +61,16 @@ const (
 	// IsisServiceDeleteFlexAlgoProcedure is the fully-qualified name of the IsisService's
 	// DeleteFlexAlgo RPC.
 	IsisServiceDeleteFlexAlgoProcedure = "/goisis.v1.IsisService/DeleteFlexAlgo"
+	// IsisServiceAddPrefixProcedure is the fully-qualified name of the IsisService's AddPrefix RPC.
+	IsisServiceAddPrefixProcedure = "/goisis.v1.IsisService/AddPrefix"
+	// IsisServiceDeletePrefixProcedure is the fully-qualified name of the IsisService's DeletePrefix
+	// RPC.
+	IsisServiceDeletePrefixProcedure = "/goisis.v1.IsisService/DeletePrefix"
+	// IsisServiceSetOverloadProcedure is the fully-qualified name of the IsisService's SetOverload RPC.
+	IsisServiceSetOverloadProcedure = "/goisis.v1.IsisService/SetOverload"
+	// IsisServiceClearAdjacencyProcedure is the fully-qualified name of the IsisService's
+	// ClearAdjacency RPC.
+	IsisServiceClearAdjacencyProcedure = "/goisis.v1.IsisService/ClearAdjacency"
 	// IsisServiceWatchEventProcedure is the fully-qualified name of the IsisService's WatchEvent RPC.
 	IsisServiceWatchEventProcedure = "/goisis.v1.IsisService/WatchEvent"
 )
@@ -90,6 +100,14 @@ type IsisServiceClient interface {
 	AddFlexAlgo(context.Context, *connect.Request[v1.AddFlexAlgoRequest]) (*connect.Response[v1.AddFlexAlgoResponse], error)
 	// DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
 	DeleteFlexAlgo(context.Context, *connect.Request[v1.DeleteFlexAlgoRequest]) (*connect.Response[v1.DeleteFlexAlgoResponse], error)
+	// AddPrefix originates a new prefix in this node's LSP.
+	AddPrefix(context.Context, *connect.Request[v1.AddPrefixRequest]) (*connect.Response[v1.AddPrefixResponse], error)
+	// DeletePrefix withdraws a prefix this node originates.
+	DeletePrefix(context.Context, *connect.Request[v1.DeletePrefixRequest]) (*connect.Response[v1.DeletePrefixResponse], error)
+	// SetOverload sets or clears the overload bit by hand (maintenance).
+	SetOverload(context.Context, *connect.Request[v1.SetOverloadRequest]) (*connect.Response[v1.SetOverloadResponse], error)
+	// ClearAdjacency tears down adjacencies on a circuit so hellos re-form them.
+	ClearAdjacency(context.Context, *connect.Request[v1.ClearAdjacencyRequest]) (*connect.Response[v1.ClearAdjacencyResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1.WatchEventRequest]) (*connect.ServerStreamForClient[v1.WatchEventResponse], error)
 }
@@ -171,6 +189,30 @@ func NewIsisServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(isisServiceMethods.ByName("DeleteFlexAlgo")),
 			connect.WithClientOptions(opts...),
 		),
+		addPrefix: connect.NewClient[v1.AddPrefixRequest, v1.AddPrefixResponse](
+			httpClient,
+			baseURL+IsisServiceAddPrefixProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("AddPrefix")),
+			connect.WithClientOptions(opts...),
+		),
+		deletePrefix: connect.NewClient[v1.DeletePrefixRequest, v1.DeletePrefixResponse](
+			httpClient,
+			baseURL+IsisServiceDeletePrefixProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("DeletePrefix")),
+			connect.WithClientOptions(opts...),
+		),
+		setOverload: connect.NewClient[v1.SetOverloadRequest, v1.SetOverloadResponse](
+			httpClient,
+			baseURL+IsisServiceSetOverloadProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("SetOverload")),
+			connect.WithClientOptions(opts...),
+		),
+		clearAdjacency: connect.NewClient[v1.ClearAdjacencyRequest, v1.ClearAdjacencyResponse](
+			httpClient,
+			baseURL+IsisServiceClearAdjacencyProcedure,
+			connect.WithSchema(isisServiceMethods.ByName("ClearAdjacency")),
+			connect.WithClientOptions(opts...),
+		),
 		watchEvent: connect.NewClient[v1.WatchEventRequest, v1.WatchEventResponse](
 			httpClient,
 			baseURL+IsisServiceWatchEventProcedure,
@@ -193,6 +235,10 @@ type isisServiceClient struct {
 	deleteLocator   *connect.Client[v1.DeleteLocatorRequest, v1.DeleteLocatorResponse]
 	addFlexAlgo     *connect.Client[v1.AddFlexAlgoRequest, v1.AddFlexAlgoResponse]
 	deleteFlexAlgo  *connect.Client[v1.DeleteFlexAlgoRequest, v1.DeleteFlexAlgoResponse]
+	addPrefix       *connect.Client[v1.AddPrefixRequest, v1.AddPrefixResponse]
+	deletePrefix    *connect.Client[v1.DeletePrefixRequest, v1.DeletePrefixResponse]
+	setOverload     *connect.Client[v1.SetOverloadRequest, v1.SetOverloadResponse]
+	clearAdjacency  *connect.Client[v1.ClearAdjacencyRequest, v1.ClearAdjacencyResponse]
 	watchEvent      *connect.Client[v1.WatchEventRequest, v1.WatchEventResponse]
 }
 
@@ -251,6 +297,26 @@ func (c *isisServiceClient) DeleteFlexAlgo(ctx context.Context, req *connect.Req
 	return c.deleteFlexAlgo.CallUnary(ctx, req)
 }
 
+// AddPrefix calls goisis.v1.IsisService.AddPrefix.
+func (c *isisServiceClient) AddPrefix(ctx context.Context, req *connect.Request[v1.AddPrefixRequest]) (*connect.Response[v1.AddPrefixResponse], error) {
+	return c.addPrefix.CallUnary(ctx, req)
+}
+
+// DeletePrefix calls goisis.v1.IsisService.DeletePrefix.
+func (c *isisServiceClient) DeletePrefix(ctx context.Context, req *connect.Request[v1.DeletePrefixRequest]) (*connect.Response[v1.DeletePrefixResponse], error) {
+	return c.deletePrefix.CallUnary(ctx, req)
+}
+
+// SetOverload calls goisis.v1.IsisService.SetOverload.
+func (c *isisServiceClient) SetOverload(ctx context.Context, req *connect.Request[v1.SetOverloadRequest]) (*connect.Response[v1.SetOverloadResponse], error) {
+	return c.setOverload.CallUnary(ctx, req)
+}
+
+// ClearAdjacency calls goisis.v1.IsisService.ClearAdjacency.
+func (c *isisServiceClient) ClearAdjacency(ctx context.Context, req *connect.Request[v1.ClearAdjacencyRequest]) (*connect.Response[v1.ClearAdjacencyResponse], error) {
+	return c.clearAdjacency.CallUnary(ctx, req)
+}
+
 // WatchEvent calls goisis.v1.IsisService.WatchEvent.
 func (c *isisServiceClient) WatchEvent(ctx context.Context, req *connect.Request[v1.WatchEventRequest]) (*connect.ServerStreamForClient[v1.WatchEventResponse], error) {
 	return c.watchEvent.CallServerStream(ctx, req)
@@ -281,6 +347,14 @@ type IsisServiceHandler interface {
 	AddFlexAlgo(context.Context, *connect.Request[v1.AddFlexAlgoRequest]) (*connect.Response[v1.AddFlexAlgoResponse], error)
 	// DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
 	DeleteFlexAlgo(context.Context, *connect.Request[v1.DeleteFlexAlgoRequest]) (*connect.Response[v1.DeleteFlexAlgoResponse], error)
+	// AddPrefix originates a new prefix in this node's LSP.
+	AddPrefix(context.Context, *connect.Request[v1.AddPrefixRequest]) (*connect.Response[v1.AddPrefixResponse], error)
+	// DeletePrefix withdraws a prefix this node originates.
+	DeletePrefix(context.Context, *connect.Request[v1.DeletePrefixRequest]) (*connect.Response[v1.DeletePrefixResponse], error)
+	// SetOverload sets or clears the overload bit by hand (maintenance).
+	SetOverload(context.Context, *connect.Request[v1.SetOverloadRequest]) (*connect.Response[v1.SetOverloadResponse], error)
+	// ClearAdjacency tears down adjacencies on a circuit so hellos re-form them.
+	ClearAdjacency(context.Context, *connect.Request[v1.ClearAdjacencyRequest]) (*connect.Response[v1.ClearAdjacencyResponse], error)
 	// WatchEvent streams adjacency and route changes as they happen.
 	WatchEvent(context.Context, *connect.Request[v1.WatchEventRequest], *connect.ServerStream[v1.WatchEventResponse]) error
 }
@@ -358,6 +432,30 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(isisServiceMethods.ByName("DeleteFlexAlgo")),
 		connect.WithHandlerOptions(opts...),
 	)
+	isisServiceAddPrefixHandler := connect.NewUnaryHandler(
+		IsisServiceAddPrefixProcedure,
+		svc.AddPrefix,
+		connect.WithSchema(isisServiceMethods.ByName("AddPrefix")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceDeletePrefixHandler := connect.NewUnaryHandler(
+		IsisServiceDeletePrefixProcedure,
+		svc.DeletePrefix,
+		connect.WithSchema(isisServiceMethods.ByName("DeletePrefix")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceSetOverloadHandler := connect.NewUnaryHandler(
+		IsisServiceSetOverloadProcedure,
+		svc.SetOverload,
+		connect.WithSchema(isisServiceMethods.ByName("SetOverload")),
+		connect.WithHandlerOptions(opts...),
+	)
+	isisServiceClearAdjacencyHandler := connect.NewUnaryHandler(
+		IsisServiceClearAdjacencyProcedure,
+		svc.ClearAdjacency,
+		connect.WithSchema(isisServiceMethods.ByName("ClearAdjacency")),
+		connect.WithHandlerOptions(opts...),
+	)
 	isisServiceWatchEventHandler := connect.NewServerStreamHandler(
 		IsisServiceWatchEventProcedure,
 		svc.WatchEvent,
@@ -388,6 +486,14 @@ func NewIsisServiceHandler(svc IsisServiceHandler, opts ...connect.HandlerOption
 			isisServiceAddFlexAlgoHandler.ServeHTTP(w, r)
 		case IsisServiceDeleteFlexAlgoProcedure:
 			isisServiceDeleteFlexAlgoHandler.ServeHTTP(w, r)
+		case IsisServiceAddPrefixProcedure:
+			isisServiceAddPrefixHandler.ServeHTTP(w, r)
+		case IsisServiceDeletePrefixProcedure:
+			isisServiceDeletePrefixHandler.ServeHTTP(w, r)
+		case IsisServiceSetOverloadProcedure:
+			isisServiceSetOverloadHandler.ServeHTTP(w, r)
+		case IsisServiceClearAdjacencyProcedure:
+			isisServiceClearAdjacencyHandler.ServeHTTP(w, r)
 		case IsisServiceWatchEventProcedure:
 			isisServiceWatchEventHandler.ServeHTTP(w, r)
 		default:
@@ -441,6 +547,22 @@ func (UnimplementedIsisServiceHandler) AddFlexAlgo(context.Context, *connect.Req
 
 func (UnimplementedIsisServiceHandler) DeleteFlexAlgo(context.Context, *connect.Request[v1.DeleteFlexAlgoRequest]) (*connect.Response[v1.DeleteFlexAlgoResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1.IsisService.DeleteFlexAlgo is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) AddPrefix(context.Context, *connect.Request[v1.AddPrefixRequest]) (*connect.Response[v1.AddPrefixResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1.IsisService.AddPrefix is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) DeletePrefix(context.Context, *connect.Request[v1.DeletePrefixRequest]) (*connect.Response[v1.DeletePrefixResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1.IsisService.DeletePrefix is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) SetOverload(context.Context, *connect.Request[v1.SetOverloadRequest]) (*connect.Response[v1.SetOverloadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1.IsisService.SetOverload is not implemented"))
+}
+
+func (UnimplementedIsisServiceHandler) ClearAdjacency(context.Context, *connect.Request[v1.ClearAdjacencyRequest]) (*connect.Response[v1.ClearAdjacencyResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("goisis.v1.IsisService.ClearAdjacency is not implemented"))
 }
 
 func (UnimplementedIsisServiceHandler) WatchEvent(context.Context, *connect.Request[v1.WatchEventRequest], *connect.ServerStream[v1.WatchEventResponse]) error {
