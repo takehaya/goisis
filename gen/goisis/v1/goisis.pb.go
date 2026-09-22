@@ -157,7 +157,10 @@ type Global struct {
 	// version is the goisisd build version.
 	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	// system_id is the IS-IS system identifier, dotted (e.g. 0000.0000.0001).
-	SystemId      string `protobuf:"bytes,2,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
+	SystemId string `protobuf:"bytes,2,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
+	// overload is the effective overload bit: set by hand or by the startup
+	// window.
+	Overload      bool `protobuf:"varint,3,opt,name=overload,proto3" json:"overload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -204,6 +207,13 @@ func (x *Global) GetSystemId() string {
 		return x.SystemId
 	}
 	return ""
+}
+
+func (x *Global) GetOverload() bool {
+	if x != nil {
+		return x.Overload
+	}
+	return false
 }
 
 // Circuit is one configured IS-IS circuit.
@@ -1647,6 +1657,349 @@ func (*DeleteFlexAlgoResponse) Descriptor() ([]byte, []int) {
 	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{30}
 }
 
+type AddPrefixRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// prefix is the prefix to originate (IPv4 or IPv6).
+	Prefix string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	// metric is the wide metric advertised with the prefix.
+	Metric        uint32 `protobuf:"varint,2,opt,name=metric,proto3" json:"metric,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddPrefixRequest) Reset() {
+	*x = AddPrefixRequest{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddPrefixRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddPrefixRequest) ProtoMessage() {}
+
+func (x *AddPrefixRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddPrefixRequest.ProtoReflect.Descriptor instead.
+func (*AddPrefixRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *AddPrefixRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *AddPrefixRequest) GetMetric() uint32 {
+	if x != nil {
+		return x.Metric
+	}
+	return 0
+}
+
+type AddPrefixResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddPrefixResponse) Reset() {
+	*x = AddPrefixResponse{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddPrefixResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddPrefixResponse) ProtoMessage() {}
+
+func (x *AddPrefixResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddPrefixResponse.ProtoReflect.Descriptor instead.
+func (*AddPrefixResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{32}
+}
+
+type DeletePrefixRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// prefix identifies the originated prefix to withdraw (matched masked).
+	Prefix        string `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeletePrefixRequest) Reset() {
+	*x = DeletePrefixRequest{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeletePrefixRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePrefixRequest) ProtoMessage() {}
+
+func (x *DeletePrefixRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePrefixRequest.ProtoReflect.Descriptor instead.
+func (*DeletePrefixRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *DeletePrefixRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+type DeletePrefixResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeletePrefixResponse) Reset() {
+	*x = DeletePrefixResponse{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeletePrefixResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeletePrefixResponse) ProtoMessage() {}
+
+func (x *DeletePrefixResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeletePrefixResponse.ProtoReflect.Descriptor instead.
+func (*DeletePrefixResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{34}
+}
+
+type SetOverloadRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// overload sets (true) or clears (false) the manual overload bit.
+	Overload      bool `protobuf:"varint,1,opt,name=overload,proto3" json:"overload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetOverloadRequest) Reset() {
+	*x = SetOverloadRequest{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetOverloadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetOverloadRequest) ProtoMessage() {}
+
+func (x *SetOverloadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetOverloadRequest.ProtoReflect.Descriptor instead.
+func (*SetOverloadRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *SetOverloadRequest) GetOverload() bool {
+	if x != nil {
+		return x.Overload
+	}
+	return false
+}
+
+type SetOverloadResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetOverloadResponse) Reset() {
+	*x = SetOverloadResponse{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetOverloadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetOverloadResponse) ProtoMessage() {}
+
+func (x *SetOverloadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetOverloadResponse.ProtoReflect.Descriptor instead.
+func (*SetOverloadResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{36}
+}
+
+type ClearAdjacencyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// interface is the circuit whose adjacencies to tear down.
+	Interface string `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	// system_id restricts the teardown to one neighbor, dotted
+	// (e.g. 0000.0000.0001); empty clears every adjacency on the circuit.
+	SystemId      string `protobuf:"bytes,2,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearAdjacencyRequest) Reset() {
+	*x = ClearAdjacencyRequest{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearAdjacencyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearAdjacencyRequest) ProtoMessage() {}
+
+func (x *ClearAdjacencyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearAdjacencyRequest.ProtoReflect.Descriptor instead.
+func (*ClearAdjacencyRequest) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ClearAdjacencyRequest) GetInterface() string {
+	if x != nil {
+		return x.Interface
+	}
+	return ""
+}
+
+func (x *ClearAdjacencyRequest) GetSystemId() string {
+	if x != nil {
+		return x.SystemId
+	}
+	return ""
+}
+
+type ClearAdjacencyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearAdjacencyResponse) Reset() {
+	*x = ClearAdjacencyResponse{}
+	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearAdjacencyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearAdjacencyResponse) ProtoMessage() {}
+
+func (x *ClearAdjacencyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_goisis_v1_goisis_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearAdjacencyResponse.ProtoReflect.Descriptor instead.
+func (*ClearAdjacencyResponse) Descriptor() ([]byte, []int) {
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{38}
+}
+
 type WatchEventRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1655,7 +2008,7 @@ type WatchEventRequest struct {
 
 func (x *WatchEventRequest) Reset() {
 	*x = WatchEventRequest{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1667,7 +2020,7 @@ func (x *WatchEventRequest) String() string {
 func (*WatchEventRequest) ProtoMessage() {}
 
 func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[31]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1680,7 +2033,7 @@ func (x *WatchEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventRequest.ProtoReflect.Descriptor instead.
 func (*WatchEventRequest) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{31}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{39}
 }
 
 type WatchEventResponse struct {
@@ -1696,7 +2049,7 @@ type WatchEventResponse struct {
 
 func (x *WatchEventResponse) Reset() {
 	*x = WatchEventResponse{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1708,7 +2061,7 @@ func (x *WatchEventResponse) String() string {
 func (*WatchEventResponse) ProtoMessage() {}
 
 func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[32]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1721,7 +2074,7 @@ func (x *WatchEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchEventResponse.ProtoReflect.Descriptor instead.
 func (*WatchEventResponse) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{32}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *WatchEventResponse) GetEvent() isWatchEventResponse_Event {
@@ -1775,7 +2128,7 @@ type AdjacencyEvent struct {
 
 func (x *AdjacencyEvent) Reset() {
 	*x = AdjacencyEvent{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1787,7 +2140,7 @@ func (x *AdjacencyEvent) String() string {
 func (*AdjacencyEvent) ProtoMessage() {}
 
 func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[33]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1800,7 +2153,7 @@ func (x *AdjacencyEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdjacencyEvent.ProtoReflect.Descriptor instead.
 func (*AdjacencyEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{33}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *AdjacencyEvent) GetAdjacency() *Adjacency {
@@ -1822,7 +2175,7 @@ type RouteEvent struct {
 
 func (x *RouteEvent) Reset() {
 	*x = RouteEvent{}
-	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1834,7 +2187,7 @@ func (x *RouteEvent) String() string {
 func (*RouteEvent) ProtoMessage() {}
 
 func (x *RouteEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_goisis_v1_goisis_proto_msgTypes[34]
+	mi := &file_goisis_v1_goisis_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1847,7 +2200,7 @@ func (x *RouteEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteEvent.ProtoReflect.Descriptor instead.
 func (*RouteEvent) Descriptor() ([]byte, []int) {
-	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{34}
+	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RouteEvent) GetRoute() *Route {
@@ -1871,10 +2224,11 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x16goisis/v1/goisis.proto\x12\tgoisis.v1\"\x10\n" +
 	"\x0eGetIsisRequest\"<\n" +
 	"\x0fGetIsisResponse\x12)\n" +
-	"\x06global\x18\x01 \x01(\v2\x11.goisis.v1.GlobalR\x06global\"?\n" +
+	"\x06global\x18\x01 \x01(\v2\x11.goisis.v1.GlobalR\x06global\"[\n" +
 	"\x06Global\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x1b\n" +
-	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\"\xb1\x01\n" +
+	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\x12\x1a\n" +
+	"\boverload\x18\x03 \x01(\bR\boverload\"\xb1\x01\n" +
 	"\aCircuit\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12$\n" +
 	"\x0epoint_to_point\x18\x02 \x01(\bR\fpointToPoint\x12\x16\n" +
@@ -1960,7 +2314,21 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x13AddFlexAlgoResponse\"5\n" +
 	"\x15DeleteFlexAlgoRequest\x12\x1c\n" +
 	"\talgorithm\x18\x01 \x01(\rR\talgorithm\"\x18\n" +
-	"\x16DeleteFlexAlgoResponse\"\x13\n" +
+	"\x16DeleteFlexAlgoResponse\"B\n" +
+	"\x10AddPrefixRequest\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x16\n" +
+	"\x06metric\x18\x02 \x01(\rR\x06metric\"\x13\n" +
+	"\x11AddPrefixResponse\"-\n" +
+	"\x13DeletePrefixRequest\x12\x16\n" +
+	"\x06prefix\x18\x01 \x01(\tR\x06prefix\"\x16\n" +
+	"\x14DeletePrefixResponse\"0\n" +
+	"\x12SetOverloadRequest\x12\x1a\n" +
+	"\boverload\x18\x01 \x01(\bR\boverload\"\x15\n" +
+	"\x13SetOverloadResponse\"R\n" +
+	"\x15ClearAdjacencyRequest\x12\x1c\n" +
+	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x1b\n" +
+	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\"\x18\n" +
+	"\x16ClearAdjacencyResponse\"\x13\n" +
 	"\x11WatchEventRequest\"\x87\x01\n" +
 	"\x12WatchEventResponse\x129\n" +
 	"\tadjacency\x18\x01 \x01(\v2\x19.goisis.v1.AdjacencyEventH\x00R\tadjacency\x12-\n" +
@@ -1975,7 +2343,7 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x05Level\x12\x15\n" +
 	"\x11LEVEL_UNSPECIFIED\x10\x00\x12\v\n" +
 	"\aLEVEL_1\x10\x01\x12\v\n" +
-	"\aLEVEL_2\x10\x022\xbd\a\n" +
+	"\aLEVEL_2\x10\x022\xfb\t\n" +
 	"\vIsisService\x12@\n" +
 	"\aGetIsis\x12\x19.goisis.v1.GetIsisRequest\x1a\x1a.goisis.v1.GetIsisResponse\x12O\n" +
 	"\fListCircuits\x12\x1e.goisis.v1.ListCircuitsRequest\x1a\x1f.goisis.v1.ListCircuitsResponse\x12X\n" +
@@ -1989,7 +2357,11 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"AddLocator\x12\x1c.goisis.v1.AddLocatorRequest\x1a\x1d.goisis.v1.AddLocatorResponse\x12R\n" +
 	"\rDeleteLocator\x12\x1f.goisis.v1.DeleteLocatorRequest\x1a .goisis.v1.DeleteLocatorResponse\x12L\n" +
 	"\vAddFlexAlgo\x12\x1d.goisis.v1.AddFlexAlgoRequest\x1a\x1e.goisis.v1.AddFlexAlgoResponse\x12U\n" +
-	"\x0eDeleteFlexAlgo\x12 .goisis.v1.DeleteFlexAlgoRequest\x1a!.goisis.v1.DeleteFlexAlgoResponse\x12K\n" +
+	"\x0eDeleteFlexAlgo\x12 .goisis.v1.DeleteFlexAlgoRequest\x1a!.goisis.v1.DeleteFlexAlgoResponse\x12F\n" +
+	"\tAddPrefix\x12\x1b.goisis.v1.AddPrefixRequest\x1a\x1c.goisis.v1.AddPrefixResponse\x12O\n" +
+	"\fDeletePrefix\x12\x1e.goisis.v1.DeletePrefixRequest\x1a\x1f.goisis.v1.DeletePrefixResponse\x12L\n" +
+	"\vSetOverload\x12\x1d.goisis.v1.SetOverloadRequest\x1a\x1e.goisis.v1.SetOverloadResponse\x12U\n" +
+	"\x0eClearAdjacency\x12 .goisis.v1.ClearAdjacencyRequest\x1a!.goisis.v1.ClearAdjacencyResponse\x12K\n" +
 	"\n" +
 	"WatchEvent\x12\x1c.goisis.v1.WatchEventRequest\x1a\x1d.goisis.v1.WatchEventResponse0\x01B\x94\x01\n" +
 	"\rcom.goisis.v1B\vGoisisProtoP\x01Z1github.com/takehaya/goisis/gen/goisis/v1;goisisv1\xa2\x02\x03GXX\xaa\x02\tGoisis.V1\xca\x02\tGoisis\\V1\xe2\x02\x15Goisis\\V1\\GPBMetadata\xea\x02\n" +
@@ -2008,7 +2380,7 @@ func file_goisis_v1_goisis_proto_rawDescGZIP() []byte {
 }
 
 var file_goisis_v1_goisis_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_goisis_v1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_goisis_v1_goisis_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_goisis_v1_goisis_proto_goTypes = []any{
 	(Level)(0),                      // 0: goisis.v1.Level
 	(*GetIsisRequest)(nil),          // 1: goisis.v1.GetIsisRequest
@@ -2042,10 +2414,18 @@ var file_goisis_v1_goisis_proto_goTypes = []any{
 	(*AddFlexAlgoResponse)(nil),     // 29: goisis.v1.AddFlexAlgoResponse
 	(*DeleteFlexAlgoRequest)(nil),   // 30: goisis.v1.DeleteFlexAlgoRequest
 	(*DeleteFlexAlgoResponse)(nil),  // 31: goisis.v1.DeleteFlexAlgoResponse
-	(*WatchEventRequest)(nil),       // 32: goisis.v1.WatchEventRequest
-	(*WatchEventResponse)(nil),      // 33: goisis.v1.WatchEventResponse
-	(*AdjacencyEvent)(nil),          // 34: goisis.v1.AdjacencyEvent
-	(*RouteEvent)(nil),              // 35: goisis.v1.RouteEvent
+	(*AddPrefixRequest)(nil),        // 32: goisis.v1.AddPrefixRequest
+	(*AddPrefixResponse)(nil),       // 33: goisis.v1.AddPrefixResponse
+	(*DeletePrefixRequest)(nil),     // 34: goisis.v1.DeletePrefixRequest
+	(*DeletePrefixResponse)(nil),    // 35: goisis.v1.DeletePrefixResponse
+	(*SetOverloadRequest)(nil),      // 36: goisis.v1.SetOverloadRequest
+	(*SetOverloadResponse)(nil),     // 37: goisis.v1.SetOverloadResponse
+	(*ClearAdjacencyRequest)(nil),   // 38: goisis.v1.ClearAdjacencyRequest
+	(*ClearAdjacencyResponse)(nil),  // 39: goisis.v1.ClearAdjacencyResponse
+	(*WatchEventRequest)(nil),       // 40: goisis.v1.WatchEventRequest
+	(*WatchEventResponse)(nil),      // 41: goisis.v1.WatchEventResponse
+	(*AdjacencyEvent)(nil),          // 42: goisis.v1.AdjacencyEvent
+	(*RouteEvent)(nil),              // 43: goisis.v1.RouteEvent
 }
 var file_goisis_v1_goisis_proto_depIdxs = []int32{
 	3,  // 0: goisis.v1.GetIsisResponse.global:type_name -> goisis.v1.Global
@@ -2061,8 +2441,8 @@ var file_goisis_v1_goisis_proto_depIdxs = []int32{
 	8,  // 10: goisis.v1.ListRoutesResponse.routes:type_name -> goisis.v1.Route
 	9,  // 11: goisis.v1.ListLocatorsResponse.locators:type_name -> goisis.v1.Locator
 	11, // 12: goisis.v1.ListFlexAlgosResponse.flex_algos:type_name -> goisis.v1.FlexAlgo
-	34, // 13: goisis.v1.WatchEventResponse.adjacency:type_name -> goisis.v1.AdjacencyEvent
-	35, // 14: goisis.v1.WatchEventResponse.route:type_name -> goisis.v1.RouteEvent
+	42, // 13: goisis.v1.WatchEventResponse.adjacency:type_name -> goisis.v1.AdjacencyEvent
+	43, // 14: goisis.v1.WatchEventResponse.route:type_name -> goisis.v1.RouteEvent
 	5,  // 15: goisis.v1.AdjacencyEvent.adjacency:type_name -> goisis.v1.Adjacency
 	8,  // 16: goisis.v1.RouteEvent.route:type_name -> goisis.v1.Route
 	1,  // 17: goisis.v1.IsisService.GetIsis:input_type -> goisis.v1.GetIsisRequest
@@ -2076,21 +2456,29 @@ var file_goisis_v1_goisis_proto_depIdxs = []int32{
 	26, // 25: goisis.v1.IsisService.DeleteLocator:input_type -> goisis.v1.DeleteLocatorRequest
 	28, // 26: goisis.v1.IsisService.AddFlexAlgo:input_type -> goisis.v1.AddFlexAlgoRequest
 	30, // 27: goisis.v1.IsisService.DeleteFlexAlgo:input_type -> goisis.v1.DeleteFlexAlgoRequest
-	32, // 28: goisis.v1.IsisService.WatchEvent:input_type -> goisis.v1.WatchEventRequest
-	2,  // 29: goisis.v1.IsisService.GetIsis:output_type -> goisis.v1.GetIsisResponse
-	13, // 30: goisis.v1.IsisService.ListCircuits:output_type -> goisis.v1.ListCircuitsResponse
-	15, // 31: goisis.v1.IsisService.ListAdjacencies:output_type -> goisis.v1.ListAdjacenciesResponse
-	17, // 32: goisis.v1.IsisService.GetLsdb:output_type -> goisis.v1.GetLsdbResponse
-	19, // 33: goisis.v1.IsisService.ListRoutes:output_type -> goisis.v1.ListRoutesResponse
-	21, // 34: goisis.v1.IsisService.ListLocators:output_type -> goisis.v1.ListLocatorsResponse
-	23, // 35: goisis.v1.IsisService.ListFlexAlgos:output_type -> goisis.v1.ListFlexAlgosResponse
-	25, // 36: goisis.v1.IsisService.AddLocator:output_type -> goisis.v1.AddLocatorResponse
-	27, // 37: goisis.v1.IsisService.DeleteLocator:output_type -> goisis.v1.DeleteLocatorResponse
-	29, // 38: goisis.v1.IsisService.AddFlexAlgo:output_type -> goisis.v1.AddFlexAlgoResponse
-	31, // 39: goisis.v1.IsisService.DeleteFlexAlgo:output_type -> goisis.v1.DeleteFlexAlgoResponse
-	33, // 40: goisis.v1.IsisService.WatchEvent:output_type -> goisis.v1.WatchEventResponse
-	29, // [29:41] is the sub-list for method output_type
-	17, // [17:29] is the sub-list for method input_type
+	32, // 28: goisis.v1.IsisService.AddPrefix:input_type -> goisis.v1.AddPrefixRequest
+	34, // 29: goisis.v1.IsisService.DeletePrefix:input_type -> goisis.v1.DeletePrefixRequest
+	36, // 30: goisis.v1.IsisService.SetOverload:input_type -> goisis.v1.SetOverloadRequest
+	38, // 31: goisis.v1.IsisService.ClearAdjacency:input_type -> goisis.v1.ClearAdjacencyRequest
+	40, // 32: goisis.v1.IsisService.WatchEvent:input_type -> goisis.v1.WatchEventRequest
+	2,  // 33: goisis.v1.IsisService.GetIsis:output_type -> goisis.v1.GetIsisResponse
+	13, // 34: goisis.v1.IsisService.ListCircuits:output_type -> goisis.v1.ListCircuitsResponse
+	15, // 35: goisis.v1.IsisService.ListAdjacencies:output_type -> goisis.v1.ListAdjacenciesResponse
+	17, // 36: goisis.v1.IsisService.GetLsdb:output_type -> goisis.v1.GetLsdbResponse
+	19, // 37: goisis.v1.IsisService.ListRoutes:output_type -> goisis.v1.ListRoutesResponse
+	21, // 38: goisis.v1.IsisService.ListLocators:output_type -> goisis.v1.ListLocatorsResponse
+	23, // 39: goisis.v1.IsisService.ListFlexAlgos:output_type -> goisis.v1.ListFlexAlgosResponse
+	25, // 40: goisis.v1.IsisService.AddLocator:output_type -> goisis.v1.AddLocatorResponse
+	27, // 41: goisis.v1.IsisService.DeleteLocator:output_type -> goisis.v1.DeleteLocatorResponse
+	29, // 42: goisis.v1.IsisService.AddFlexAlgo:output_type -> goisis.v1.AddFlexAlgoResponse
+	31, // 43: goisis.v1.IsisService.DeleteFlexAlgo:output_type -> goisis.v1.DeleteFlexAlgoResponse
+	33, // 44: goisis.v1.IsisService.AddPrefix:output_type -> goisis.v1.AddPrefixResponse
+	35, // 45: goisis.v1.IsisService.DeletePrefix:output_type -> goisis.v1.DeletePrefixResponse
+	37, // 46: goisis.v1.IsisService.SetOverload:output_type -> goisis.v1.SetOverloadResponse
+	39, // 47: goisis.v1.IsisService.ClearAdjacency:output_type -> goisis.v1.ClearAdjacencyResponse
+	41, // 48: goisis.v1.IsisService.WatchEvent:output_type -> goisis.v1.WatchEventResponse
+	33, // [33:49] is the sub-list for method output_type
+	17, // [17:33] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name
@@ -2101,7 +2489,7 @@ func file_goisis_v1_goisis_proto_init() {
 	if File_goisis_v1_goisis_proto != nil {
 		return
 	}
-	file_goisis_v1_goisis_proto_msgTypes[32].OneofWrappers = []any{
+	file_goisis_v1_goisis_proto_msgTypes[40].OneofWrappers = []any{
 		(*WatchEventResponse_Adjacency)(nil),
 		(*WatchEventResponse_Route)(nil),
 	}
@@ -2111,7 +2499,7 @@ func file_goisis_v1_goisis_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_goisis_v1_goisis_proto_rawDesc), len(file_goisis_v1_goisis_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   35,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

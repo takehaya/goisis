@@ -79,3 +79,57 @@ func TestConnectMutatorOnCancelledContext(t *testing.T) {
 		t.Errorf("DeleteLocator on cancelled ctx: code = %v (%v), want Canceled", got, err)
 	}
 }
+
+// TestConnectAddPrefixInvalid asserts an unparsable prefix is rejected by the
+// handler as InvalidArgument, before it reaches the Serve loop.
+func TestConnectAddPrefixInvalid(t *testing.T) {
+	h := &connectHandler{s: mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)}
+	_, err := h.AddPrefix(context.Background(), connect.NewRequest(&goisisv1.AddPrefixRequest{Prefix: "10.9.9.0"}))
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("AddPrefix with a bad prefix: code = %v (%v), want InvalidArgument", got, err)
+	}
+}
+
+// TestConnectClearAdjacencyInvalidSystemID asserts a malformed system ID is
+// rejected as InvalidArgument.
+func TestConnectClearAdjacencyInvalidSystemID(t *testing.T) {
+	h := &connectHandler{s: mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)}
+	_, err := h.ClearAdjacency(context.Background(), connect.NewRequest(&goisisv1.ClearAdjacencyRequest{
+		Interface: "c",
+		SystemId:  "0000.0000.01",
+	}))
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("ClearAdjacency with a bad system ID: code = %v (%v), want InvalidArgument", got, err)
+	}
+}
+
+func TestParseSystemID(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want packet.SystemID
+		ok   bool
+	}{
+		{"0000.0000.0001", packet.SystemID{0, 0, 0, 0, 0, 1}, true},
+		{"1921.6800.1001", packet.SystemID{0x19, 0x21, 0x68, 0x00, 0x10, 0x01}, true},
+		{"000000000001", packet.SystemID{0, 0, 0, 0, 0, 1}, true},
+		{"0000.0000.01", packet.SystemID{}, false},      // too short
+		{"0000.0000.0001.00", packet.SystemID{}, false}, // too long
+		{"zzzz.0000.0001", packet.SystemID{}, false},    // not hex
+	} {
+		got, err := parseSystemID(tc.in)
+		if (err == nil) != tc.ok {
+			t.Errorf("parseSystemID(%q) ok=%v, want %v (err=%v)", tc.in, err == nil, tc.ok, err)
+		}
+		if tc.ok && got != tc.want {
+			t.Errorf("parseSystemID(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

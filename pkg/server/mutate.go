@@ -130,3 +130,110 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 		return nil
 	})
 }
+
+// AddPrefix originates a new prefix in this node's LSP (TLV 135/236) at
+// runtime. The prefix must be valid and not already advertised (matched on its
+// masked form, the key the RIB and FIB agree on).
+func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error {
+	return s.mgmtOperation(ctx, func() error {
+		if !cfg.Prefix.IsValid() {
+			return fmt.Errorf("goisis: prefix %s is not a valid prefix", cfg.Prefix)
+		}
+		want := cfg.Prefix.Masked()
+		for _, p := range s.prefixes {
+			if p.Prefix.Masked() == want {
+				return fmt.Errorf("goisis: prefix %s is already advertised", want)
+			}
+		}
+		s.prefixes = append(s.prefixes, cfg)
+		s.regenerateLSPs(false, time.Now())
+		s.markDirty()
+		return nil
+	})
+}
+
+// DeletePrefix withdraws a prefix this node originates (matched on its masked
+// prefix). A prefix that came from a connected subnet keeps its
+// directly-connected marker: the operator asked to stop advertising it, not to
+// have goisis start programming the kernel's own connected route.
+func (s *IsisServer) DeletePrefix(ctx context.Context, prefix netip.Prefix) error {
+	return s.mgmtOperation(ctx, func() error {
+		want := prefix.Masked()
+		idx := -1
+		for i, p := range s.prefixes {
+			if p.Prefix.Masked() == want {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return fmt.Errorf("goisis: prefix %s is not advertised", want)
+		}
+		s.prefixes = append(s.prefixes[:idx], s.prefixes[idx+1:]...)
+		s.regenerateLSPs(false, time.Now())
+		s.markDirty()
+		return nil
+	})
+}
+
+// SetOverload sets or clears the overload bit in this node's own LSP by hand,
+// for maintenance: peers keep reaching our own prefixes but route no transit
+// traffic through us. It is independent of the startup overload window, which
+// still applies while it runs.
+func (s *IsisServer) SetOverload(ctx context.Context, on bool) error {
+	return s.mgmtOperation(ctx, func() error {
+		s.overloadManual = on
+		s.logger.Info("manual overload bit", "set", on)
+		s.regenerateLSPs(false, time.Now())
+		s.markDirty()
+		return nil
+	})
+}
+
+// ClearAdjacency tears down adjacencies on a circuit so hellos re-form them:
+// every adjacency on the circuit, or only the one to systemID when it is
+// non-nil. Clearing an adjacency that does not exist is a no-op, so a repeated
+// clear is harmless.
+func (s *IsisServer) ClearAdjacency(ctx context.Context, circuit string, systemID *packet.SystemID) error {
+	return s.mgmtOperation(ctx, func() error {
+		c := s.circuitByName(circuit)
+		if c == nil {
+			return fmt.Errorf("goisis: circuit %s is not configured", circuit)
+		}
+		if c.cfg.P2P {
+			if adj := c.p2pAdj; adj != nil && (systemID == nil || *systemID == adj.systemID) {
+				s.teardownP2PAdj(c, adj, "p2p adjacency cleared")
+				c.p2pAdj = nil
+			}
+			return nil
+		}
+		changed := false
+		for _, level := range c.cfg.levels() {
+			for id, adj := range c.adjs[level] {
+				if systemID != nil && *systemID != id {
+					continue
+				}
+				s.logger.Info("adjacency cleared", "circuit", c.cfg.Name, "level", level, "neighbor", id)
+				s.emitAdjacencyDown(c, adj, level)
+				delete(c.adjs[level], id)
+				s.electDIS(c, level)
+				changed = true
+			}
+		}
+		if changed {
+			s.regenerateLSPs(false, time.Now())
+		}
+		return nil
+	})
+}
+
+// circuitByName returns the configured circuit with the given interface name,
+// or nil if there is none.
+func (s *IsisServer) circuitByName(name string) *circuit {
+	for _, c := range s.circuits {
+		if c.cfg.Name == name {
+			return c
+		}
+	}
+	return nil
+}
