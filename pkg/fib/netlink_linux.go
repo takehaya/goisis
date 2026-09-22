@@ -34,6 +34,9 @@ func NewNetlink(table int) *Netlink {
 	return &Netlink{table: table}
 }
 
+// Table returns the routing table this FIB writes to.
+func (n *Netlink) Table() int { return n.table }
+
 // Update implements FIB: it installs or atomically replaces the route to
 // prefix with the given next-hop set.
 func (n *Netlink) Update(prefix netip.Prefix, nexthops []Nexthop) error {
