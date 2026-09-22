@@ -59,8 +59,12 @@ type IsisServer struct {
 	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
 }
 
-// markDirty requests an SPF/RIB recompute on the next loop iteration. Called
-// from LSDB mutations on the Serve goroutine.
+// spfHold is the SPF back-off interval (RFC 8405): after a recompute, further
+// changes are held this long and coalesced into a single recompute.
+const spfHold = 200 * time.Millisecond
+
+// markDirty requests an SPF/RIB recompute. Called from LSDB mutations on the
+// Serve goroutine; the loop decides when to run it (see the back-off in Serve).
 func (s *IsisServer) markDirty() { s.spfDirty = true }
 
 type mgmtOp struct {
@@ -218,6 +222,19 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	ticker := time.NewTicker(housekeepInterval)
 	defer ticker.Stop()
 
+	// SPF back-off (RFC 8405), with two states instead of three: QUIET, where a
+	// change recomputes immediately, and HOLD, where changes are coalesced into
+	// one recompute at the end of the hold. RFC 8405's LONG_WAIT escalation is
+	// deliberately omitted — a single short hold already absorbs the bursts we
+	// see (a flapping adjacency, a stream of LSPs arriving one per iteration),
+	// and a second threshold would only delay convergence further.
+	// The timer is its own select arm so a hold really is spfHold rather than
+	// being rounded up to the next housekeeping tick.
+	hold := time.NewTimer(spfHold)
+	hold.Stop()
+	defer hold.Stop()
+	holding := false
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,12 +246,20 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 			s.handleEvent(ev)
 		case t := <-ticker.C:
 			s.housekeeping(t)
+		case <-hold.C:
+			holding = false // leave HOLD; the check below picks up any change
 		}
-		// Recompute routes promptly after any topology change, rather than
-		// waiting for the next housekeeping tick.
-		if s.spfDirty {
+		// Recompute routes promptly after a topology change, rather than
+		// waiting for the next housekeeping tick — then hold, so a burst
+		// spread over several iterations costs one more recompute, not one
+		// per event.
+		if s.spfDirty && !holding {
 			s.spfDirty = false
 			s.updateRIB(time.Now())
+			// holding is true exactly while the timer is armed, so this only
+			// ever resets a stopped or already-received one.
+			hold.Reset(spfHold)
+			holding = true
 		}
 	}
 }
