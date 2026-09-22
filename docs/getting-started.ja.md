@@ -90,14 +90,16 @@ $ sudo ip netns exec ns2 goisisd -f r2.yaml &
 
 ```console
 $ sudo ip netns exec ns1 goisis neighbor
-SYSTEM-ID       INTERFACE  LEVEL  STATE  SNPA            HOLD
-0000.0000.0002  veth1      L2     Up     b209.c4e9.0791  30
+SYSTEM-ID       HOSTNAME  INTERFACE  LEVEL  STATE  SNPA            HOLD
+0000.0000.0002  r2        veth1      L2     Up     b209.c4e9.0791  30
 
 $ sudo ip netns exec ns1 goisis database
-LSP-ID                LEVEL  SEQ         LIFETIME  CHECKSUM  OWN
-0000.0000.0001.00-00  L2     0x00000002  1160      0x571a    *
-0000.0000.0001.01-00  L2     0x00000001  1160      0x903b    *
-0000.0000.0002.00-00  L2     0x00000002  1164      0xd09b
+LSP-ID                HOSTNAME  LEVEL  SEQ         LIFETIME  CHECKSUM  OWN
+0000.0000.0001.00-00  r1        L2     0x00000002  1160      0x571a    *
+0000.0000.0001.01-00  r1        L2     0x00000001  1160      0x903b    *
+0000.0000.0002.00-00  r2        L2     0x00000002  1164      0xd09b
+
+$ sudo ip netns exec ns1 goisis database --detail   # 各 LSP の TLV を行の下に表示
 
 $ sudo ip netns exec ns1 goisis route
 PREFIX       LEVEL  ALGO  METRIC  NEXT-HOPS

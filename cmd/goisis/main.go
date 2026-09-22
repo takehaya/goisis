@@ -14,6 +14,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
 	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
@@ -36,6 +38,7 @@ func newRootCmd() *cobra.Command {
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 	cmd.PersistentFlags().StringVarP(&addr, "addr", "u", "http://127.0.0.1:50051", "goisisd API base URL, or unix:///absolute/path for a unix socket")
+	cmd.PersistentFlags().StringP("output", "o", "table", "output format: table or json")
 	cmd.AddCommand(
 		newGlobalCmd(&addr),
 		newCircuitCmd(&addr),
@@ -81,6 +84,26 @@ func newHTTPClient(addr string) (*http.Client, string, error) {
 	}}, "http://unix", nil
 }
 
+// printResponse renders an RPC response: the command's own table, or the whole
+// response message as JSON under "-o json". The format is read back off the
+// command rather than threaded through every constructor, so a subcommand sees
+// the root's persistent flag.
+func printResponse(cmd *cobra.Command, msg proto.Message, table func() error) error {
+	switch format, _ := cmd.Flags().GetString("output"); format {
+	case "json":
+		b, err := protojson.MarshalOptions{Multiline: true, EmitUnpopulated: false}.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		cmd.Println(string(b))
+		return nil
+	case "table", "":
+		return table()
+	default:
+		return fmt.Errorf("unknown output format %q (want table or json)", format)
+	}
+}
+
 func levelStr(l goisisv1.Level) string {
 	switch l {
 	case goisisv1.Level_LEVEL_1:
@@ -101,9 +124,11 @@ func newGlobalCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			g := res.Msg.GetGlobal()
-			cmd.Printf("version:   %s\nsystem-id: %s\noverload:  %t\n", g.GetVersion(), g.GetSystemId(), g.GetOverload())
-			return nil
+			return printResponse(cmd, res.Msg, func() error {
+				g := res.Msg.GetGlobal()
+				cmd.Printf("version:   %s\nsystem-id: %s\noverload:  %t\n", g.GetVersion(), g.GetSystemId(), g.GetOverload())
+				return nil
+			})
 		},
 	}
 }
@@ -118,12 +143,14 @@ func newCircuitCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "INTERFACE\tTYPE\tLEVELS\tPRIORITY\tMETRIC")
-			for _, c := range res.Msg.GetCircuits() {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n", c.GetInterface(), circuitType(c), circuitLevels(c), c.GetPriority(), c.GetMetric())
-			}
-			return w.Flush()
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "INTERFACE\tTYPE\tLEVELS\tPRIORITY\tMETRIC")
+				for _, c := range res.Msg.GetCircuits() {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n", c.GetInterface(), circuitType(c), circuitLevels(c), c.GetPriority(), c.GetMetric())
+				}
+				return w.Flush()
+			})
 		},
 	}
 }
@@ -156,13 +183,15 @@ func newNeighborCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "SYSTEM-ID\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD")
-			for _, a := range res.Msg.GetAdjacencies() {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n",
-					a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), a.GetSnpa(), a.GetHoldingTime())
-			}
-			return w.Flush()
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "SYSTEM-ID\tHOSTNAME\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD")
+				for _, a := range res.Msg.GetAdjacencies() {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+						a.GetSystemId(), a.GetHostname(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), a.GetSnpa(), a.GetHoldingTime())
+				}
+				return w.Flush()
+			})
 		},
 	}
 	cmd.AddCommand(newNeighborClearCmd(addr))
@@ -261,7 +290,8 @@ func parseOnOff(s string) (bool, error) {
 }
 
 func newDatabaseCmd(addr *string) *cobra.Command {
-	return &cobra.Command{
+	var detail bool
+	cmd := &cobra.Command{
 		Use:     "database",
 		Aliases: []string{"lsdb"},
 		Short:   "Show the link-state database",
@@ -270,19 +300,32 @@ func newDatabaseCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "LSP-ID\tLEVEL\tSEQ\tLIFETIME\tCHECKSUM\tOWN")
-			for _, l := range res.Msg.GetLsps() {
-				own := ""
-				if l.GetOwn() {
-					own = "*"
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "LSP-ID\tHOSTNAME\tLEVEL\tSEQ\tLIFETIME\tCHECKSUM\tOWN")
+				for _, l := range res.Msg.GetLsps() {
+					own := ""
+					if l.GetOwn() {
+						own = "*"
+					}
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t0x%08x\t%d\t0x%04x\t%s\n",
+						l.GetLspId(), l.GetHostname(), levelStr(l.GetLevel()), l.GetSequenceNumber(), l.GetRemainingLifetime(), l.GetChecksum(), own)
+					if !detail {
+						continue
+					}
+					// A line without tabs ends the tabwriter column block, so
+					// under --detail each row aligns against itself rather than
+					// against the whole table.
+					for _, t := range l.GetTlvs() {
+						_, _ = fmt.Fprintf(w, "  %s\n", t)
+					}
 				}
-				_, _ = fmt.Fprintf(w, "%s\t%s\t0x%08x\t%d\t0x%04x\t%s\n",
-					l.GetLspId(), levelStr(l.GetLevel()), l.GetSequenceNumber(), l.GetRemainingLifetime(), l.GetChecksum(), own)
-			}
-			return w.Flush()
+				return w.Flush()
+			})
 		},
 	}
+	cmd.Flags().BoolVarP(&detail, "detail", "d", false, "print each LSP's TLVs under its row")
+	return cmd
 }
 
 func newRouteCmd(addr *string) *cobra.Command {
@@ -294,12 +337,14 @@ func newRouteCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tALGO\tMETRIC\tNEXT-HOPS")
-			for _, r := range res.Msg.GetRoutes() {
-				_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()), r.GetAlgorithm(), r.GetMetric(), nextHops(r))
-			}
-			return w.Flush()
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tALGO\tMETRIC\tNEXT-HOPS")
+				for _, r := range res.Msg.GetRoutes() {
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()), r.GetAlgorithm(), r.GetMetric(), nextHops(r))
+				}
+				return w.Flush()
+			})
 		},
 	}
 }
@@ -313,12 +358,14 @@ func newLocatorCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "PREFIX\tALGO\tEND-SID")
-			for _, l := range res.Msg.GetLocators() {
-				_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", l.GetPrefix(), l.GetAlgorithm(), l.GetEndSid())
-			}
-			return w.Flush()
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "PREFIX\tALGO\tEND-SID")
+				for _, l := range res.Msg.GetLocators() {
+					_, _ = fmt.Fprintf(w, "%s\t%d\t%s\n", l.GetPrefix(), l.GetAlgorithm(), l.GetEndSid())
+				}
+				return w.Flush()
+			})
 		},
 	}
 	cmd.AddCommand(newLocatorAddCmd(addr), newLocatorDeleteCmd(addr))
@@ -368,19 +415,21 @@ func newFlexAlgoCmd(addr *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "ALGO\tLEVEL\tMETRIC-TYPE\tPRIORITY\tADVERTISER\tPARTICIPANTS")
-			for _, fa := range res.Msg.GetFlexAlgos() {
-				mt, prio, adv := "-", "-", "-"
-				if d := fa.GetDefinition(); d != nil {
-					mt = metricTypeStr(d.GetMetricType())
-					prio = fmt.Sprintf("%d", d.GetPriority())
-					adv = d.GetAdvertiser()
+			return printResponse(cmd, res.Msg, func() error {
+				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+				_, _ = fmt.Fprintln(w, "ALGO\tLEVEL\tMETRIC-TYPE\tPRIORITY\tADVERTISER\tPARTICIPANTS")
+				for _, fa := range res.Msg.GetFlexAlgos() {
+					mt, prio, adv := "-", "-", "-"
+					if d := fa.GetDefinition(); d != nil {
+						mt = metricTypeStr(d.GetMetricType())
+						prio = fmt.Sprintf("%d", d.GetPriority())
+						adv = d.GetAdvertiser()
+					}
+					_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
+						fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, strings.Join(fa.GetParticipants(), ", "))
 				}
-				_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
-					fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, strings.Join(fa.GetParticipants(), ", "))
-			}
-			return w.Flush()
+				return w.Flush()
+			})
 		},
 	}
 	cmd.AddCommand(newFlexAlgoAddCmd(addr), newFlexAlgoDeleteCmd(addr))

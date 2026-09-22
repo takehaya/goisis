@@ -83,6 +83,9 @@ message Adjacency {
   string state = 5; // Down, Init, Up
   uint32 priority = 6;
   uint32 holding_time = 7;
+  // hostname is the neighbor's dynamic hostname (TLV 137, RFC 5301), empty
+  // until its LSP arrives or when it advertises no name.
+  string hostname = 8;
 }
 
 // Lsp is one entry in the link-state database.
@@ -93,6 +96,13 @@ message Lsp {
   uint32 remaining_lifetime = 4;
   uint32 checksum = 5;
   bool own = 6;
+  // hostname is the originator's dynamic hostname (TLV 137, RFC 5301), empty
+  // when it advertises none.
+  string hostname = 7;
+  // tlvs renders the LSP's TLVs in wire order for display; a TLV carrying a
+  // list renders one line per entry, so there are usually more lines than
+  // TLVs.
+  repeated string tlvs = 8;
 }
 
 // NextHop is one resolved next hop for a route.

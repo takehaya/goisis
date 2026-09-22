@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -203,5 +205,61 @@ func TestMgmtOperationCancelled(t *testing.T) {
 	cancel()
 	if err := s.mgmtOperation(ctx, func() error { return nil }); err == nil {
 		t.Error("mgmtOperation on cancelled ctx: want error, got nil")
+	}
+}
+
+// TestListsResolveHostnames: ListLSDB and ListAdjacencies resolve a system ID
+// to the dynamic hostname (TLV 137) the node's fragment-0 LSP advertises, and
+// the LSP snapshot carries its TLVs rendered for display.
+func TestListsResolveHostnames(t *testing.T) {
+	s := ribServer(t, false)
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	for _, a := range s.circuits[0].adjs[packet.Level2] {
+		// The fabricated adjacency has no holding time, which a running Serve
+		// loop would read as already expired.
+		a.holding, a.lastHeard = 30, time.Now()
+	}
+	injectLSPAt(s, packet.Level2, peer, []packet.TLV{
+		&packet.DynamicHostnameTLV{Hostname: "r2"},
+		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+			{Prefix: netip.MustParsePrefix("10.2.2.0/24"), Metric: 10},
+		}},
+	}, time.Now())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	lsps, err := s.ListLSDB(ctx)
+	if err != nil {
+		t.Fatalf("ListLSDB: %v", err)
+	}
+	var found bool
+	for _, l := range lsps {
+		if l.LSPID.NodeID().SystemID() != peer {
+			continue
+		}
+		found = true
+		if l.Hostname != "r2" {
+			t.Errorf("LSPInfo.Hostname = %q, want %q", l.Hostname, "r2")
+		}
+		want := []string{"Dynamic Hostname: r2", "IPv4 Reachability: 10.2.2.0/24 metric 10"}
+		if strings.Join(l.TLVs, "|") != strings.Join(want, "|") {
+			t.Errorf("LSPInfo.TLVs = %q, want %q", l.TLVs, want)
+		}
+	}
+	if !found {
+		t.Fatal("the injected peer LSP is missing from ListLSDB")
+	}
+
+	adjs, err := s.ListAdjacencies(ctx)
+	if err != nil {
+		t.Fatalf("ListAdjacencies: %v", err)
+	}
+	if len(adjs) != 1 {
+		t.Fatalf("ListAdjacencies returned %d adjacencies, want 1", len(adjs))
+	}
+	if adjs[0].Hostname != "r2" {
+		t.Errorf("AdjacencyInfo.Hostname = %q, want %q", adjs[0].Hostname, "r2")
 	}
 }

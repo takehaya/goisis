@@ -146,6 +146,11 @@ The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 `locator`, `flex-algo`, and `monitor` (streams `WatchEvent`; `--initial` prints
 the current adjacencies and routes before following changes).
 
+`-o json` prints the RPC response of any list or show command as JSON instead
+of a table, for scripts and `jq`. `goisis database --detail` additionally prints
+each LSP's TLVs under its row, so a peer's advertisement can be read without a
+packet capture.
+
 `--addr` also takes `unix:///absolute/path` to reach a daemon started with
 `goisisd -api-listen unix:///run/goisis/goisisd.sock`. The API is
 unauthenticated, so on a shared host a unix socket is the cheapest protection:

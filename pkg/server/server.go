@@ -490,13 +490,37 @@ func (s *IsisServer) ListCircuits(ctx context.Context) ([]CircuitInfo, error) {
 	return out, err
 }
 
+// hostnameIndex maps a system ID to the dynamic hostname (TLV 137, RFC 5301)
+// its live fragment-0 LSP advertises. Levels are not kept apart: the name
+// identifies the system, not its level, so a node that is in both databases
+// resolves to the same name either way. Serve-loop state; call it from inside
+// a management operation.
+func (s *IsisServer) hostnameIndex(now time.Time) map[packet.SystemID]string {
+	out := map[packet.SystemID]string{}
+	for _, db := range s.dbs {
+		for id, e := range db.entries {
+			if id.FragmentID() != 0 || !e.purgedAt.IsZero() || e.remaining(now) == 0 {
+				continue
+			}
+			for _, tlv := range e.lsp.TLVs {
+				if h, ok := tlv.(*packet.DynamicHostnameTLV); ok {
+					out[id.NodeID().SystemID()] = h.Hostname
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
 // ListLSDB returns a snapshot of the link-state database for every level.
 func (s *IsisServer) ListLSDB(ctx context.Context) ([]LSPInfo, error) {
 	var out []LSPInfo
 	err := s.mgmtOperation(ctx, func() error {
 		now := time.Now()
+		hostnames := s.hostnameIndex(now)
 		for _, db := range s.dbs {
-			out = append(out, db.snapshot(now)...)
+			out = append(out, db.snapshot(now, hostnames)...)
 		}
 		return nil
 	})
@@ -507,8 +531,12 @@ func (s *IsisServer) ListLSDB(ctx context.Context) ([]LSPInfo, error) {
 func (s *IsisServer) ListAdjacencies(ctx context.Context) ([]AdjacencyInfo, error) {
 	var out []AdjacencyInfo
 	err := s.mgmtOperation(ctx, func() error {
+		hostnames := s.hostnameIndex(time.Now())
 		for _, c := range s.circuits {
-			out = append(out, c.adjacencyInfos()...)
+			for _, a := range c.adjacencyInfos() {
+				a.Hostname = hostnames[a.SystemID]
+				out = append(out, a)
+			}
 		}
 		return nil
 	})
