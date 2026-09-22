@@ -30,6 +30,9 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 | `WithSRv6LocatorForAlgo(netip.Prefix, algo)` | Flex-Algo locator を広報。 |
 | `WithFlexAlgo(FlexAlgoConfig)` | Flexible Algorithm に参加 / 定義を広報。 |
 | `WithOverloadOnStartup(time.Duration)` | 起動後一定時間だけ OL ビットを立てる。 |
+| `WithLSPMTU(int)` | 自ノードが生成する LSP の上限サイズ。0(デフォルト)はサーキット MTU から導出(上限 1492)。512 未満は拒否。 |
+| `WithLSDBEntryLimit(int)` | レベルごとに保持する LSP 数の上限(LSDB 枯渇への多層防御)。0(デフォルト)で無制限。 |
+| `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | L1 / L2 の LSP・SNP の HMAC 認証。`AuthConfig.AcceptSecrets`(hello では `CircuitConfig.HelloAcceptPasswords`)は受信時のみ追加で受け付ける鍵で、署名には使わないため、鍵をノードごとにローテーションできる。`WithAreaPassword` / `WithDomainPassword(string)` は HMAC-MD5 の簡易版。 |
 | `WithFIB(fib.FIB)` | フォワーディングシンク(デフォルト `fib.Noop`)。 |
 | `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | export ポリシー:どの prefix を広報するか。 |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB ポリシー:どの経路を FIB に入れるか(拒否分は RIB に残る)。 |
@@ -38,13 +41,19 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 
 `CircuitConfig` は `Name`、注入する `datalink.Transport`(Linux では
 `datalink.OpenLinux(ifname)`、テストではモック)、`P2P`、`Level1`/`Level2`、
-`Priority`、`Metric`、`IPv4Addrs`/`IPv6Addrs`、`Padding` を持ちます。
+`Priority`、`Metric`、`HelloInterval`、`HoldingMultiplier`、`Padding`、
+`IPv4Addrs`/`IPv6Addrs`、`ConnectedPrefixes`(サーキットの直結サブネット。
+アドレス変更時にサーキットごと取り下げられる)、および hello 認証の鍵
+(`HelloPassword`、`HelloAcceptPasswords`、`HelloAuthAlgorithm`、`HelloKeyID`)
+を持ちます。
 
 ## 状態の参照
 
 いずれも `context.Context` を取り、型付きスナップショットを返します:
 `GetGlobal` / `ListCircuits` / `ListAdjacencies` / `ListLSDB` / `ListRoutes` /
-`ListLocators` / `ListFlexAlgos`。
+`ListLocators` / `ListFlexAlgos`。`LocatorInfo` は locator の End SID に加えて
+`EndXSIDs` を持ちます — Up の隣接ごとに 1 つの End.X SID で、その隣接の
+システム ID と、隣接が乗っているサーキットが付きます。
 
 ## 経路ポリシー
 
@@ -159,8 +168,10 @@ type FIB interface {
 }
 ```
 
-`LocalSID.Behavior` はどの endpoint behavior を実体化するかを指し、`Nexthop` と
-`Interface` は End.X SID が転送する隣接を表します。同梱の `fib.Netlink` は Linux の
+`LocalSID.Behavior` はどの endpoint behavior を実体化するかを指し
+(`BehaviorEnd` / `BehaviorEndX` / `BehaviorEndDT4`・`DT6`・`DT46`)、`Table` は
+デカプセル系のルックアップテーブル、`Nexthop`(隣接の IPv6 アドレス。通常は
+リンクローカル)と `Interface` は `BehaviorEndX` SID が転送する隣接を表します。同梱の `fib.Netlink` は Linux の
 `proto isis` 経路と `seg6local` End / End.X SID を設定します。`fib.Noop` は全て捨てます(`Subscribe` と組み合わせて自分で経路を
 処理する — [`examples/watchroutes`](../examples/watchroutes) を参照)。
 

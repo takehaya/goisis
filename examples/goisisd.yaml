@@ -19,6 +19,11 @@ fib: true
 # above the area's legitimate LSP count; 0 (the default) disables the cap.
 # lsdb-entry-limit: 10000
 
+# Cap the size of the LSPs this node originates. The default (0) derives it from
+# the circuit MTUs (smallest MTU less the LLC header, capped at 1492); set it
+# when an interface MTU overstates what the path carries.
+# lsp-mtu: 1492
+
 # HMAC authentication of LSPs/SNPs. area-password covers Level 1, domain-password
 # covers Level 2. The algorithm defaults to HMAC-MD5 (RFC 5304, interops with
 # FRR's area-password/domain-password md5); set *-auth-algorithm to an HMAC-SHA
@@ -27,6 +32,10 @@ fib: true
 # domain-password: s3cret
 # area-auth-algorithm: sha256   # md5 (default) | sha1 | sha256 | sha384 | sha512
 # area-key-id: 1
+# Extra keys accepted on receive but never used to sign, so a key rotates one
+# node at a time instead of on a flag day (same for domain-accept-passwords).
+# area-accept-passwords:
+#   - oldsecret
 
 circuits:
   - interface: eth0
@@ -38,6 +47,10 @@ circuits:
     # hold-multiplier: 10  # holding time = hello-interval x hold-multiplier
     # padding: true        # pad hellos toward the MTU (ISO 10589)
     # hello-password: s3cret   # HMAC-MD5 hello authentication (RFC 5304)
+    # hello-auth-algorithm: sha256   # md5 (default) | sha1 | sha256 | sha384 | sha512
+    # hello-key-id: 1                # RFC 5310 key ID (SHA only)
+    # hello-accept-passwords:        # accepted on receive, never used to sign
+    #   - oldsecret
 
 # Static prefixes to originate (connected subnets of the circuits above are
 # advertised automatically).

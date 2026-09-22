@@ -78,6 +78,10 @@ test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
   sandbox without docker. They are written to run there.
 - FRR LAN LSP regeneration takes ~40s (a FRR characteristic); interop route
   tests use P2P for fast convergence.
+- `waitFor` polls with a 10 s deadline (a passing test still returns as soon as
+  its condition holds), so a loaded runner stalls rather than fails.
+- Give each worktree its own `GOLANGCI_LINT_CACHE`; a shared cache makes
+  concurrent `make lint` runs collide.
 
 ## Conventions
 
@@ -85,7 +89,9 @@ test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
   `Claude <noreply@anthropic.com>`; include a `Co-Authored-By: Claude` trailer.
   One commit per milestone. No links in commit messages.
 - Match surrounding code: comment density, naming, explicit per-case style.
-- Scope: L2 single-area MVP; wide metrics only (narrow parsed, never originated).
+- Scope: single-area MVP; wide metrics only (narrow parsed, never originated).
+  ATT default routes and L1->L2 propagation are implemented; L2->L1 leaking is
+  not (the up/down bit is parsed and honored, never set).
   Multi-topology (RFC 5120), graceful restart (RFC 5306), and BFD are deferred.
   Flex-Algo computes the IGP metric only (constraint sub-sub-TLVs are preserved
   on the wire for a later ASLA-aware computation).
@@ -101,3 +107,14 @@ root); FRR's IS-IS auth is MD5-only so the SHA variants are validated
 goisis↔goisis. The management API is promoted to `v1` with runtime
 Add/Delete RPCs for SRv6 locators and Flex-Algos; buf breaking-change
 detection gates further schema changes.
+
+Since 0.2.0, a hardening and feature wave by theme: update-process conformance
+(LSPs/SNPs only from Up adjacencies, per-PDU CSNP splitting, DIS-only PSNP
+handling, unknown and own-System-ID purge handling, whole-database resync when a
+p2p adjacency comes Up); ATT default routes and L1->L2 propagation; LSP
+generation throttling, refresh jitter and MTU-derived sizing; two-state SPF
+back-off; authentication key rotation via accept lists; a runtime
+prefix/overload/adjacency API; netlink-driven interface address and link events;
+the management API on a unix socket; per-adjacency End.X SIDs; drop/receive
+counters plus adjacency, route and queue gauges; and CLI JSON output with
+`database --detail`.
