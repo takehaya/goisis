@@ -324,3 +324,160 @@ func TestNextLSPIDCarriesAcrossOctets(t *testing.T) {
 		}
 	}
 }
+
+// capturePSNPs links a listener onto the circuit's segment and returns a
+// function that ends the capture and decodes every PSNP sent since.
+func capturePSNPs(t *testing.T, c *circuit) func() []*packet.PSNP {
+	t.Helper()
+	tr, ok := c.cfg.Transport.(*datalink.MockTransport)
+	if !ok {
+		t.Fatalf("circuit transport is %T, want *datalink.MockTransport", c.cfg.Transport)
+	}
+	peer := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
+	datalink.Link(tr, peer)
+	return func() []*packet.PSNP {
+		_ = peer.Close()
+		var out []*packet.PSNP
+		for {
+			f, err := peer.Recv()
+			if err != nil {
+				return out
+			}
+			pdu, err := packet.DecodePDU(f.PDU)
+			if err != nil {
+				t.Fatalf("decode captured PDU: %v", err)
+			}
+			psnp, ok := pdu.(*packet.PSNP)
+			if !ok {
+				t.Fatalf("captured a %T, want a PSNP", pdu)
+			}
+			out = append(out, psnp)
+		}
+	}
+}
+
+func psnpEntries(psnp *packet.PSNP) []packet.LSPEntry {
+	var out []packet.LSPEntry
+	for _, tlv := range psnp.TLVs {
+		if le, ok := tlv.(*packet.LSPEntriesTLV); ok {
+			out = append(out, le.Entries...)
+		}
+	}
+	return out
+}
+
+// TestProcessLSPAcknowledgesUnknownPurgeWithoutStoringIt: on a p2p circuit a
+// purge for an LSP ID we do not hold is acknowledged by a PSNP carrying the
+// received header, and is never entered into the database (ISO 10589
+// 7.3.16.4 a).
+func TestProcessLSPAcknowledgesUnknownPurgeWithoutStoringIt(t *testing.T) {
+	now := time.Now()
+	unknown := lspID(packet.SystemID{9, 9, 9, 9, 9, 9}, 0)
+
+	s, c := snpServer(t, true) // p2p
+	stop := capturePSNPs(t, c)
+
+	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: unknown, SequenceNumber: 3, ISType: 2}
+	raw, err := purge.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, raw, purge, now)
+
+	if e := s.dbs[packet.Level2].get(unknown); e != nil {
+		t.Fatalf("purge for an unheld LSP ID was stored: %+v", e)
+	}
+	if hasSRM(c, unknown) {
+		t.Error("purge for an unheld LSP ID was flagged for re-flooding (SRM)")
+	}
+
+	s.transmitPSNP(c, packet.Level2, now)
+	psnps := stop()
+	if len(psnps) != 1 {
+		t.Fatalf("sent %d PSNPs, want 1", len(psnps))
+	}
+	entries := psnpEntries(psnps[0])
+	if len(entries) != 1 {
+		t.Fatalf("PSNP carried %d entries, want 1: %+v", len(entries), entries)
+	}
+	if got := entries[0]; got.LSPID != unknown || got.SequenceNumber != 3 || got.RemainingTime != 0 {
+		t.Errorf("PSNP entry = %+v, want LSPID %v, seq 3, remaining 0", got, unknown)
+	}
+	if hasSSN(c, unknown) || len(c.ssnAck[packet.Level2]) != 0 {
+		t.Error("acknowledgement flags were not cleared after the PSNP was sent")
+	}
+}
+
+// TestProcessLSPIgnoresUnknownPurgeOnLAN: on a broadcast circuit a purge for
+// an LSP ID we do not hold is discarded silently — not stored, not
+// acknowledged, not re-flooded (ISO 10589 7.3.16.4 a).
+func TestProcessLSPIgnoresUnknownPurgeOnLAN(t *testing.T) {
+	now := time.Now()
+	unknown := lspID(packet.SystemID{9, 9, 9, 9, 9, 9}, 0)
+
+	s, c := snpServer(t, false) // LAN
+	stop := capturePSNPs(t, c)
+
+	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: unknown, SequenceNumber: 3, ISType: 2}
+	raw, err := purge.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, raw, purge, now)
+
+	if e := s.dbs[packet.Level2].get(unknown); e != nil {
+		t.Fatalf("purge for an unheld LSP ID was stored: %+v", e)
+	}
+	if hasSSN(c, unknown) {
+		t.Error("purge for an unheld LSP ID was acknowledged (SSN) on a LAN")
+	}
+	if hasSRM(c, unknown) {
+		t.Error("purge for an unheld LSP ID was flagged for re-flooding (SRM)")
+	}
+
+	s.transmitPSNP(c, packet.Level2, now)
+	if psnps := stop(); len(psnps) != 0 {
+		t.Errorf("sent %d PSNPs, want none", len(psnps))
+	}
+}
+
+// TestUnknownPurgeDoesNotConsumeLSDBEntryLimit: a purge for an LSP ID we do
+// not hold is discarded before the entry-limit check, so purges alone can
+// neither fill the database nor trip its once-per-level warning.
+func TestUnknownPurgeDoesNotConsumeLSDBEntryLimit(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: tr, Level2: true, P2P: true, Padding: ptrFalse()}),
+		WithLSDBEntryLimit(1),
+	)
+	c := s.circuits[0]
+	now := time.Now()
+	db := s.dbs[packet.Level2]
+
+	inject := func(lsp *packet.LSP) {
+		t.Helper()
+		raw, err := lsp.Serialize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.processLSP(c, raw, lsp, now)
+	}
+
+	// Fill the database to the limit.
+	live := lspID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
+	inject(&packet.LSP{Level: packet.Level2, RemainingTime: 1000, LSPID: live, SequenceNumber: 1, ISType: 2})
+	if len(db.entries) != 1 {
+		t.Fatalf("setup: %d entries, want 1", len(db.entries))
+	}
+
+	unknown := lspID(packet.SystemID{9, 9, 9, 9, 9, 9}, 0)
+	inject(&packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: unknown, SequenceNumber: 3, ISType: 2})
+	if len(db.entries) != 1 {
+		t.Errorf("%d entries after an unknown purge, want 1", len(db.entries))
+	}
+	if s.lsdbLimitWarned[packet.Level2] {
+		t.Error("an unknown purge reached the entry-limit check instead of being discarded first")
+	}
+}
