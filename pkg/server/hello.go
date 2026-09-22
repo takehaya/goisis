@@ -241,6 +241,9 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	if h.HoldingTime == 0 {
 		return // a zero holding time would expire the adjacency immediately
 	}
+	if s.helloFromSelf(c, h.SourceID) {
+		return
+	}
 	level := h.Level
 	if _, ok := c.adjs[level]; !ok {
 		return // level not enabled on this circuit
@@ -304,6 +307,9 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	if h.HoldingTime == 0 {
 		return // a zero holding time would expire the adjacency immediately
 	}
+	if s.helloFromSelf(c, h.SourceID) {
+		return
+	}
 	common := commonLevels(c, h.CircuitType)
 	areas := areaAddressesOf(h.TLVs)
 	if common.has(packet.Level1) && !areasOverlap(s.areaAddrs, areas) {
@@ -314,6 +320,20 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	}
 
 	three := threeWayTLV(h.TLVs)
+	// RFC 5303 3.2: a TLV 240 echoing someone other than us describes a
+	// different adjacency, which puts ours in Down — not Init. Staying in Init
+	// would leave a stale Up adjacency to a peer now talking to another router
+	// alive until the hold timer expires.
+	if three != nil && three.HasNeighbor &&
+		(three.NeighborSystemID != s.systemID || three.NeighborExtLocalCircuitID != c.extCircID) {
+		// Only the current neighbor can take our adjacency down this way; a
+		// third router's hello on a misconfigured shared segment is ignored.
+		if adj := c.p2pAdj; adj != nil && adj.systemID == h.SourceID {
+			s.teardownP2PAdj(c, adj, "p2p adjacency down: neighbor handshakes with another router")
+			c.p2pAdj = nil
+		}
+		return
+	}
 	// We reach Up only when the neighbor echoes our system ID + circuit ID.
 	newState := AdjInit
 	if three != nil && three.HasNeighbor &&
@@ -327,7 +347,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		// A different neighbor replaced the old one (system-ID change or the
 		// link recabled to another router): tear the old one down first so
 		// observers see it go away, rather than silently overwriting it.
-		s.teardownP2PAdj(c, adj)
+		s.teardownP2PAdj(c, adj, "p2p adjacency replaced")
 		adj = nil
 	}
 	if adj == nil {
@@ -372,15 +392,32 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	}
 }
 
-// teardownP2PAdj reports an old point-to-point neighbor going down (it was
-// replaced by a different neighbor) and re-originates so our LSP drops its
-// stale IS reachability.
-func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency) {
-	s.logger.Info("p2p adjacency replaced", "circuit", c.cfg.Name, "neighbor", adj.systemID)
+// teardownP2PAdj reports a point-to-point neighbor going down for the given
+// reason and re-originates so our LSP drops its stale IS reachability. The
+// caller owns c.p2pAdj: it either clears it or replaces it.
+func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency, reason string) {
+	s.logger.Info(reason, "circuit", c.cfg.Name, "neighbor", adj.systemID)
 	for _, l := range adj.levels.levels() {
 		s.emitAdjacencyDown(c, adj, l)
 	}
 	s.regenerateLSPs(false, time.Now())
+}
+
+// helloFromSelf reports whether a hello carries our own system ID, warning
+// once per circuit. Such a hello means a duplicate system ID on the segment
+// (a misconfiguration or a cloned VM); forming an adjacency "to ourselves"
+// would corrupt DIS election and SPF, so the caller drops it without touching
+// adjacency state.
+func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
+	if src != s.systemID {
+		return false
+	}
+	if !c.dupSystemIDWarned {
+		c.dupSystemIDWarned = true
+		s.logger.Warn("drop hello carrying our own system ID: duplicate system ID on the circuit; suppressing repeats",
+			"circuit", c.cfg.Name, "systemID", src)
+	}
+	return true
 }
 
 // expireAdjacencies tears down adjacencies whose holding time has elapsed.

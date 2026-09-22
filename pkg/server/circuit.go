@@ -17,6 +17,11 @@ type circuit struct {
 	adjs   map[packet.Level]map[packet.SystemID]*adjacency
 	p2pAdj *adjacency
 
+	// dupSystemIDWarned suppresses repeats of the duplicate-system-ID warning:
+	// hellos arrive every few seconds, so warning per PDU would turn one
+	// misconfiguration into log amplification on the management loop.
+	dupSystemIDWarned bool
+
 	dis       map[packet.Level]packet.NodeID // elected DIS LAN ID per level
 	nextHello time.Time
 
