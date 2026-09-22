@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0](https://github.com/takehaya/goisis/compare/v0.2.0...v0.3.0) (2026-09-22)
+
+
+### Features
+
+* **api:** add, delete prefixes, set overload and clear adjacencies at runtime ([dc2600f](https://github.com/takehaya/goisis/commit/dc2600f19550ec9298e2c79d886a6cb6168f6b99))
+* **auth:** accept additional keys on receive for key rotation ([e8c68b3](https://github.com/takehaya/goisis/commit/e8c68b33599447e778783b7898b912ddaefc0f59))
+* **cli:** JSON output, database --detail, and hostname resolution ([c2bd181](https://github.com/takehaya/goisis/commit/c2bd1810bd07b6ec080a01591408fa1a447687ee))
+* **config:** expose hello timers, padding, prefix metrics and the FIB table ([2336488](https://github.com/takehaya/goisis/commit/23364882f88fd212721cf6bc1c7f786bd29fca35))
+* **config:** follow interface address and link events at runtime ([4b48bcc](https://github.com/takehaya/goisis/commit/4b48bccf6d91477bdc30729e832e68edeb882360))
+* **goisisd:** serve the management API on a unix socket ([7f7cff4](https://github.com/takehaya/goisis/commit/7f7cff4b3963d61d788d19b590536ff028a85691))
+* **metrics:** count drops and receives, expose adjacency, route and queue gauges ([6f277c3](https://github.com/takehaya/goisis/commit/6f277c3976eaa96008b79b8b95f5bc69190fd70a))
+* **origination:** coalesce event-driven LSP regeneration and jitter refresh ([d339dcb](https://github.com/takehaya/goisis/commit/d339dcb7c1d915adadc0cdd7dc416bb9f1cd1e73))
+* **origination:** propagate Level-1 reachability into the Level-2 LSP ([b6f4bcc](https://github.com/takehaya/goisis/commit/b6f4bcc99cc8b7b6850a36a8fc865ac6aaca5588))
+* **origination:** size own LSPs to the smallest circuit MTU ([b54be75](https://github.com/takehaya/goisis/commit/b54be75deb7e2575267e9fa4ca99b51d0f6d3f6c))
+* **spf:** hold and coalesce SPF runs after a recompute (RFC 8405-lite) ([86beecc](https://github.com/takehaya/goisis/commit/86beecc6e8cefc1e2bb3b41c4adb5605c9450264))
+* **spf:** install a default route from the ATT bit on Level-1-only nodes ([13a9b11](https://github.com/takehaya/goisis/commit/13a9b11c041c08f58d96d2c21bf2569bb40354f0))
+* **srv6:** advertise and program End.X SIDs per adjacency ([ab5adab](https://github.com/takehaya/goisis/commit/ab5adab38d272e0adb985596b6e54b4ae783980d))
+* **watch:** start a subscription with a gap-free snapshot of current state ([9cc22ae](https://github.com/takehaya/goisis/commit/9cc22aed57a155ab014f7eaa5e5fc71141cfb067))
+
+
+### Bug Fixes
+
+* **datalink:** retry transient receive errors instead of killing the reader ([c59e341](https://github.com/takehaya/goisis/commit/c59e3411a034798adc0c3b7586a5f62a5174f5d3))
+* **flooding:** accept LSPs and SNPs only from Up adjacencies ([04b4fe9](https://github.com/takehaya/goisis/commit/04b4fe9202336d4fa605afa1a756f212b668c25a))
+* **flooding:** acknowledge purges for unknown LSPs without storing them ([61c89f1](https://github.com/takehaya/goisis/commit/61c89f1745d10d0074c8d87f814886f5b8b7cea6))
+* **flooding:** only the DIS answers PSNP requests on a LAN ([187bd7d](https://github.com/takehaya/goisis/commit/187bd7d2e816b68bea8b36415497ce22f7babfeb))
+* **flooding:** purge LSPs that carry our System ID but that we do not own ([f4c3d77](https://github.com/takehaya/goisis/commit/f4c3d7742bdfb034cfa061b3e305b90b77d1a584))
+* **flooding:** split CSNPs into per-PDU LSP-ID ranges ([7038371](https://github.com/takehaya/goisis/commit/7038371b0dd3297e5318fc62edfbf20d56382e60))
+* **flooding:** stop flooding into p2p circuits without an adjacency ([6000846](https://github.com/takehaya/goisis/commit/6000846e9408ff8137106c37d101ffc7b9695d40))
+* **flooding:** synchronize the whole database when a p2p adjacency comes Up ([48b6f1d](https://github.com/takehaya/goisis/commit/48b6f1d3247589c2861de0e3176e08bf3b3b2b4d))
+* **hello:** tear down a p2p adjacency on a mismatched echo, drop own-ID hellos ([757aa4b](https://github.com/takehaya/goisis/commit/757aa4bdc1314861a5e2e53180faa758c2276950))
+* **rib:** pick an on-link next hop and honor the neighbor's NLPIDs ([657d342](https://github.com/takehaya/goisis/commit/657d342e2c92ebd36b86b8bc989eaebd58b3c72f))
+
 ## [0.2.0](https://github.com/takehaya/goisis/compare/v0.1.0...v0.2.0) (2026-07-04)
 
 
