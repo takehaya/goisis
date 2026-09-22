@@ -101,6 +101,33 @@ func (c *circuit) clearSSN(level packet.Level, id packet.LSPID) {
 	}
 }
 
+// clearFlags drops every flooding flag on the circuit. Called when a p2p
+// adjacency leaves Up: the flags describe what to send to a neighbor that is
+// gone, and ISO 10589 7.3.17 re-arms them for the whole database when an
+// adjacency comes Up, so nothing kept across a Down is of any use. LAN flags
+// are not cleared on adjacency expiry: they are per circuit, not per neighbor,
+// and the DIS's CSNPs govern them.
+func (c *circuit) clearFlags() {
+	for _, l := range c.cfg.levels() {
+		clear(c.srm[l])
+		clear(c.ssn[l])
+		clear(c.ssnAck[l])
+	}
+}
+
+// floodReady reports whether flooding may transmit on this circuit at a level.
+// A p2p circuit needs an Up adjacency covering the level: an LSP or a PSNP
+// sent without one reaches nobody, and retrying it every
+// minLSPTransmissionInterval forever is pure waste. A LAN circuit is always
+// ready (see clearFlags).
+func (c *circuit) floodReady(level packet.Level) bool {
+	if !c.cfg.P2P {
+		return true
+	}
+	adj := c.p2pAdj
+	return adj != nil && adj.state == AdjUp && adj.levels.has(level)
+}
+
 // isDIS reports whether we are the elected DIS at a level on this broadcast
 // circuit.
 func (c *circuit) isDIS(level packet.Level, self packet.SystemID) bool {
