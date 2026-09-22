@@ -28,6 +28,9 @@ func (s *IsisServer) isType() uint8 {
 // that changed. forceRefresh re-originates even when content is unchanged, to
 // reset the remaining lifetime.
 func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
+	// Reconcile the adjacency-scoped SRv6 SIDs first, so the TLV 22 entries
+	// built below advertise the set that is (being) programmed.
+	s.syncEndXSIDs()
 	for _, l := range s.levelCap.levels() {
 		s.regenerateNodeLSP(l, forceRefresh, now)
 		s.regeneratePseudonodeLSPs(l, forceRefresh, now)
@@ -64,6 +67,43 @@ func (s *IsisServer) drainLSPGen(now time.Time) {
 	s.lspGenPending = false
 	s.regenerateLSPs(false, now)
 	s.nextLSPGen = now.Add(minLSPGenInterval)
+}
+
+// maxSubTLVArea is the sub-TLV area of one Extended IS Reachability entry: a
+// single length octet.
+const maxSubTLVArea = 255
+
+// appendISReach appends one Extended IS Reachability entry for a neighbor,
+// splitting it into several entries when its sub-TLVs overflow the sub-TLV
+// area (many locators times many LAN neighbors). RFC 5305 §3 lets a neighbor
+// appear in more than one entry, and receivers merge them; tlvChunks then
+// packs the entries into TLVs.
+func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metric uint32, subs []packet.SubTLV) []packet.ExtendedISReachEntry {
+	for {
+		e := packet.ExtendedISReachEntry{NeighborID: id, Metric: metric}
+		size := 0
+		for _, sub := range subs {
+			n := subTLVLen(sub)
+			if size+n > maxSubTLVArea && len(e.SubTLVs) > 0 {
+				break
+			}
+			e.SubTLVs = append(e.SubTLVs, sub)
+			size += n
+		}
+		entries = append(entries, e)
+		subs = subs[len(e.SubTLVs):]
+		if len(subs) == 0 {
+			return entries
+		}
+	}
+}
+
+func subTLVLen(sub packet.SubTLV) int {
+	b, err := sub.Serialize()
+	if err != nil {
+		return maxSubTLVArea + 1 // force it onto its own entry; Serialize then reports it
+	}
+	return len(b)
 }
 
 // tlvChunks splits entries into the fewest TLVs whose serialized form each
@@ -122,10 +162,8 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	for _, c := range s.circuits {
 		if c.cfg.P2P {
 			if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) {
-				neighbors = append(neighbors, packet.ExtendedISReachEntry{
-					NeighborID: nodeID(adj.systemID, 0),
-					Metric:     c.cfg.Metric,
-				})
+				neighbors = appendISReach(neighbors, nodeID(adj.systemID, 0), c.cfg.Metric,
+					s.endXSubTLVs(c, adj))
 			}
 			continue
 		}
@@ -136,10 +174,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		if dis == (packet.NodeID{}) || len(c.upAdjacencies(level)) == 0 {
 			continue // no usable pseudonode yet
 		}
-		neighbors = append(neighbors, packet.ExtendedISReachEntry{
-			NeighborID: dis,
-			Metric:     c.cfg.Metric,
-		})
+		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, s.lanEndXSubTLVs(c, level))
 	}
 	variable = append(variable, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
 		return &packet.ExtendedISReachabilityTLV{Neighbors: n}

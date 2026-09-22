@@ -26,7 +26,7 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 | `WithCircuit(CircuitConfig)` | サーキットを追加(下記)。 |
 | `WithAdvertisedPrefix(netip.Prefix, metric)` | prefix を広報(TLV 135/236)。 |
 | `WithConnectedPrefix(netip.Prefix)` | 接続 prefix として印を付け、FIB へは入れない。 |
-| `WithSRv6Locator(netip.Prefix)` | アルゴリズム 0 の SRv6 locator を広報。 |
+| `WithSRv6Locator(netip.Prefix)` | アルゴリズム 0 の SRv6 locator を広報(End SID と、隣接ごとの End.X SID 付き)。 |
 | `WithSRv6LocatorForAlgo(netip.Prefix, algo)` | Flex-Algo locator を広報。 |
 | `WithFlexAlgo(FlexAlgoConfig)` | Flexible Algorithm に参加 / 定義を広報。 |
 | `WithOverloadOnStartup(time.Duration)` | 起動後一定時間だけ OL ビットを立てる。 |
@@ -154,13 +154,14 @@ type FIB interface {
     Update(prefix netip.Prefix, nexthops []Nexthop) error
     Withdraw(prefix netip.Prefix) error
     Sweep(keep func(netip.Prefix) bool) error // 起動時に古い経路を削除
-    AddLocalSID(sid LocalSID) error            // SRv6 End SID
+    AddLocalSID(sid LocalSID) error            // SRv6 End / End.X SID
     RemoveLocalSID(sid netip.Addr) error
 }
 ```
 
-同梱の `fib.Netlink` は Linux の `proto isis` 経路と `seg6local` End SID を
-設定します。`fib.Noop` は全て捨てます(`Subscribe` と組み合わせて自分で経路を
+`LocalSID.Behavior` はどの endpoint behavior を実体化するかを指し、`Nexthop` と
+`Interface` は End.X SID が転送する隣接を表します。同梱の `fib.Netlink` は Linux の
+`proto isis` 経路と `seg6local` End / End.X SID を設定します。`fib.Noop` は全て捨てます(`Subscribe` と組み合わせて自分で経路を
 処理する — [`examples/watchroutes`](../examples/watchroutes) を参照)。
 
 ## 独自メトリクス

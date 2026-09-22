@@ -70,6 +70,11 @@ Capability TLV (242). It is also mirrored into IPv6 reachability (TLV 236) for
 peers that don't parse TLV 27. With `fib: true` the End SID is installed as a
 `seg6local` End route.
 
+Every adjacency also gets an End.X SID per locator, taken from the locator's
+function space starting at 1 and advertised in the neighbour's IS reachability
+entry (RFC 9352 §8). With `fib: true` each one becomes a `seg6local` End.X
+route towards that neighbour; there is nothing to configure.
+
 A locator bound to a Flexible Algorithm is configured under `flex-algo` instead
 (see `locator` below), not here — `srv6.locators` are algorithm-0 locators.
 

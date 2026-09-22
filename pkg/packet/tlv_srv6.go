@@ -22,6 +22,7 @@ type SRv6EndpointBehavior uint16
 // SRv6 endpoint behaviors that goisis names; others are carried opaquely.
 const (
 	SRv6BehaviorEnd    SRv6EndpointBehavior = 1
+	SRv6BehaviorEndX   SRv6EndpointBehavior = 5
 	SRv6BehaviorEndDT6 SRv6EndpointBehavior = 18
 	SRv6BehaviorEndDT4 SRv6EndpointBehavior = 19
 )
@@ -50,28 +51,68 @@ type SRv6EndSID struct {
 	Unknown []UnknownSubTLV
 }
 
-func (e *SRv6EndSID) encode() ([]byte, error) {
-	sid := e.SID.As16()
-	out := make([]byte, 0, srv6EndSIDFixedLen+2+sidStructureLen)
-	out = append(out, e.Flags, byte(e.Behavior>>8), byte(e.Behavior))
-	out = append(out, sid[:]...)
+// encodeSIDSubSubTLVs renders the sub-sub-TLV area shared by every SRv6 SID
+// sub-TLV (End, End.X, LAN End.X): the SID Structure followed by the
+// unimplemented sub-sub-TLVs in received order.
+func encodeSIDSubSubTLVs(st *SIDStructure, unknown []UnknownSubTLV) ([]byte, error) {
 	var sub []byte
-	if e.Structure != nil {
+	if st != nil {
 		sub = append(sub, subSubTLVSIDStruct, sidStructureLen,
-			e.Structure.LocatorBlock, e.Structure.LocatorNode, e.Structure.Function, e.Structure.Argument)
+			st.LocatorBlock, st.LocatorNode, st.Function, st.Argument)
 	}
-	for _, u := range e.Unknown {
+	for _, u := range unknown {
 		b, err := u.Serialize()
 		if err != nil {
 			return nil, err
 		}
 		sub = append(sub, b...)
 	}
+	return sub, nil
+}
+
+// decodeSIDSubSubTLVs walks the sub-sub-TLV area shared by every SRv6 SID
+// sub-TLV, returning the SID Structure and anything this package does not
+// implement (preserved opaquely so the SID round-trips without data loss).
+func decodeSIDSubSubTLVs(sub []byte) (*SIDStructure, []UnknownSubTLV, error) {
+	var st *SIDStructure
+	var unknown []UnknownSubTLV
+	for len(sub) > 0 {
+		// A trailing octet too short for a sub-sub-TLV header is malformed —
+		// reject it rather than silently dropping it, matching the TLV and
+		// sub-TLV area decoders.
+		if len(sub) < 2 {
+			return nil, nil, fmt.Errorf("SRv6 SID sub-sub-TLV header: %w", ErrTruncated)
+		}
+		t, l := sub[0], int(sub[1])
+		if len(sub) < 2+l {
+			return nil, nil, fmt.Errorf("SRv6 SID sub-sub-TLV %d: %w", t, ErrTruncated)
+		}
+		if t == subSubTLVSIDStruct && l == sidStructureLen && st == nil {
+			st = &SIDStructure{LocatorBlock: sub[2], LocatorNode: sub[3], Function: sub[4], Argument: sub[5]}
+		} else {
+			// Anything else — an unimplemented sub-sub-TLV, an oddly sized SID
+			// Structure, or a duplicate one — is preserved opaquely.
+			unknown = append(unknown, UnknownSubTLV{SubTLVType: t, Value: slices.Clone(sub[2 : 2+l])})
+		}
+		sub = sub[2+l:]
+	}
+	return st, unknown, nil
+}
+
+func (e *SRv6EndSID) encode() ([]byte, error) {
+	sub, err := encodeSIDSubSubTLVs(e.Structure, e.Unknown)
+	if err != nil {
+		return nil, err
+	}
 	// The sub-sub-TLV area and the fixed part must together fit the End SID
 	// sub-TLV's one-octet length.
 	if len(sub) > 255-srv6EndSIDFixedLen {
 		return nil, fmt.Errorf("%w: %d octets of SRv6 End SID sub-sub-TLVs", ErrTooLong, len(sub))
 	}
+	sid := e.SID.As16()
+	out := make([]byte, 0, srv6EndSIDFixedLen+len(sub))
+	out = append(out, e.Flags, byte(e.Behavior>>8), byte(e.Behavior))
+	out = append(out, sid[:]...)
 	out = append(out, byte(len(sub)))
 	return append(out, sub...), nil
 }
@@ -89,28 +130,11 @@ func decodeEndSID(v []byte) (*SRv6EndSID, error) {
 	if len(v) < srv6EndSIDFixedLen+subLen {
 		return nil, fmt.Errorf("SRv6 End SID sub-sub-TLVs: %w", ErrTruncated)
 	}
-	sub := v[srv6EndSIDFixedLen : srv6EndSIDFixedLen+subLen]
-	for len(sub) > 0 {
-		// A trailing octet too short for a sub-sub-TLV header is malformed —
-		// reject it rather than silently dropping it, matching the TLV and
-		// sub-TLV area decoders.
-		if len(sub) < 2 {
-			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV header: %w", ErrTruncated)
-		}
-		t, l := sub[0], int(sub[1])
-		if len(sub) < 2+l {
-			return nil, fmt.Errorf("SRv6 SID sub-sub-TLV %d: %w", t, ErrTruncated)
-		}
-		if t == subSubTLVSIDStruct && l == sidStructureLen && e.Structure == nil {
-			e.Structure = &SIDStructure{LocatorBlock: sub[2], LocatorNode: sub[3], Function: sub[4], Argument: sub[5]}
-		} else {
-			// Anything else — an unimplemented sub-sub-TLV, an oddly sized
-			// SID Structure, or a duplicate one — is preserved opaquely so
-			// the End SID round-trips without data loss.
-			e.Unknown = append(e.Unknown, UnknownSubTLV{SubTLVType: t, Value: slices.Clone(sub[2 : 2+l])})
-		}
-		sub = sub[2+l:]
+	st, unknown, err := decodeSIDSubSubTLVs(v[srv6EndSIDFixedLen : srv6EndSIDFixedLen+subLen])
+	if err != nil {
+		return nil, err
 	}
+	e.Structure, e.Unknown = st, unknown
 	return e, nil
 }
 

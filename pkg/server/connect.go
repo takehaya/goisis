@@ -129,10 +129,20 @@ func (h *connectHandler) ListLocators(
 	}
 	out := make([]*goisisv1.Locator, 0, len(locs))
 	for _, l := range locs {
+		sids := make([]*goisisv1.EndXSid, 0, len(l.EndXSIDs))
+		for _, e := range l.EndXSIDs {
+			sids = append(sids, &goisisv1.EndXSid{
+				Sid:       e.SID.String(),
+				Neighbor:  e.Neighbor.String(),
+				Interface: e.Interface,
+				Algorithm: uint32(l.Algorithm),
+			})
+		}
 		out = append(out, &goisisv1.Locator{
 			Prefix:    l.Prefix.String(),
 			Algorithm: uint32(l.Algorithm),
 			EndSid:    l.EndSID.String(),
+			EndXSids:  sids,
 		})
 	}
 	return connect.NewResponse(&goisisv1.ListLocatorsResponse{Locators: out}), nil

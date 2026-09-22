@@ -21,6 +21,7 @@ type SIDBehavior int
 // Local SID behaviors (RFC 8986), mapped to Linux seg6local actions.
 const (
 	BehaviorEnd SIDBehavior = iota
+	BehaviorEndX
 	BehaviorEndDT4
 	BehaviorEndDT6
 	// BehaviorEndDT46 is declared for API completeness, but the netlink FIB
@@ -38,6 +39,11 @@ type LocalSID struct {
 	Behavior SIDBehavior
 	// Table is the VRF/lookup table for End.DT4/DT6/DT46.
 	Table int
+	// Nexthop is the adjacency the packet is forwarded to for End.X. It is
+	// the neighbor's IPv6 address from its hellos, normally link-local.
+	Nexthop netip.Addr
+	// Interface is the egress circuit for End.X.
+	Interface string
 }
 
 // FIB programs and withdraws routes. Implementations are called from a single
