@@ -105,6 +105,24 @@ s.SetOverload(ctx, true)
 s.ClearAdjacency(ctx, "eth0", nil) // nil: every adjacency on the circuit
 ```
 
+A circuit's addresses can change too. `SetCircuitAddresses` replaces the hello
+source addresses (TLV 132 / 232) and the circuit's connected subnets — the ones
+given as `CircuitConfig.ConnectedPrefixes` — then sends a hello at once instead
+of waiting for the next one; prefixes that came from `WithAdvertisedPrefix` /
+`WithConnectedPrefix`, or that another circuit still has connected, are left
+alone. `SetCircuitLinkState` reports whether the link can carry traffic: down
+tears the circuit's adjacencies down immediately and silences it, up resumes
+hellos. Both are no-ops when nothing changed, so an event source may push on
+every notification rather than diffing first.
+
+```go
+s.SetCircuitAddresses(ctx, "eth0", v4, linkLocalV6, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+s.SetCircuitLinkState(ctx, "eth0", false)
+```
+
+You own that event source. `goisisd` subscribes to netlink
+(`config.WatchInterfaces`, Linux only); the core links no netlink of its own.
+
 ## Watching changes
 
 ```go

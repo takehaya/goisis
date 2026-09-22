@@ -213,6 +213,12 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 // CSNPs where this node is the DIS. Called from housekeeping.
 func (s *IsisServer) floodTransmit(now time.Time) {
 	for _, c := range s.circuits {
+		// A circuit whose link is down cannot carry anything; its SRM/SSN flags
+		// keep waiting, and the neighbor resynchronizes when the link returns.
+		// Without this every tick would log a send error per flagged LSP.
+		if c.linkDown {
+			continue
+		}
 		for _, level := range c.cfg.levels() {
 			s.transmitSRM(c, level, now)
 			s.transmitPSNP(c, level, now)

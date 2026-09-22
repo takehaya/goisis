@@ -64,7 +64,7 @@ flowchart LR
 | `pkg/datalink` | Circuit transport: AF_PACKET on Linux, race-safe mock for tests. |
 | `pkg/server` | The instance: management loop, adjacency FSM, LSDB/flooding, SPF, RIB, origination, Connect handlers, Flex-Algo. |
 | `pkg/fib` | `FIB` interface + netlink implementation (`proto isis` routes, seg6local End SIDs). |
-| `pkg/config` | YAML → server options. |
+| `pkg/config` | YAML → server options; the netlink interface watcher that feeds address and link changes back in. |
 | `pkg/metrics` | Prometheus adapter for `server.Metrics` (the only package linking `client_golang`). |
 
 ## Threading model
@@ -119,6 +119,14 @@ the Serve goroutine, you do not touch `IsisServer` fields.**
   pending own-LSP regeneration, LSP aging/refresh, SRM/SSN retransmission,
   periodic CSNPs on circuits where we are DIS, local SID re-assertion, and
   gauge emission.
+- **Interface events.** Addresses and connected subnets are not read once at
+  startup: the daemon subscribes to netlink address and link changes
+  (`pkg/config.WatchInterfaces`) and pushes each one in as a management
+  operation — `SetCircuitAddresses` for a renumbering, `SetCircuitLinkState`
+  for carrier. A link reported down drops its adjacencies immediately instead
+  of after the neighbor's holding time. The core stays netlink-free: the
+  watcher lives in the daemon-side package, and an embedder owns the event
+  source itself.
 
 ### Fan-out without back-pressure
 

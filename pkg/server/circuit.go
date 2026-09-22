@@ -25,6 +25,11 @@ type circuit struct {
 	dis       map[packet.Level]packet.NodeID // elected DIS LAN ID per level
 	nextHello time.Time
 
+	// linkDown is set while the interface has no carrier (SetCircuitLinkState).
+	// Hellos are suppressed and adjacencies are torn down at once, instead of
+	// waiting out the neighbor's holding time.
+	linkDown bool
+
 	// Flooding flags per level (ISO 10589 7.3): srm[level][lspid] holds the
 	// earliest time to (re)send that LSP on this circuit; ssn[level][lspid]
 	// marks an LSP to report in the next PSNP. ssnAck holds the header to
@@ -142,6 +147,7 @@ type CircuitInfo struct {
 	Level2    bool
 	Priority  uint8
 	Metric    uint32
+	LinkUp    bool
 }
 
 func (c *circuit) info() CircuitInfo {
@@ -152,6 +158,7 @@ func (c *circuit) info() CircuitInfo {
 		Level2:    c.cfg.Level2,
 		Priority:  c.cfg.priority(),
 		Metric:    c.cfg.Metric,
+		LinkUp:    !c.linkDown,
 	}
 }
 

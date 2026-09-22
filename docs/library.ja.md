@@ -100,6 +100,23 @@ s.SetOverload(ctx, true)
 s.ClearAdjacency(ctx, "eth0", nil) // nil: サーキット上の全隣接
 ```
 
+サーキットのアドレスも変更できます。`SetCircuitAddresses` は hello の送信元
+アドレス(TLV 132 / 232)と、そのサーキットの直結サブネット
+(`CircuitConfig.ConnectedPrefixes` で与えたもの)を置き換え、次の hello を待たず
+に即座に hello を送ります。`WithAdvertisedPrefix` / `WithConnectedPrefix` 由来の
+プレフィックスや、他のサーキットがまだ直結しているものはそのまま残ります。
+`SetCircuitLinkState` はリンクが通信可能かを伝えます。down はそのサーキットの
+隣接を即座に落として送信を止め、up は hello を再開します。どちらも変化が
+なければ何もしないので、イベント源は差分を取らずそのまま流し込めます。
+
+```go
+s.SetCircuitAddresses(ctx, "eth0", v4, linkLocalV6, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")})
+s.SetCircuitLinkState(ctx, "eth0", false)
+```
+
+イベント源は利用者側のものです。`goisisd` は netlink を購読します
+(`config.WatchInterfaces`、Linux のみ)。コア自体は netlink をリンクしません。
+
 ## 変更の監視
 
 ```go

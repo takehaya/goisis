@@ -52,6 +52,12 @@ type CircuitConfig struct {
 	// hellos the IPv6 addresses should be link-local.
 	IPv4Addrs []netip.Addr
 	IPv6Addrs []netip.Addr
+	// ConnectedPrefixes are the circuit's directly-connected subnets. They are
+	// originated at the circuit's metric and marked connected (as
+	// WithAdvertisedPrefix + WithConnectedPrefix would), but stay attributable
+	// to this circuit, so SetCircuitAddresses can withdraw exactly what the
+	// circuit contributed when its addresses change.
+	ConnectedPrefixes []netip.Prefix
 	// Padding pads hellos toward the MTU (ISO 10589); default true.
 	Padding *bool
 	// HelloPassword, if set, enables HMAC authentication of hellos on this

@@ -12,6 +12,13 @@ import (
 // sendHellos transmits the circuit's hellos and schedules the next send.
 func (s *IsisServer) sendHellos(c *circuit, now time.Time) {
 	c.nextHello = now.Add(c.cfg.HelloInterval)
+	// A circuit whose link is down keeps its schedule but stays silent: the
+	// frames would be dropped anyway, and on a link that is only reported down
+	// (a one-way carrier loss) they would keep the neighbor's adjacency to us
+	// alive after we tore ours down.
+	if c.linkDown {
+		return
+	}
 	if c.cfg.P2P {
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
 		return
@@ -189,6 +196,12 @@ func (s *IsisServer) handleEvent(ev event) {
 // handleRx decodes and processes a received frame. Decode failures are
 // logged and dropped (the malformed-PDU policy for M2).
 func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
+	// A circuit whose link is down is deaf as well as mute: acting on a frame
+	// that raced the link-down event would re-form an adjacency we no longer
+	// send hellos on, and advertise reachability over a link we cannot use.
+	if c.linkDown {
+		return
+	}
 	// Trim any data-link padding to the declared PDU length first: authentication
 	// must hash the exact PDU the sender signed, and a stored/re-flooded LSP must
 	// not carry padding.
@@ -442,25 +455,33 @@ func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
 
 // expireAdjacencies tears down adjacencies whose holding time has elapsed.
 func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
+	s.dropAdjacencies(c, "adjacency expired", func(adj *adjacency) bool { return expired(adj, now) })
+}
+
+// dropAdjacencies tears down every adjacency on the circuit that drop selects,
+// reporting each one down, re-electing the DIS, and re-originating so our LSP
+// loses the stale IS reachability. reason is the log message.
+func (s *IsisServer) dropAdjacencies(c *circuit, reason string, drop func(*adjacency) bool) {
 	if c.cfg.P2P {
-		if adj := c.p2pAdj; adj != nil && expired(adj, now) {
-			// Detach first: teardown re-originates, and our LSP must no longer
-			// see the dead neighbor.
+		if adj := c.p2pAdj; adj != nil && drop(adj) {
+			// Clear before the teardown re-originates, so the LSP it builds no
+			// longer carries this neighbor.
 			c.p2pAdj = nil
-			s.teardownP2PAdj(c, adj, "p2p adjacency expired")
+			s.teardownP2PAdj(c, adj, reason)
 		}
 		return
 	}
 	changed := false
 	for _, level := range c.cfg.levels() {
 		for id, adj := range c.adjs[level] {
-			if expired(adj, now) {
-				s.logger.Info("adjacency expired", "circuit", c.cfg.Name, "level", level, "neighbor", id)
-				s.emitAdjacencyDown(c, adj, level)
-				delete(c.adjs[level], id)
-				s.electDIS(c, level)
-				changed = true
+			if !drop(adj) {
+				continue
 			}
+			s.logger.Info(reason, "circuit", c.cfg.Name, "level", level, "neighbor", id)
+			s.emitAdjacencyDown(c, adj, level)
+			delete(c.adjs[level], id)
+			s.electDIS(c, level)
+			changed = true
 		}
 	}
 	if changed {
