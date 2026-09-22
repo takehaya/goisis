@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -155,13 +156,14 @@ func (s *IsisServer) resolveNextHops(prefix netip.Prefix, hops []packet.SystemID
 		if adj == nil {
 			continue
 		}
+		if !routesFamily(adj.nlpids, v4) {
+			continue // the neighbor does not route this family
+		}
 		var gw netip.Addr
 		if v4 {
-			if len(adj.neighborIPv4) > 0 {
-				gw = adj.neighborIPv4[0]
-			}
-		} else if len(adj.neighborIPv6) > 0 {
-			gw = adj.neighborIPv6[0]
+			gw = pickGateway(adj.neighborIPv4, true, s.connected)
+		} else {
+			gw = pickGateway(adj.neighborIPv6, false, s.connected)
 		}
 		if !gw.IsValid() {
 			continue
@@ -180,6 +182,45 @@ func (s *IsisServer) resolveNextHops(prefix netip.Prefix, hops []packet.SystemID
 		return out[i].Gateway.String() < out[j].Gateway.String()
 	})
 	return out
+}
+
+// routesFamily reports whether a neighbor advertising these NLPIDs (TLV 129)
+// routes the given family. An absent TLV is permissive: RFC 1195 3.1 requires
+// it, but a route pointed at a silent peer is better than no route at all.
+func routesFamily(nlpids []byte, v4 bool) bool {
+	if len(nlpids) == 0 {
+		return true
+	}
+	want := byte(packet.NLPIDIPv6)
+	if v4 {
+		want = packet.NLPIDIPv4
+	}
+	return slices.Contains(nlpids, want)
+}
+
+// pickGateway chooses the next-hop address among the ones a neighbor listed in
+// its hello. TLV 132 carries every address of the peer's interface, so the
+// first one may not even be on this link; an off-subnet gateway makes the
+// kernel reject the route with ENETUNREACH. For IPv6 the gateway must be
+// link-local (RFC 5308 2 and 3), but a peer that also lists a global address
+// must not push it to the front. Falling back to the first address keeps a
+// neighbor whose addressing we cannot corroborate reachable.
+func pickGateway(addrs []netip.Addr, v4 bool, connected map[netip.Prefix]bool) netip.Addr {
+	for _, a := range addrs {
+		if v4 {
+			for p := range connected {
+				if p.Addr().Is4() && p.Contains(a) {
+					return a
+				}
+			}
+		} else if a.IsLinkLocalUnicast() {
+			return a
+		}
+	}
+	if len(addrs) > 0 {
+		return addrs[0]
+	}
+	return netip.Addr{}
 }
 
 // findAdjacency returns the Up adjacency to a system ID and its circuit, if
