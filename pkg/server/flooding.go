@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"sort"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
@@ -242,10 +243,14 @@ func (s *IsisServer) transmitPSNP(c *circuit, level packet.Level, now time.Time)
 }
 
 // sendCSNP multicasts the DIS's view of the database for a level as one or
-// more CSNPs spanning the whole LSP-ID range.
+// more CSNPs spanning the whole LSP-ID range. One CSNP per database would
+// exceed the receive buffer and the MTU past roughly 90 LSPs and fail to
+// send, taking the LAN's only resynchronization mechanism with it (see
+// transmitSRM), so the database is cut into consecutive ranges that each fit
+// one PDU.
 func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 	db := s.dbs[level]
-	var entries []packet.LSPEntry
+	entries := make([]packet.LSPEntry, 0, len(db.entries))
 	for id, e := range db.entries {
 		entries = append(entries, packet.LSPEntry{
 			RemainingTime:  e.remaining(now),
@@ -254,21 +259,66 @@ func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 			Checksum:       e.lsp.Checksum(),
 		})
 	}
-	var start, end packet.LSPID
+	// A receiver treats LSP IDs as unsigned octet strings when testing them
+	// against [StartLSP, EndLSP] (ISO 10589 7.3.15.2, see inRange), so sorting
+	// that way is what makes each PDU's range contiguous.
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].LSPID[:], entries[j].LSPID[:]) < 0
+	})
+
+	budget := packet.ReceiveLSPBufferSize
+	if mtu := c.cfg.Transport.MTU() - 3; mtu < budget { // 3 = LLC header
+		budget = mtu
+	}
+	budget -= packet.HeaderLen(packet.PDUTypeL1CSNP) // both levels: 33 octets
+	if spec := s.authKey(level); spec.on() {
+		budget -= tlvLen(authTLVPlaceholder(spec)) // sendSNP appends it
+	}
+
+	var (
+		tlvs  []packet.TLV
+		size  int
+		start packet.LSPID // the first CSNP starts at 00...00
+		last  packet.LSPID // last LSP ID packed so far
+	)
+	flush := func(end packet.LSPID) {
+		s.sendSNP(c, level, &packet.CSNP{
+			Level:    level,
+			SourceID: nodeID(s.systemID, c.pseudonodeID),
+			StartLSP: start,
+			EndLSP:   end,
+			TLVs:     tlvs,
+		})
+		start = nextLSPID(end)
+		tlvs, size = nil, 0
+	}
+	for _, chunk := range chunkEntries(entries) {
+		n := tlvLen(&packet.LSPEntriesTLV{Entries: chunk})
+		if size+n > budget && len(tlvs) > 0 {
+			flush(last)
+		}
+		tlvs = append(tlvs, &packet.LSPEntriesTLV{Entries: chunk})
+		size += n
+		last = chunk[len(chunk)-1].LSPID
+	}
+	var end packet.LSPID
 	for i := range end {
 		end[i] = 0xff
 	}
-	csnp := &packet.CSNP{
-		Level:    level,
-		SourceID: nodeID(s.systemID, c.pseudonodeID),
-		StartLSP: start,
-		EndLSP:   end,
-		TLVs:     []packet.TLV{},
+	flush(end) // the last CSNP ends at ff...ff, so the ranges cover everything
+}
+
+// nextLSPID returns id + 1 read as an 8-octet unsigned integer: the start of
+// the range following one that ends at id. Overflow at ff...ff cannot happen,
+// because that value only ever ends the final range.
+func nextLSPID(id packet.LSPID) packet.LSPID {
+	for i := len(id) - 1; i >= 0; i-- {
+		id[i]++
+		if id[i] != 0 {
+			break
+		}
 	}
-	for _, chunk := range chunkEntries(entries) {
-		csnp.TLVs = append(csnp.TLVs, &packet.LSPEntriesTLV{Entries: chunk})
-	}
-	s.sendSNP(c, level, csnp)
+	return id
 }
 
 func (s *IsisServer) sendSNP(c *circuit, level packet.Level, pdu packet.PDU) {
