@@ -241,8 +241,10 @@ Two invariants matter beyond the codec:
   authentication is the primary mitigation.
 - **Management plane.** The Connect API is plaintext h2c without
   authentication, bound to loopback by default; binding it further requires
-  the explicit `-api-allow-remote` opt-in. Protect it externally (TLS
-  proxy, unix socket permissions, network policy) before exposing it.
+  the explicit `-api-allow-remote` opt-in. For local access prefer
+  `-api-listen unix:///run/goisis/goisisd.sock`: the socket is created mode
+  `0660`, so filesystem permissions become the access control. Exposing it
+  over the network needs external protection (TLS proxy, network policy).
 
 ## Limitations
 

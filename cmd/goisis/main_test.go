@@ -1,11 +1,70 @@
 package main
 
 import (
+	"io"
+	"net"
+	"net/http"
+	"path/filepath"
 	"testing"
 
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
 	"github.com/takehaya/goisis/pkg/packet"
 )
+
+func TestNewHTTPClientTCPIsUnchanged(t *testing.T) {
+	client, baseURL, err := newHTTPClient("http://127.0.0.1:50051")
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	if client != http.DefaultClient {
+		t.Error("an http:// address should keep using http.DefaultClient")
+	}
+	if baseURL != "http://127.0.0.1:50051" {
+		t.Errorf("baseURL = %q, want the address unchanged", baseURL)
+	}
+}
+
+func TestNewHTTPClientDialsUnixSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "goisisd.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hello", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "from the socket")
+	})
+	srv := &http.Server{Handler: mux} //nolint:gosec // no timeouts needed for a test server
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	client, baseURL, err := newHTTPClient("unix://" + path)
+	if err != nil {
+		t.Fatalf("newHTTPClient: %v", err)
+	}
+	if baseURL != "http://unix" {
+		t.Errorf("baseURL = %q, want %q", baseURL, "http://unix")
+	}
+
+	res, err := client.Get(baseURL + "/hello")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != "from the socket" {
+		t.Errorf("body = %q, want %q", body, "from the socket")
+	}
+}
+
+func TestNewHTTPClientRejectsRelativeUnixPath(t *testing.T) {
+	if _, _, err := newHTTPClient("unix://goisisd.sock"); err == nil {
+		t.Fatal("a relative unix path was accepted, want an error")
+	}
+}
 
 func TestParseUint8(t *testing.T) {
 	for _, tc := range []struct {

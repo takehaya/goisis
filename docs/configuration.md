@@ -138,6 +138,11 @@ The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 `global`, `circuit`, `neighbor`, `database`, `route`, `locator`, `flex-algo`,
 and `monitor` (streams `WatchEvent`).
 
+`--addr` also takes `unix:///absolute/path` to reach a daemon started with
+`goisisd -api-listen unix:///run/goisis/goisisd.sock`. The API is
+unauthenticated, so on a shared host a unix socket is the cheapest protection:
+the socket is created mode `0660` and its directory guards who may connect.
+
 `locator` and `flex-algo` also reconfigure the daemon at runtime:
 
 ```console

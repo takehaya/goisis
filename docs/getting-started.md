@@ -114,6 +114,13 @@ $ sudo ip netns exec ns1 ping -c2 10.2.2.2
 `goisis monitor` streams adjacency and route changes as they happen (handy in a
 second terminal while you flap `veth1`).
 
+The API listens on `127.0.0.1:50051` by default and has no authentication. On a
+host shared with other users, bind it to a unix socket instead and let the
+directory permissions decide who may connect — run
+`goisisd -f r1.yaml -api-listen unix:///run/goisis/goisisd.sock` and point the
+CLI at it with `goisis --addr unix:///run/goisis/goisisd.sock neighbor`. The
+packaged [systemd unit](../packaging/goisisd.service) does this.
+
 ### Tear down
 
 ```console

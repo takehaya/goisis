@@ -114,6 +114,12 @@ $ sudo ip netns exec ns1 ping -c2 10.2.2.2
 `goisis monitor` は隣接・経路の変化をストリーミングします(別端末で `veth1` を
 フラップさせながら見ると分かりやすい)。
 
+API のデフォルトは `127.0.0.1:50051` で、認証はありません。他のユーザと共有する
+ホストでは unix ソケットにバインドし、接続できる範囲をディレクトリのパーミッション
+で決めてください。`goisisd -f r1.yaml -api-listen unix:///run/goisis/goisisd.sock`
+で起動し、CLI は `goisis --addr unix:///run/goisis/goisisd.sock neighbor` のように
+向けます。同梱の [systemd ユニット](../packaging/goisisd.service) はこの構成です。
+
 ### 後始末
 
 ```console

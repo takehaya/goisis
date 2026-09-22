@@ -137,6 +137,11 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 `global` / `circuit` / `neighbor` / `database` / `route` / `locator` /
 `flex-algo` / `monitor`(`WatchEvent` をストリーミング)。
 
+`--addr` は `unix:///絶対パス` も取り、`goisisd -api-listen
+unix:///run/goisis/goisisd.sock` で起動したデーモンに接続します。API は無認証
+なので、共有ホストでは unix ソケットが最も手軽な保護手段です。ソケットはモード
+`0660` で作られ、接続できる範囲はその置き場所のディレクトリで決まります。
+
 `locator` と `flex-algo` は実行時にデーモンを再構成もできます:
 
 ```console
