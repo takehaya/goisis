@@ -12,9 +12,10 @@
 | `fib` | bool | 計算した経路を `proto isis` タグでカーネル FIB に書き込む。`CAP_NET_ADMIN` が必要。デフォルト `false`(コントロールプレーンのみ)。 |
 | `overload-on-startup` | duration | 起動後この時間だけオーバーロードビットを立て、その後解除する(例 `30s`)。立っている間、ピアはこのノードを経由する中継トラフィックを流さない。 |
 | `area-password` | string | Level-1 の LSP/SNP をこの鍵で認証。 |
+| `area-accept-passwords` | string のリスト | 受信した Level-1 LSP/SNP で追加で受け付ける鍵(アルゴリズムと鍵 ID は同じ)。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
 | `area-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `area-password md5`)/ `sha1`/`sha256`/`sha384`/`sha512`(RFC 5310)。 |
 | `area-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
-| `domain-password` / `domain-auth-algorithm` / `domain-key-id` | | Level-2 用に同じ。 |
+| `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | Level-2 用に同じ。 |
 
 > FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
 > goisis 同士で相互運用します。
@@ -34,11 +35,19 @@
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
 | `hello-password` | string | HMAC による hello 認証を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。 |
 | `hello-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `isis password md5`)/ HMAC-SHA 系(RFC 5310)。 |
+| `hello-accept-passwords` | string のリスト | 受信 hello で追加で受け付ける鍵。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
 | `hello-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
 
 インターフェースに設定された IPv4 アドレスとリンクローカル IPv6 アドレスは
 hello(TLV 132/232)で広報され、ネクストホップに使われます。その接続サブネットは
 自動で広報されます(カーネルの接続経路を上書きすることはありません)。
+
+## 鍵のローテーション
+
+ノードは 1 つの鍵で署名し、複数の鍵を受け入れます。これにより一斉切り替えなしに鍵を
+更新できます。1. 新しい鍵を全ノードの `*-accept-passwords` に追加する。2. `*-password`
+をノードごとに新しい鍵へ切り替える。3. 全ノードが新しい鍵で署名するようになったら、
+accept のリストから古い鍵を削除する。
 
 ## `srv6`
 

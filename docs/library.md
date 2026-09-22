@@ -30,6 +30,7 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithSRv6LocatorForAlgo(netip.Prefix, algo)` | Advertise a Flex-Algo locator. |
 | `WithFlexAlgo(FlexAlgoConfig)` | Participate in / advertise a Flexible Algorithm. |
 | `WithOverloadOnStartup(time.Duration)` | Set the OL bit for a window after startup. |
+| `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | HMAC authentication of L1 / L2 LSPs and SNPs. `AuthConfig.AcceptSecrets` (and `CircuitConfig.HelloAcceptPasswords` for hellos) are extra keys accepted on receive but never used to sign, so a key can be rotated node by node. |
 | `WithFIB(fib.FIB)` | Forwarding sink (default `fib.Noop`). |
 | `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | Export policy: which prefixes to originate. |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB policy: which computed routes to program (rejected ones stay in the RIB). |
@@ -38,7 +39,9 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 
 `CircuitConfig` carries `Name`, an injected `datalink.Transport` (use
 `datalink.OpenLinux(ifname)` on Linux, or a mock in tests), `P2P`, `Level1`/
-`Level2`, `Priority`, `Metric`, `IPv4Addrs`/`IPv6Addrs`, and `Padding`.
+`Level2`, `Priority`, `Metric`, `IPv4Addrs`/`IPv6Addrs`, `Padding`, and the
+hello authentication keys (`HelloPassword`, `HelloAcceptPasswords`,
+`HelloAuthAlgorithm`, `HelloKeyID`).
 
 ## Reading state
 

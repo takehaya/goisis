@@ -39,12 +39,16 @@ type Config struct {
 	// AreaPassword / DomainPassword enable authentication of Level-1 / Level-2
 	// LSPs and SNPs. The algorithm defaults to HMAC-MD5 (RFC 5304); set
 	// *-auth-algorithm to an HMAC-SHA variant (RFC 5310) with a *-key-id.
-	AreaPassword        string `yaml:"area-password"`
-	AreaAuthAlgorithm   string `yaml:"area-auth-algorithm"`
-	AreaKeyID           uint16 `yaml:"area-key-id"`
-	DomainPassword      string `yaml:"domain-password"`
-	DomainAuthAlgorithm string `yaml:"domain-auth-algorithm"`
-	DomainKeyID         uint16 `yaml:"domain-key-id"`
+	// *-accept-passwords are extra keys accepted on receive (never used to
+	// sign), so a key can be rotated one node at a time.
+	AreaPassword          string   `yaml:"area-password"`
+	AreaAcceptPasswords   []string `yaml:"area-accept-passwords"`
+	AreaAuthAlgorithm     string   `yaml:"area-auth-algorithm"`
+	AreaKeyID             uint16   `yaml:"area-key-id"`
+	DomainPassword        string   `yaml:"domain-password"`
+	DomainAcceptPasswords []string `yaml:"domain-accept-passwords"`
+	DomainAuthAlgorithm   string   `yaml:"domain-auth-algorithm"`
+	DomainKeyID           uint16   `yaml:"domain-key-id"`
 	// LSDBEntryLimit caps the number of LSPs held per level as a
 	// defense-in-depth guard against LSDB exhaustion; zero or negative
 	// disables the cap. Size it well above the legitimate area's LSP count.
@@ -112,10 +116,12 @@ type CircuitConfig struct {
 	Metric    uint32 `yaml:"metric"`
 	// HelloPassword enables HMAC authentication of hellos. The algorithm
 	// defaults to HMAC-MD5 (RFC 5304); hello-auth-algorithm selects an HMAC-SHA
-	// variant (RFC 5310) with hello-key-id.
-	HelloPassword      string `yaml:"hello-password"`
-	HelloAuthAlgorithm string `yaml:"hello-auth-algorithm"`
-	HelloKeyID         uint16 `yaml:"hello-key-id"`
+	// variant (RFC 5310) with hello-key-id. hello-accept-passwords are extra
+	// keys accepted on received hellos, for a rotation without a flag day.
+	HelloPassword        string   `yaml:"hello-password"`
+	HelloAcceptPasswords []string `yaml:"hello-accept-passwords"`
+	HelloAuthAlgorithm   string   `yaml:"hello-auth-algorithm"`
+	HelloKeyID           uint16   `yaml:"hello-key-id"`
 }
 
 // Load reads and parses a configuration file.
@@ -220,14 +226,18 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		if err != nil {
 			return nil, fmt.Errorf("area-auth-algorithm: %w", err)
 		}
-		opts = append(opts, server.WithAreaAuth(server.AuthConfig{Algorithm: algo, KeyID: c.AreaKeyID, Secret: c.AreaPassword}))
+		opts = append(opts, server.WithAreaAuth(server.AuthConfig{
+			Algorithm: algo, KeyID: c.AreaKeyID, Secret: c.AreaPassword, AcceptSecrets: c.AreaAcceptPasswords,
+		}))
 	}
 	if c.DomainPassword != "" {
 		algo, err := authAlgorithm(c.DomainAuthAlgorithm)
 		if err != nil {
 			return nil, fmt.Errorf("domain-auth-algorithm: %w", err)
 		}
-		opts = append(opts, server.WithDomainAuth(server.AuthConfig{Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword}))
+		opts = append(opts, server.WithDomainAuth(server.AuthConfig{
+			Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword, AcceptSecrets: c.DomainAcceptPasswords,
+		}))
 	}
 	open := c.OpenCircuit
 	if open == nil {
@@ -311,18 +321,19 @@ func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.A
 		return server.CircuitConfig{}, err
 	}
 	return server.CircuitConfig{
-		Name:               cc.Interface,
-		Transport:          tr,
-		P2P:                cc.P2P,
-		Level1:             l1,
-		Level2:             l2,
-		Priority:           cc.Priority,
-		Metric:             cc.Metric,
-		IPv4Addrs:          v4,
-		IPv6Addrs:          v6,
-		HelloPassword:      cc.HelloPassword,
-		HelloAuthAlgorithm: helloAlgo,
-		HelloKeyID:         cc.HelloKeyID,
+		Name:                 cc.Interface,
+		Transport:            tr,
+		P2P:                  cc.P2P,
+		Level1:               l1,
+		Level2:               l2,
+		Priority:             cc.Priority,
+		Metric:               cc.Metric,
+		IPv4Addrs:            v4,
+		IPv6Addrs:            v6,
+		HelloPassword:        cc.HelloPassword,
+		HelloAcceptPasswords: cc.HelloAcceptPasswords,
+		HelloAuthAlgorithm:   helloAlgo,
+		HelloKeyID:           cc.HelloKeyID,
 	}, nil
 }
 
