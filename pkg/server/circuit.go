@@ -22,10 +22,13 @@ type circuit struct {
 
 	// Flooding flags per level (ISO 10589 7.3): srm[level][lspid] holds the
 	// earliest time to (re)send that LSP on this circuit; ssn[level][lspid]
-	// marks an LSP to report in the next PSNP. nextCSNP drives periodic
-	// CSNP transmission when this circuit is the DIS.
+	// marks an LSP to report in the next PSNP. ssnAck holds the header to
+	// report for an SSN entry the database has no copy of; it is a subset of
+	// ssn. nextCSNP drives periodic CSNP transmission when this circuit is
+	// the DIS.
 	srm      map[packet.Level]map[packet.LSPID]time.Time
 	ssn      map[packet.Level]map[packet.LSPID]bool
+	ssnAck   map[packet.Level]map[packet.LSPID]packet.LSPEntry
 	nextCSNP map[packet.Level]time.Time
 }
 
@@ -38,12 +41,14 @@ func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circui
 		dis:          map[packet.Level]packet.NodeID{},
 		srm:          map[packet.Level]map[packet.LSPID]time.Time{},
 		ssn:          map[packet.Level]map[packet.LSPID]bool{},
+		ssnAck:       map[packet.Level]map[packet.LSPID]packet.LSPEntry{},
 		nextCSNP:     map[packet.Level]time.Time{},
 	}
 	for _, l := range cfg.levels() {
 		c.adjs[l] = map[packet.SystemID]*adjacency{}
 		c.srm[l] = map[packet.LSPID]time.Time{}
 		c.ssn[l] = map[packet.LSPID]bool{}
+		c.ssnAck[l] = map[packet.LSPID]packet.LSPEntry{}
 	}
 	return c
 }
@@ -69,8 +74,22 @@ func (c *circuit) setSSN(level packet.Level, id packet.LSPID) {
 	}
 }
 
+// setSSNAck marks an LSP to be reported in the next PSNP with the given
+// header verbatim, for an LSP the database does not hold and so cannot
+// describe.
+func (c *circuit) setSSNAck(level packet.Level, e packet.LSPEntry) {
+	if m := c.ssnAck[level]; m != nil {
+		m[e.LSPID] = e
+		c.setSSN(level, e.LSPID)
+	}
+}
+
 func (c *circuit) clearSSN(level packet.Level, id packet.LSPID) {
 	if m := c.ssn[level]; m != nil {
+		delete(m, id)
+	}
+	// ssnAck is a subset of ssn, so the two are always cleared together.
+	if m := c.ssnAck[level]; m != nil {
 		delete(m, id)
 	}
 }

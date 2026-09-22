@@ -97,6 +97,24 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		return
 	}
 
+	if ex == nil && lsp.RemainingTime == 0 {
+		// A purge for an LSP ID we do not hold is never entered into the
+		// database (ISO 10589 7.3.16.4 a): on p2p acknowledge it so the sender
+		// stops retransmitting, on a LAN ignore it. Storing it would let an
+		// attacker fill the database (see WithLSDBEntryLimit) with purges for
+		// LSPs that never existed.
+		s.logger.Debug("ignore purge for unknown LSP", "circuit", c.cfg.Name, "level", level, "lsp", id)
+		if c.cfg.P2P {
+			c.setSSNAck(level, packet.LSPEntry{
+				LSPID:          id,
+				SequenceNumber: lsp.SequenceNumber,
+				RemainingTime:  0,
+				Checksum:       lsp.Checksum(),
+			})
+		}
+		return
+	}
+
 	if s.ownsLSP(level, id) {
 		// Someone advanced (or purged) one of our own LSPs; re-originate
 		// with a higher sequence number to reclaim it.
@@ -222,12 +240,13 @@ func (s *IsisServer) transmitPSNP(c *circuit, level packet.Level, now time.Time)
 	db := s.dbs[level]
 	var entries []packet.LSPEntry
 	for id := range c.ssn[level] {
-		e := db.get(id)
 		entry := packet.LSPEntry{LSPID: id}
-		if e != nil {
+		if e := db.get(id); e != nil {
 			entry.RemainingTime = e.remaining(now)
 			entry.SequenceNumber = e.lsp.SequenceNumber
 			entry.Checksum = e.lsp.Checksum()
+		} else if ack, ok := c.ssnAck[level][id]; ok {
+			entry = ack
 		}
 		entries = append(entries, entry)
 		c.clearSSN(level, id)
