@@ -139,3 +139,187 @@ func TestProcessPSNPLANRequest(t *testing.T) {
 		t.Error("LAN PSNP request (we hold newer): expected SRM set")
 	}
 }
+
+// collectCSNPs runs sendCSNP with a second transport on the circuit's segment
+// and returns every CSNP it emitted, together with each one's wire length.
+func collectCSNPs(t *testing.T, s *IsisServer, c *circuit, now time.Time) ([]*packet.CSNP, []int) {
+	t.Helper()
+	sink := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
+	datalink.Link(c.cfg.Transport.(*datalink.MockTransport), sink)
+	s.sendCSNP(c, packet.Level2, now)
+	// Buffered frames still drain from a closed inbox; Recv reports ErrClosed
+	// once they are gone, which ends the loop.
+	_ = sink.Close()
+
+	var (
+		csnps []*packet.CSNP
+		sizes []int
+	)
+	for {
+		f, err := sink.Recv()
+		if err != nil {
+			return csnps, sizes
+		}
+		pdu, err := packet.DecodePDU(f.PDU)
+		if err != nil {
+			t.Fatalf("decode emitted PDU: %v", err)
+		}
+		csnp, ok := pdu.(*packet.CSNP)
+		if !ok {
+			t.Fatalf("expected a CSNP, got %T", pdu)
+		}
+		csnps = append(csnps, csnp)
+		sizes = append(sizes, len(f.PDU))
+	}
+}
+
+func csnpEntries(csnp *packet.CSNP) []packet.LSPEntry {
+	var out []packet.LSPEntry
+	for _, tlv := range csnp.TLVs {
+		if le, ok := tlv.(*packet.LSPEntriesTLV); ok {
+			out = append(out, le.Entries...)
+		}
+	}
+	return out
+}
+
+// fillLSDB installs n entries whose LSP IDs are spread over the ID space in an
+// order unrelated to insertion, so a CSNP split that did not sort would produce
+// overlapping ranges.
+func fillLSDB(s *IsisServer, n int, now time.Time) map[packet.LSPID]bool {
+	want := map[packet.LSPID]bool{}
+	for i := 0; i < n; i++ {
+		// The low two octets encode i, which keeps the IDs distinct; the high
+		// octets scramble the ordering.
+		id := packet.LSPID{byte(i * 37 % 251), byte(i * 11 % 241), 0, 0, 0, 0, byte(i / 256), byte(i % 256)}
+		putEntry(s, id, uint32(i+1), 1000, now)
+		want[id] = true
+	}
+	return want
+}
+
+// TestSendCSNPSplitsDatabaseIntoContiguousInBudgetRanges guarantees that a
+// database too large for one PDU is advertised as several CSNPs that each fit
+// the architectural receive buffer, whose ranges tile the whole LSP-ID space
+// without gaps or overlap, and that every entry is advertised exactly once
+// inside the range of the CSNP carrying it.
+func TestSendCSNPSplitsDatabaseIntoContiguousInBudgetRanges(t *testing.T) {
+	now := time.Now()
+	s, c := snpServer(t, false)
+	want := fillLSDB(s, 300, now)
+
+	csnps, sizes := collectCSNPs(t, s, c, now)
+	if len(csnps) < 2 {
+		t.Fatalf("300 LSPs: expected several CSNPs, got %d", len(csnps))
+	}
+
+	var all packet.LSPID
+	for i := range all {
+		all[i] = 0xff
+	}
+	if csnps[0].StartLSP != (packet.LSPID{}) {
+		t.Errorf("first CSNP starts at %v, want all-zero", csnps[0].StartLSP)
+	}
+	if csnps[len(csnps)-1].EndLSP != all {
+		t.Errorf("last CSNP ends at %v, want all-0xff", csnps[len(csnps)-1].EndLSP)
+	}
+
+	seen := map[packet.LSPID]int{}
+	for i, csnp := range csnps {
+		if sizes[i] > packet.ReceiveLSPBufferSize {
+			t.Errorf("CSNP %d is %d octets, over the %d receive buffer", i, sizes[i], packet.ReceiveLSPBufferSize)
+		}
+		if i > 0 && csnp.StartLSP != nextLSPID(csnps[i-1].EndLSP) {
+			t.Errorf("CSNP %d starts at %v, want previous end %v + 1", i, csnp.StartLSP, csnps[i-1].EndLSP)
+		}
+		for _, e := range csnpEntries(csnp) {
+			if !inRange(e.LSPID, csnp.StartLSP, csnp.EndLSP) {
+				t.Errorf("CSNP %d advertises %v outside [%v, %v]", i, e.LSPID, csnp.StartLSP, csnp.EndLSP)
+			}
+			seen[e.LSPID]++
+		}
+	}
+	for id := range want {
+		if seen[id] != 1 {
+			t.Errorf("LSP %v advertised %d times, want exactly 1", id, seen[id])
+		}
+	}
+	for id := range seen {
+		if !want[id] {
+			t.Errorf("CSNPs advertise unknown LSP %v", id)
+		}
+	}
+}
+
+// TestSendCSNPFitsBudgetWhenAuthenticated guarantees the split reserves room
+// for the Authentication TLV sendSNP appends, so an authenticated level's
+// CSNPs still fit the receive buffer.
+func TestSendCSNPFitsBudgetWhenAuthenticated(t *testing.T) {
+	now := time.Now()
+	cfg := CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(cfg),
+		WithDomainPassword("k"),
+	)
+	fillLSDB(s, 300, now)
+
+	csnps, sizes := collectCSNPs(t, s, s.circuits[0], now)
+	if len(csnps) < 2 {
+		t.Fatalf("300 LSPs: expected several CSNPs, got %d", len(csnps))
+	}
+	for i, csnp := range csnps {
+		if sizes[i] > packet.ReceiveLSPBufferSize {
+			t.Errorf("CSNP %d is %d octets, over the %d receive buffer", i, sizes[i], packet.ReceiveLSPBufferSize)
+		}
+		authed := false
+		for _, tlv := range csnp.TLVs {
+			if _, ok := tlv.(*packet.AuthenticationTLV); ok {
+				authed = true
+			}
+		}
+		if !authed {
+			t.Errorf("CSNP %d carries no Authentication TLV", i)
+		}
+	}
+}
+
+// TestSendCSNPEmptyDatabaseAdvertisesTheWholeRange guarantees an empty database
+// still produces one CSNP covering every LSP ID, which is what tells a peer
+// holding LSPs we lack to send them.
+func TestSendCSNPEmptyDatabaseAdvertisesTheWholeRange(t *testing.T) {
+	now := time.Now()
+	s, c := snpServer(t, false)
+
+	csnps, _ := collectCSNPs(t, s, c, now)
+	if len(csnps) != 1 {
+		t.Fatalf("empty database: got %d CSNPs, want 1", len(csnps))
+	}
+	var all packet.LSPID
+	for i := range all {
+		all[i] = 0xff
+	}
+	if csnps[0].StartLSP != (packet.LSPID{}) || csnps[0].EndLSP != all {
+		t.Errorf("empty database CSNP covers [%v, %v], want the whole range", csnps[0].StartLSP, csnps[0].EndLSP)
+	}
+	if n := len(csnpEntries(csnps[0])); n != 0 {
+		t.Errorf("empty database CSNP advertises %d entries, want none", n)
+	}
+}
+
+// TestNextLSPIDCarriesAcrossOctets guarantees the range-boundary increment
+// treats the LSP ID as one 8-octet unsigned integer.
+func TestNextLSPIDCarriesAcrossOctets(t *testing.T) {
+	for _, tc := range []struct {
+		in, want packet.LSPID
+	}{
+		{packet.LSPID{}, packet.LSPID{0, 0, 0, 0, 0, 0, 0, 1}},
+		{packet.LSPID{1, 2, 3, 4, 5, 6, 7, 0xff}, packet.LSPID{1, 2, 3, 4, 5, 6, 8, 0}},
+		{packet.LSPID{1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, packet.LSPID{2, 0, 0, 0, 0, 0, 0, 0}},
+	} {
+		if got := nextLSPID(tc.in); got != tc.want {
+			t.Errorf("nextLSPID(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
