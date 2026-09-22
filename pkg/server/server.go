@@ -57,6 +57,7 @@ type IsisServer struct {
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
 	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
 	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
+	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 }
 
 // spfHold is the SPF back-off interval (RFC 8405): after a recompute, further
@@ -162,6 +163,22 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 				s.dbs[l] = newLSDB(l)
 			}
 		}
+	}
+	// Size our own LSPs so every circuit can actually transmit them. A
+	// fragment a circuit cannot send is retried forever and its content never
+	// reaches that peer, and a transit node cannot re-fragment what it
+	// receives, so the sizing has to happen here, at origination.
+	s.lspBufferSize = packet.ReceiveLSPBufferSize
+	if o.lspMTU > 0 && o.lspMTU < s.lspBufferSize {
+		s.lspBufferSize = o.lspMTU
+	}
+	for _, c := range s.circuits {
+		if mtu := c.cfg.Transport.MTU() - 3; mtu < s.lspBufferSize { // 3 = LLC header
+			s.lspBufferSize = mtu
+		}
+	}
+	if s.lspBufferSize < minLSPMTU {
+		return nil, fmt.Errorf("goisis: LSP MTU %d is below the %d-octet minimum", s.lspBufferSize, minLSPMTU)
 	}
 	return s, nil
 }

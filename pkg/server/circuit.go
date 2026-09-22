@@ -35,6 +35,8 @@ type circuit struct {
 	ssn      map[packet.Level]map[packet.LSPID]bool
 	ssnAck   map[packet.Level]map[packet.LSPID]packet.LSPEntry
 	nextCSNP map[packet.Level]time.Time
+
+	oversizeWarned bool // an LSP too large for this circuit was already logged
 }
 
 func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circuit {

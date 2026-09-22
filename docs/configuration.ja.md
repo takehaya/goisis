@@ -11,6 +11,7 @@
 | `hostname` | string | LSP で広報する動的ホスト名(RFC 5301)。 |
 | `fib` | bool | 計算した経路を `proto isis` タグでカーネル FIB に書き込む。`CAP_NET_ADMIN` が必要。デフォルト `false`(コントロールプレーンのみ)。 |
 | `overload-on-startup` | duration | 起動後この時間だけオーバーロードビットを立て、その後解除する(例 `30s`)。立っている間、ピアはこのノードを経由する中継トラフィックを流さない。 |
+| `lsp-mtu` | int | このノードが生成する LSP の最大サイズ。デフォルトは最小のサーキット MTU から LLC ヘッダを引いた値(上限 1492)。 |
 | `area-password` | string | Level-1 の LSP/SNP をこの鍵で認証。 |
 | `area-accept-passwords` | string のリスト | 受信した Level-1 LSP/SNP で追加で受け付ける鍵(アルゴリズムと鍵 ID は同じ)。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
 | `area-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `area-password md5`)/ `sha1`/`sha256`/`sha384`/`sha512`(RFC 5310)。 |

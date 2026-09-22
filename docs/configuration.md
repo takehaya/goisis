@@ -11,6 +11,7 @@ options. ([日本語](configuration.ja.md))
 | `hostname` | string | Dynamic hostname advertised in LSPs (RFC 5301). |
 | `fib` | bool | Program computed routes into the Linux kernel FIB tagged `proto isis`. Requires `CAP_NET_ADMIN`. Default `false` (control-plane only). |
 | `overload-on-startup` | duration | Set the overload bit for this long after startup, then clear it (e.g. `30s`). While set, peers route no transit traffic through this node. |
+| `lsp-mtu` | int | Maximum size of LSPs this node originates; defaults to the smallest circuit MTU minus the LLC header, capped at 1492. |
 | `area-password` | string | Authenticate Level-1 LSPs and SNPs with this key. |
 | `area-accept-passwords` | list of string | Extra keys accepted on received Level-1 LSPs and SNPs (same algorithm and key ID); never used to sign. See [Key rotation](#key-rotation). |
 | `area-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `area-password md5`), or `sha1`/`sha256`/`sha384`/`sha512` (RFC 5310). |

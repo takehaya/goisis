@@ -205,9 +205,10 @@ Two invariants matter beyond the codec:
   LSPs and expired foreign ones.
 - **Origination.** Own LSPs are rebuilt from config + adjacency state and
   compared against the stored copy — unchanged content is not re-flooded.
-  TLV sets that exceed the 1492-byte LSP buffer are packed by serialized
-  size into fragment 0 plus spill fragments 1..255; stale fragments are
-  purged when the set shrinks.
+  TLV sets that exceed the LSP buffer — 1492 bytes, or less when the
+  circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
+  fragment 0 plus spill fragments 1..255; stale fragments are purged when the
+  set shrinks.
 - **SPF.** Dijkstra per `(level, algorithm)` over a topology built from the
   LSDB, with the ISO two-way connectivity check, pseudonode zero-cost edges,
   overload-bit transit avoidance, 64-bit metric accumulation with an
