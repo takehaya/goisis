@@ -2,9 +2,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -32,7 +35,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:      true,
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
-	cmd.PersistentFlags().StringVarP(&addr, "addr", "u", "http://127.0.0.1:50051", "goisisd API base URL")
+	cmd.PersistentFlags().StringVarP(&addr, "addr", "u", "http://127.0.0.1:50051", "goisisd API base URL, or unix:///absolute/path for a unix socket")
 	cmd.AddCommand(
 		newGlobalCmd(&addr),
 		newCircuitCmd(&addr),
@@ -48,7 +51,32 @@ func newRootCmd() *cobra.Command {
 }
 
 func newClient(addr string) goisisv1connect.IsisServiceClient {
-	return goisisv1connect.NewIsisServiceClient(http.DefaultClient, addr)
+	httpClient, baseURL, err := newHTTPClient(addr)
+	if err != nil {
+		// Every command builds its client inline, so there is no earlier
+		// place to return this; let the first RPC fail on the raw address.
+		httpClient, baseURL = http.DefaultClient, addr
+	}
+	return goisisv1connect.NewIsisServiceClient(httpClient, baseURL)
+}
+
+// newHTTPClient returns the transport for addr and the base URL to give the
+// Connect client. For a "unix://" address every request is dialled over the
+// socket path, so the base URL only has to be a well-formed placeholder.
+func newHTTPClient(addr string) (*http.Client, string, error) {
+	path, ok := strings.CutPrefix(addr, "unix://")
+	if !ok {
+		return http.DefaultClient, addr, nil
+	}
+	if !filepath.IsAbs(path) {
+		return nil, "", fmt.Errorf("unix socket path must be absolute: %q", addr)
+	}
+	var d net.Dialer
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return d.DialContext(ctx, "unix", path)
+		},
+	}}, "http://unix", nil
 }
 
 func levelStr(l goisisv1.Level) string {

@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +32,7 @@ import (
 )
 
 func main() {
-	apiListen := flag.String("api-listen", "127.0.0.1:50051", "listen address for the Connect/gRPC API")
+	apiListen := flag.String("api-listen", "127.0.0.1:50051", "listen address for the Connect/gRPC API: host:port, or unix:///absolute/path for a unix socket")
 	apiAllowRemote := flag.Bool("api-allow-remote", false, "allow binding the API beyond loopback; the API has no authentication or TLS, so it must be protected externally (firewall, network isolation)")
 	configFile := flag.String("f", "", "path to the configuration file")
 	flag.Parse()
@@ -44,13 +46,66 @@ func main() {
 	}
 }
 
+// parseAPIListen splits the -api-listen value into arguments for net.Listen.
+// A "unix://" URL selects a unix socket; the path must be absolute, since a
+// relative one would resolve against the daemon's working directory and leave
+// clients guessing where the socket landed.
+func parseAPIListen(addr string) (network, address string, err error) {
+	path, ok := strings.CutPrefix(addr, "unix://")
+	if !ok {
+		return "tcp", addr, nil
+	}
+	if !filepath.IsAbs(path) {
+		return "", "", fmt.Errorf("unix socket path must be absolute: %q", addr)
+	}
+	return "unix", path, nil
+}
+
+// listenAPI binds the management API. A unix socket is created with group-only
+// permissions: filesystem permissions are the sole access control an
+// unauthenticated API has. A socket left behind by a crash is removed first,
+// but only when it really is a socket, so a mistyped path cannot delete data.
+func listenAPI(addr string) (net.Listener, error) {
+	network, address, err := parseAPIListen(addr)
+	if err != nil {
+		return nil, err
+	}
+	if network == "unix" {
+		if fi, err := os.Stat(address); err == nil {
+			if fi.Mode()&os.ModeSocket == 0 {
+				return nil, fmt.Errorf("refusing to replace %s: not a socket", address)
+			}
+			if err := os.Remove(address); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// net.Listen unlinks the socket again on Close, so shutdown needs no
+	// cleanup of its own.
+	ln, err := net.Listen(network, address)
+	if err != nil {
+		return nil, err
+	}
+	if network == "unix" {
+		if err := os.Chmod(address, 0o660); err != nil {
+			_ = ln.Close()
+			return nil, err
+		}
+	}
+	return ln, nil
+}
+
 // nonLoopbackAPI reports whether the API listen address is reachable from off
 // the host. The Connect/gRPC API is unauthenticated plaintext h2c, so binding
 // it beyond loopback (a specific external IP, or 0.0.0.0/:: for all interfaces)
 // exposes routing state and requires the explicit -api-allow-remote opt-in. A
 // hostname or an unparseable address is left to the operator's judgment.
 func nonLoopbackAPI(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
+	network, address, err := parseAPIListen(addr)
+	if err != nil || network != "tcp" {
+		return false // a unix socket is reachable only from this host
+	}
+	host, _, err := net.SplitHostPort(address)
 	if err != nil || host == "" {
 		return false
 	}
@@ -111,10 +166,14 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	defer cancelReq()
 	httpServer := &http.Server{
-		Addr:        apiListen,
 		Handler:     mux,
 		Protocols:   protocols,
 		BaseContext: func(net.Listener) context.Context { return reqCtx },
+	}
+
+	listener, err := listenAPI(apiListen)
+	if err != nil {
+		return err
 	}
 
 	if nonLoopbackAPI(apiListen) {
@@ -134,7 +193,7 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 		return isis.Serve(serveCtx)
 	})
 	g.Go(func() error {
-		if err := httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil

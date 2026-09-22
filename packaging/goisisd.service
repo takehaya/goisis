@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/goisisd -f /etc/goisis/goisisd.yaml
+ExecStart=/usr/local/bin/goisisd -f /etc/goisis/goisisd.yaml -api-listen unix:///run/goisis/goisisd.sock
 Restart=on-failure
 RestartSec=2
 
@@ -17,7 +17,13 @@ AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
 
-# Hardening.
+# The management API is unauthenticated plaintext, so under systemd it is bound
+# to a unix socket in /run/goisis, where the directory mode is the access
+# control. The bare binary keeps its TCP loopback default.
+RuntimeDirectory=goisis
+RuntimeDirectoryMode=0750
+
+# Hardening. RuntimeDirectory is writable without a ReadWritePaths entry.
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/log
