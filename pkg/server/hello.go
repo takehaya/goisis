@@ -278,6 +278,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.levels.add(level)
 	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
 	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
+	adj.nlpids = nlpidsOf(h.TLVs)
 
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
@@ -364,6 +365,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	adj.state = newState
 	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
 	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
+	adj.nlpids = nlpidsOf(h.TLVs)
 	if three != nil && three.HasLocal {
 		adj.neighborExtCircID = three.ExtLocalCircuitID
 	}
@@ -461,6 +463,18 @@ func ipv4AddrsOf(tlvs []packet.TLV) []netip.Addr {
 	for _, t := range tlvs {
 		if a, ok := t.(*packet.IPInterfaceAddressesTLV); ok {
 			return a.Addresses
+		}
+	}
+	return nil
+}
+
+// nlpidsOf returns the NLPIDs the sender routes, or nil when the hello omits
+// TLV 129. RFC 1195 3.1 makes it mandatory, but a missing TLV is treated as
+// "unknown" rather than "routes nothing" so a lax peer still gets next hops.
+func nlpidsOf(tlvs []packet.TLV) []byte {
+	for _, t := range tlvs {
+		if p, ok := t.(*packet.ProtocolsSupportedTLV); ok {
+			return p.NLPIDs
 		}
 	}
 	return nil

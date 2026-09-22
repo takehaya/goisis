@@ -51,6 +51,10 @@ type adjacency struct {
 	// resolve SPF next-hop gateways. IPv6 are link-local.
 	neighborIPv4 []netip.Addr
 	neighborIPv6 []netip.Addr
+
+	// NLPIDs the neighbor routes (TLV 129, RFC 1195 3.1); nil when the hello
+	// carried no such TLV.
+	nlpids []byte
 }
 
 // AdjacencyInfo is an exported snapshot of an adjacency.
