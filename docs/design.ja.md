@@ -63,7 +63,7 @@ flowchart LR
 | `pkg/datalink` | サーキットのトランスポート: Linux では AF_PACKET、テスト用にレース安全なモック。 |
 | `pkg/server` | インスタンス本体: 管理ループ、隣接 FSM、LSDB/フラッディング、SPF、RIB、生成、Connect ハンドラ、Flex-Algo。 |
 | `pkg/fib` | `FIB` インターフェース + netlink 実装（`proto isis` の経路と seg6local End SID）。 |
-| `pkg/config` | YAML → サーバーオプション。 |
+| `pkg/config` | YAML → サーバーオプション。アドレス/リンク変更を流し込む netlink watcher も。 |
 | `pkg/metrics` | `server.Metrics` の Prometheus アダプタ（`client_golang` をリンクする唯一のパッケージ）。 |
 
 ## スレッドモデル
@@ -117,6 +117,13 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
   の自 LSP 再生成のドレイン、LSP のエージング/リフレッシュ、SRM/SSN 再送、
   自分が DIS のサーキットでの周期 CSNP、ローカル SID の再アサート、ゲージ
   発行。
+- **インタフェースイベント。** アドレスと直結サブネットは起動時に一度読む
+  だけではありません。デーモンは netlink のアドレス/リンク変更を購読し
+  （`pkg/config.WatchInterfaces`）、管理操作として流し込みます — 付け替えは
+  `SetCircuitAddresses`、キャリアは `SetCircuitLinkState` です。リンクダウン
+  が報告されたサーキットは、隣接のホールドタイム満了を待たずに即座に隣接を
+  落とします。コアは netlink に依存しないままです: watcher はデーモン側の
+  パッケージにあり、組み込み利用者はイベント源を自分で持ちます。
 
 ### バックプレッシャーなしのファンアウト
 

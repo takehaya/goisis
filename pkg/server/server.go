@@ -63,6 +63,13 @@ type IsisServer struct {
 	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
 	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
+
+	// circuitPrefixes records which connected prefixes each circuit
+	// contributed (keyed by circuit name) and optionPrefixes those that came
+	// from options; together they say who still needs a prefix when a circuit's
+	// addresses change. See SetCircuitAddresses.
+	circuitPrefixes map[string][]netip.Prefix
+	optionPrefixes  map[netip.Prefix]bool
 }
 
 // spfHold is the SPF back-off interval (RFC 8405): after a recompute, further
@@ -110,6 +117,8 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		fibFilter:         o.fibFilter,
 		lsdbEntryLimit:    o.lsdbEntryLimit,
 		lsdbLimitWarned:   map[packet.Level]bool{},
+		circuitPrefixes:   map[string][]netip.Prefix{},
+		optionPrefixes:    map[netip.Prefix]bool{},
 	}
 	if spec := o.areaAuth.spec(); spec.on() {
 		s.authKeys[packet.Level1] = spec
@@ -125,6 +134,14 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	}
 	for _, p := range o.connected {
 		s.connected[p] = true
+	}
+	// Prefixes named by an option belong to the configuration, not to a
+	// circuit: a circuit whose addresses later change must leave them alone.
+	for _, p := range o.prefixes {
+		s.optionPrefixes[p.Prefix.Masked()] = true
+	}
+	for _, p := range o.connected {
+		s.optionPrefixes[p] = true
 	}
 	participated := map[uint8]bool{}
 	for _, fa := range o.flexAlgos {
@@ -162,6 +179,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		// per box; the 1-based circuit index serves both.
 		c := newCircuit(cfg, uint8(i+1), uint32(i+1)) //nolint:gosec // bounded by the 255 check above
 		s.circuits = append(s.circuits, c)
+		s.addCircuitPrefixes(cfg.Name, cfg.Metric, cfg.ConnectedPrefixes)
 		for _, l := range cfg.levels() {
 			s.levelCap.add(l)
 			if s.dbs[l] == nil {

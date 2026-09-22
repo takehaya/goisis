@@ -290,19 +290,13 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Advertise the circuit's connected subnets, but marked connected so we
+		// never install a neighbor's copy over the kernel's connected route
+		// (which would break next-hop reachability). They ride on the circuit
+		// rather than on standalone options so that a runtime address change
+		// (WatchInterfaces) can withdraw exactly this circuit's subnets.
+		cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
 		opts = append(opts, server.WithCircuit(cfg))
-		// Advertise the circuit's connected subnets at the circuit's effective
-		// metric (the default is applied here too, since server-side defaulting
-		// runs later and only on the circuit's IS-reachability), but mark them
-		// connected so we never install a neighbor's copy over the kernel's
-		// connected route (which would break next-hop reachability).
-		metric := cc.Metric
-		if metric == 0 {
-			metric = server.DefaultMetric
-		}
-		for _, p := range connectedPrefixes(cc.Interface) {
-			opts = append(opts, server.WithAdvertisedPrefix(p, metric), server.WithConnectedPrefix(p))
-		}
 	}
 	return opts, nil
 }

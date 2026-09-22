@@ -130,8 +130,10 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 		server.WithLogger(logger),
 		server.WithMetrics(metrics.NewPrometheus(reg)),
 	}
+	var cfg *config.Config
 	if configFile != "" {
-		cfg, err := config.Load(configFile)
+		var err error
+		cfg, err = config.Load(configFile)
 		if err != nil {
 			return err
 		}
@@ -192,6 +194,14 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 	g.Go(func() error {
 		return isis.Serve(serveCtx)
 	})
+	if cfg != nil {
+		// Follow interface address and link changes for the configured
+		// circuits. A failure to subscribe is fatal: a daemon that silently
+		// ignores link events looks healthy until the next cable pull.
+		g.Go(func() error {
+			return config.WatchInterfaces(gctx, isis, cfg, logger)
+		})
+	}
 	g.Go(func() error {
 		if err := httpServer.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			return err
