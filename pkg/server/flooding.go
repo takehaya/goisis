@@ -342,6 +342,22 @@ func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 	flush(end) // the last CSNP ends at ff...ff, so the ranges cover everything
 }
 
+// syncCircuitLevel hands the whole database at a level to the neighbor of a
+// point-to-point circuit that has just become usable there: SRM for every LSP
+// we hold (ISO 10589 7.3.17) plus a CSNP describing the database (7.3.15.1),
+// which also draws out LSPs the neighbor holds and we do not. A p2p circuit
+// has no periodic CSNP — only the DIS of a LAN sends one, see floodTransmit —
+// so without this an LSP already in the database when the link came up would
+// never reach that neighbor.
+func (s *IsisServer) syncCircuitLevel(c *circuit, level packet.Level, now time.Time) {
+	for id := range s.dbs[level].entries {
+		// Purged entries included: a neighbor that missed the purge would
+		// otherwise keep the dead LSP until it aged out.
+		c.setSRM(level, id, now)
+	}
+	s.sendCSNP(c, level, now)
+}
+
 // nextLSPID returns id + 1 read as an 8-octet unsigned integer: the start of
 // the range following one that ends at id. Overflow at ff...ff cannot happen,
 // because that value only ever ends the final range.

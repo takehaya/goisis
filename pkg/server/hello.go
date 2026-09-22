@@ -372,6 +372,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	// (e.g. the neighbor reconfigured its circuit type): otherwise our own LSP
 	// would keep advertising IS reachability for a level the peer dropped.
 	if prev != newState || (newState == AdjUp && prevLevels != common) {
+		now := time.Now()
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {
@@ -388,7 +389,16 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 			}
 		}
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
-		s.regenerateLSPs(false, time.Now())
+		s.regenerateLSPs(false, now)
+		// Every level that just became usable is synchronized from scratch
+		// (ISO 10589 7.3.17); a level already Up keeps the flags it has.
+		if newState == AdjUp {
+			for _, l := range common.levels() {
+				if prev != AdjUp || !prevLevels.has(l) {
+					s.syncCircuitLevel(c, l, now)
+				}
+			}
+		}
 	}
 }
 
