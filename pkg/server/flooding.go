@@ -140,6 +140,21 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		delete(s.lsdbLimitWarned, level) // headroom again: re-arm the warning
 	}
 
+	if id.NodeID().SystemID() == s.systemID && lsp.RemainingTime != 0 {
+		// Our System ID, but an LSP we do not originate: a pseudonode LSP for
+		// a circuit where we are not (or no longer) the DIS, or for a
+		// pseudonode number matching none of our circuits. Purge it rather
+		// than keep a stranger's claim about us alive (ISO 10589 7.3.16.4 c).
+		// A received purge is excluded: it is already dead, so the install
+		// path below propagates and acknowledges it as for any foreign LSP.
+		// Placed after the entry-limit check so forged LSPs naming us cannot
+		// grow the database past the cap.
+		e := &lspEntry{lsp: lsp}
+		db.entries[id] = e
+		s.expirePurge(level, id, e, now)
+		return
+	}
+
 	// Install the newer copy.
 	stored := make([]byte, len(raw))
 	copy(stored, raw)
