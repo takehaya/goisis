@@ -396,9 +396,17 @@ func (s *IsisServer) processCSNP(c *circuit, csnp *packet.CSNP, now time.Time) {
 }
 
 // processPSNP handles a PSNP: on p2p it acknowledges our LSPs (clearing SRM);
-// on a LAN the DIS treats listed entries as requests and re-sends newer copies.
+// on a LAN only the DIS treats listed entries as requests and re-sends newer
+// copies.
 func (s *IsisServer) processPSNP(c *circuit, psnp *packet.PSNP, now time.Time) {
 	level := psnp.Level
+	// ISO 10589 7.3.15.2 b): on a broadcast circuit a PSNP is a request aimed
+	// at the DIS, whose CSNPs carry the reliability. Were every system to act
+	// on it, one request would draw a retransmission from each holder of a
+	// newer copy.
+	if !c.cfg.P2P && !c.isDIS(level, s.systemID) {
+		return
+	}
 	db := s.dbs[level]
 	if db == nil {
 		return

@@ -125,7 +125,8 @@ func TestProcessPSNPLANRequest(t *testing.T) {
 	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
 	id := lspID(peer, 0)
 
-	s, c := snpServer(t, false) // LAN
+	s, c := snpServer(t, false)                               // LAN
+	c.dis[packet.Level2] = nodeID(s.systemID, c.pseudonodeID) // we are the DIS
 	putEntry(s, id, 5, 1000, now)
 
 	// LAN PSNP lists a stale copy -> DIS re-sends our newer one.
