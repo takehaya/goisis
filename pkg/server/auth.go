@@ -85,13 +85,14 @@ func (s *IsisServer) serializeLSP(lsp *packet.LSP) ([]byte, error) {
 
 // pduAuthOK verifies a received PDU's authentication for its level. With no key
 // configured for the level every PDU passes.
-func (s *IsisServer) pduAuthOK(raw []byte, pt packet.PDUType, level packet.Level, isLSP bool) bool {
+func (s *IsisServer) pduAuthOK(c *circuit, raw []byte, pt packet.PDUType, level packet.Level, isLSP bool) bool {
 	spec := s.authKey(level)
 	if !spec.on() {
 		return true
 	}
 	if !spec.verify(raw, packet.HeaderLen(pt), isLSP) {
 		s.logger.Debug("drop PDU failing authentication", "type", pt, "level", level)
+		s.metrics.PDUDrop(c.cfg.Name, dropAuth)
 		return false
 	}
 	return true

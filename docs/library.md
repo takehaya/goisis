@@ -154,7 +154,9 @@ routes yourself — see [`examples/watchroutes`](../examples/watchroutes)).
 ## Custom metrics
 
 Implement `server.Metrics` (`AdjacencyTransition`, `SPFRun`, `LSDBSize`,
-`FloodTx`) to feed your telemetry pipeline, or use the Prometheus adapter:
+`FloodTx`, `FIBPending`, `PDURx`, `PDUDrop`, `AdjacencyCount`, `RouteCount`,
+`FIBError`, `EventQueueDepth`) to feed your telemetry pipeline, or use the
+Prometheus adapter:
 
 ```go
 import "github.com/takehaya/goisis/pkg/metrics"

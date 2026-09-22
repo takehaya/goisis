@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/fib"
@@ -101,6 +102,20 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// neither loses the withdraw bookkeeping nor re-emits change events.
 	s.programFIB(next)
 	s.rib = next
+
+	// Report every (level, algorithm) this node computes, not just those that
+	// produced a route, so a level or Flex-Algo that loses its last route
+	// reports 0 instead of leaving a stale gauge behind.
+	counts := map[algoKey]int{}
+	for _, r := range next {
+		counts[algoKey{level: r.Level, algo: r.Algorithm}]++
+	}
+	for level := range s.dbs {
+		for _, algo := range algos {
+			key := algoKey{level: level, algo: algo}
+			s.metrics.RouteCount(levelLabel(level), strconv.Itoa(int(algo)), counts[key])
+		}
+	}
 
 	// ISO 10589 7.2.9 / RFC 1195 §3.1: an L1L2 IS advertises the prefixes
 	// reachable inside its Level-1 area in its Level-2 LSP. The regeneration
@@ -311,6 +326,7 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 			if s.fibInstalled[p] {
 				if err := s.fib.Withdraw(p); err != nil {
 					s.logger.Error("fib withdraw", "prefix", p, "error", err)
+					s.metrics.FIBError(fibOpWithdraw)
 				}
 				delete(s.fibInstalled, p)
 			}
@@ -326,6 +342,7 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 		}
 		if err := s.fib.Update(p, nhs); err != nil {
 			s.logger.Error("fib update", "prefix", p, "error", err)
+			s.metrics.FIBError(fibOpUpdate)
 			s.fibPending[p] = true // retry next recompute
 		} else {
 			delete(s.fibPending, p)
@@ -339,6 +356,7 @@ func (s *IsisServer) programFIB(next map[netip.Prefix]RouteInfo) {
 			if s.fibInstalled[p] {
 				if err := s.fib.Withdraw(p); err != nil {
 					s.logger.Error("fib withdraw", "prefix", p, "error", err)
+					s.metrics.FIBError(fibOpWithdraw)
 				}
 				delete(s.fibInstalled, p)
 			}

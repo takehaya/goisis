@@ -59,6 +59,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	// checksum and is exempt.
 	if lsp.RemainingTime != 0 && !packet.LSPChecksumValidRaw(raw) {
 		s.logger.Debug("drop LSP with invalid checksum", "circuit", c.cfg.Name, "lsp", id)
+		s.metrics.PDUDrop(c.cfg.Name, dropChecksum)
 		return
 	}
 
@@ -104,6 +105,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		// attacker fill the database (see WithLSDBEntryLimit) with purges for
 		// LSPs that never existed.
 		s.logger.Debug("ignore purge for unknown LSP", "circuit", c.cfg.Name, "level", level, "lsp", id)
+		s.metrics.PDUDrop(c.cfg.Name, dropUnknownPurge)
 		if c.cfg.P2P {
 			c.setSSNAck(level, packet.LSPEntry{
 				LSPID:          id,
@@ -118,6 +120,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	if s.ownsLSP(level, id) {
 		// Someone advanced (or purged) one of our own LSPs; re-originate
 		// with a higher sequence number to reclaim it.
+		s.metrics.PDUDrop(c.cfg.Name, dropOwnLSPReclaimed)
 		s.reoriginateOwn(level, id, lsp.SequenceNumber, now)
 		return
 	}
@@ -134,6 +137,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 			s.logger.Warn("drop LSP: database at entry limit; suppressing repeats",
 				"circuit", c.cfg.Name, "level", level, "lsp", id, "limit", s.lsdbEntryLimit)
 		}
+		s.metrics.PDUDrop(c.cfg.Name, dropLSDBLimit)
 		return
 	}
 	if ex == nil {
@@ -149,6 +153,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		// path below propagates and acknowledges it as for any foreign LSP.
 		// Placed after the entry-limit check so forged LSPs naming us cannot
 		// grow the database past the cap.
+		s.metrics.PDUDrop(c.cfg.Name, dropOwnSysIDPurge)
 		e := &lspEntry{lsp: lsp}
 		db.entries[id] = e
 		s.expirePurge(level, id, e, now)

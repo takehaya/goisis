@@ -18,6 +18,12 @@ type Prometheus struct {
 	lsdbSize       *prometheus.GaugeVec
 	floodTx        *prometheus.CounterVec
 	fibPending     prometheus.Gauge
+	pduRx          *prometheus.CounterVec
+	pduDrops       *prometheus.CounterVec
+	adjacencies    *prometheus.GaugeVec
+	routes         *prometheus.GaugeVec
+	fibErrors      *prometheus.CounterVec
+	eventQueue     prometheus.Gauge
 }
 
 // NewPrometheus creates the collectors and registers them in reg (e.g.
@@ -46,8 +52,33 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_fib_pending",
 			Help: "Number of routes whose last FIB write failed and are awaiting retry.",
 		}),
+		pduRx: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_pdu_rx_total",
+			Help: "Count of IS-IS PDUs received and successfully decoded.",
+		}, []string{"circuit", "type"}),
+		pduDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_pdu_drops_total",
+			Help: "Count of received IS-IS PDUs discarded, by reason.",
+		}, []string{"circuit", "reason"}),
+		adjacencies: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "goisis_adjacencies",
+			Help: "Number of adjacencies currently Up.",
+		}, []string{"circuit", "level"}),
+		routes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "goisis_routes",
+			Help: "Number of routes currently in the RIB.",
+		}, []string{"level", "algorithm"}),
+		fibErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_fib_errors_total",
+			Help: "Count of failed FIB writes, by operation.",
+		}, []string{"op"}),
+		eventQueue: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "goisis_event_queue_depth",
+			Help: "Number of received frames waiting to be handled by the management loop.",
+		}),
 	}
-	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.fibPending)
+	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.fibPending,
+		p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue)
 	return p
 }
 
@@ -74,6 +105,36 @@ func (p *Prometheus) FloodTx(circuit string) {
 // FIBPending implements server.Metrics.
 func (p *Prometheus) FIBPending(n int) {
 	p.fibPending.Set(float64(n))
+}
+
+// PDURx implements server.Metrics.
+func (p *Prometheus) PDURx(circuit, pduType string) {
+	p.pduRx.WithLabelValues(circuit, pduType).Inc()
+}
+
+// PDUDrop implements server.Metrics.
+func (p *Prometheus) PDUDrop(circuit, reason string) {
+	p.pduDrops.WithLabelValues(circuit, reason).Inc()
+}
+
+// AdjacencyCount implements server.Metrics.
+func (p *Prometheus) AdjacencyCount(circuit, level string, n int) {
+	p.adjacencies.WithLabelValues(circuit, level).Set(float64(n))
+}
+
+// RouteCount implements server.Metrics.
+func (p *Prometheus) RouteCount(level, algo string, n int) {
+	p.routes.WithLabelValues(level, algo).Set(float64(n))
+}
+
+// FIBError implements server.Metrics.
+func (p *Prometheus) FIBError(op string) {
+	p.fibErrors.WithLabelValues(op).Inc()
+}
+
+// EventQueueDepth implements server.Metrics.
+func (p *Prometheus) EventQueueDepth(n int) {
+	p.eventQueue.Set(float64(n))
 }
 
 var _ server.Metrics = (*Prometheus)(nil)

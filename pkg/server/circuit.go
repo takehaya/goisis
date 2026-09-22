@@ -203,6 +203,18 @@ func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) bool {
 	return false
 }
 
+// upAdjacencyCount returns the number of Up adjacencies at a level, counting
+// the single neighbor a p2p circuit keeps outside c.adjs.
+func (c *circuit) upAdjacencyCount(l packet.Level) int {
+	if c.cfg.P2P {
+		if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(l) {
+			return 1
+		}
+		return 0
+	}
+	return len(c.upAdjacencies(l))
+}
+
 // upAdjacencies returns the Up adjacencies at a level (broadcast).
 func (c *circuit) upAdjacencies(l packet.Level) []*adjacency {
 	var out []*adjacency
