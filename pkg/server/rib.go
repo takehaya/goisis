@@ -103,12 +103,12 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	s.rib = next
 
 	// ISO 10589 7.2.9 / RFC 1195 §3.1: an L1L2 IS advertises the prefixes
-	// reachable inside its Level-1 area in its Level-2 LSP. Re-originating marks
-	// dirty, so the next loop iteration recomputes; the export set is unchanged
+	// reachable inside its Level-1 area in its Level-2 LSP. The regeneration
+	// marks dirty, so a later iteration recomputes; the export set is unchanged
 	// then and the cascade stops after that one extra pass.
 	if export := s.l1ExportSet(merged); !maps.Equal(export, s.l1Export) {
 		s.l1Export = export
-		s.regenerateLSPs(false, now)
+		s.requestLSPRegen()
 	}
 }
 

@@ -38,19 +38,21 @@ type IsisServer struct {
 	done    chan struct{}
 
 	// The following are owned by the Serve loop after Serve starts.
-	circuits     []*circuit
-	dbs          map[packet.Level]*lsdb
-	levelCap     levelSet // union of circuit levels, for the LSP IS-Type field
-	fib          fib.FIB
-	metrics      Metrics
-	rib          map[netip.Prefix]RouteInfo
-	l1Export     map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
-	connected    map[netip.Prefix]bool   // directly-connected prefixes (never installed)
-	fibPending   map[netip.Prefix]bool   // routes whose last FIB write failed; retried
-	fibInstalled map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
-	spfDirty     bool                    // a topology change needs an SPF recompute
-	watchers     map[*watcher]struct{}   // WatchEvent subscribers
-	algoWarned   map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
+	circuits      []*circuit
+	dbs           map[packet.Level]*lsdb
+	levelCap      levelSet // union of circuit levels, for the LSP IS-Type field
+	fib           fib.FIB
+	metrics       Metrics
+	rib           map[netip.Prefix]RouteInfo
+	l1Export      map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
+	connected     map[netip.Prefix]bool   // directly-connected prefixes (never installed)
+	fibPending    map[netip.Prefix]bool   // routes whose last FIB write failed; retried
+	fibInstalled  map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
+	spfDirty      bool                    // a topology change needs an SPF recompute
+	lspGenPending bool                    // a protocol event asked for an own-LSP regeneration
+	nextLSPGen    time.Time               // earliest time drainLSPGen may honor that request
+	watchers      map[*watcher]struct{}   // WatchEvent subscribers
+	algoWarned    map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
@@ -268,6 +270,9 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 		case <-hold.C:
 			holding = false // leave HOLD; the check below picks up any change
 		}
+		// Coalesce the regenerations protocol events asked for, before the SPF
+		// check below, so an LSP generated here feeds the same recompute.
+		s.drainLSPGen(time.Now())
 		// Recompute routes promptly after a topology change, rather than
 		// waiting for the next housekeeping tick — then hold, so a burst
 		// spread over several iterations costs one more recompute, not one
@@ -411,6 +416,7 @@ func (s *IsisServer) housekeeping(now time.Time) {
 		s.logger.Info("clearing startup overload bit")
 		s.regenerateLSPs(false, now)
 	}
+	s.drainLSPGen(now)
 	s.ageLSPs(now)
 	s.refreshOwnLSPs(now)
 	s.floodTransmit(now)

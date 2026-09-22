@@ -37,6 +37,35 @@ func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 	s.markDirty()
 }
 
+// minLSPGenInterval is ISO 10589's minimumLSPGenerationInterval: the shortest
+// spacing between two event-driven re-originations. Without it a flapping
+// adjacency bumps our sequence number and floods a new LSP per flap. One
+// second, not the standard's 30 s default, because modern deployments expect
+// to converge in about that long — and it is the housekeeping tick, so a
+// pending request is drained there even when no further event arrives.
+const minLSPGenInterval = time.Second
+
+// requestLSPRegen asks for a regeneration at the next drain. Protocol events
+// go through here; an operator-driven mutation re-originates directly, since a
+// human asked and should see the answer immediately. The SPF flag is set right
+// away: an adjacency loss must withdraw routes through the dead neighbor now,
+// not when the coalesced LSP is finally built.
+func (s *IsisServer) requestLSPRegen() {
+	s.lspGenPending = true
+	s.markDirty()
+}
+
+// drainLSPGen runs a pending regeneration once minLSPGenInterval has elapsed
+// since the last one, so a burst of events costs one LSP rather than one each.
+func (s *IsisServer) drainLSPGen(now time.Time) {
+	if !s.lspGenPending || now.Before(s.nextLSPGen) {
+		return
+	}
+	s.lspGenPending = false
+	s.regenerateLSPs(false, now)
+	s.nextLSPGen = now.Add(minLSPGenInterval)
+}
+
 // tlvChunks splits entries into the fewest TLVs whose serialized form each
 // fits the 255-octet TLV value limit (ISO 10589; the TLV interface contract
 // requires producers to split). mk builds one TLV from a sub-slice. Without
@@ -356,7 +385,7 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 			"lsp", id, "size", len(raw), "max", s.lspBufferSize)
 		return
 	}
-	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true}
+	db.entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds, own: true, refreshAt: refreshDeadline(now)}
 	s.logger.Info("originate LSP", "level", level, "lsp", id, "seq", seq)
 	s.markDirty()
 	s.floodLSP(level, id, nil, now)

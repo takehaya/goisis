@@ -296,7 +296,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	upChanged := (prev == AdjUp) != (newState == AdjUp)
 	if upChanged || (newState == AdjUp && electionChanged) {
 		s.electDIS(c, level)
-		s.regenerateLSPs(false, time.Now())
+		s.requestLSPRegen()
 	}
 }
 
@@ -391,9 +391,11 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 			}
 		}
 		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
-		s.regenerateLSPs(false, now)
+		s.requestLSPRegen()
 		// Every level that just became usable is synchronized from scratch
-		// (ISO 10589 7.3.17); a level already Up keeps the flags it has.
+		// (ISO 10589 7.3.17); a level already Up keeps the flags it has. Our own
+		// regeneration is still pending, so the CSNP may describe a stale copy of
+		// our LSP; the fresh one is flooded via SRM as soon as it is generated.
 		if newState == AdjUp {
 			for _, l := range common.levels() {
 				if prev != AdjUp || !prevLevels.has(l) {
@@ -405,14 +407,14 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 }
 
 // teardownP2PAdj reports a point-to-point neighbor going down for the given
-// reason and re-originates so our LSP drops its stale IS reachability. The
-// caller owns c.p2pAdj: it either clears it or replaces it.
+// reason and asks for a re-origination so our LSP drops its stale IS
+// reachability. The caller owns c.p2pAdj: it either clears it or replaces it.
 func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency, reason string) {
 	s.logger.Info(reason, "circuit", c.cfg.Name, "neighbor", adj.systemID)
 	for _, l := range adj.levels.levels() {
 		s.emitAdjacencyDown(c, adj, l)
 	}
-	s.regenerateLSPs(false, time.Now())
+	s.requestLSPRegen()
 }
 
 // helloFromSelf reports whether a hello carries our own system ID, warning
@@ -441,7 +443,7 @@ func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 				s.emitAdjacencyDown(c, adj, l)
 			}
 			c.p2pAdj = nil
-			s.regenerateLSPs(false, now)
+			s.requestLSPRegen()
 		}
 		return
 	}
@@ -458,7 +460,7 @@ func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 		}
 	}
 	if changed {
-		s.regenerateLSPs(false, now)
+		s.requestLSPRegen()
 	}
 }
 

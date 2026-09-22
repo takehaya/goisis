@@ -19,12 +19,13 @@ const (
 
 // lspEntry is one LSP in the database, owned by the Serve loop.
 type lspEntry struct {
-	lsp      *packet.LSP
-	raw      []byte    // serialized PDU; remaining-lifetime field patched on send
-	inserted time.Time // when received or (re)originated
-	lifetime uint16    // remaining lifetime at insertion, in seconds
-	own      bool      // self-originated
-	purgedAt time.Time // nonzero once purged; entry held until +ZeroAgeLifetime
+	lsp       *packet.LSP
+	raw       []byte    // serialized PDU; remaining-lifetime field patched on send
+	inserted  time.Time // when received or (re)originated
+	lifetime  uint16    // remaining lifetime at insertion, in seconds
+	own       bool      // self-originated
+	purgedAt  time.Time // nonzero once purged; entry held until +ZeroAgeLifetime
+	refreshAt time.Time // own LSPs: when to re-originate (see refreshDeadline)
 }
 
 // remaining returns the current remaining lifetime in seconds, aged from
