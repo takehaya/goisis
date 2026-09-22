@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"sort"
 	"sync/atomic"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -34,6 +36,15 @@ type watcher struct {
 
 // Subscription is a handle to a WatchEvent stream.
 type Subscription struct {
+	// Initial is a snapshot of state as of the instant the subscription was
+	// registered: one event per adjacency (the same content as
+	// ListAdjacencies), then one per RIB entry (the same as ListRoutes).
+	// Because it is captured in the very management operation that registers
+	// the watcher, Initial followed by Events is a gap-free view — no change
+	// can fall between the two, as it can between a separate List call and a
+	// Subscribe. It is a plain slice rather than pre-queued events, so a large
+	// snapshot cannot fill the buffer and get the subscriber dropped.
+	Initial []Event
 	// Events delivers protocol changes. It is closed when the subscription
 	// ends (unsubscribed, server stopped, or dropped for lagging — see
 	// Lagged).
@@ -60,16 +71,54 @@ func (sub *Subscription) Unsubscribe() {
 	})
 }
 
-// Subscribe registers an event subscriber.
+// Subscribe registers an event subscriber and snapshots current state into
+// the subscription (see Subscription.Initial).
 func (s *IsisServer) Subscribe(ctx context.Context) (*Subscription, error) {
 	w := &watcher{ch: make(chan Event, watcherBuffer)}
+	sub := &Subscription{Events: w.ch, s: s, w: w}
 	if err := s.mgmtOperation(ctx, func() error {
 		s.watchers[w] = struct{}{}
+		sub.Initial = s.snapshotEvents()
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return &Subscription{Events: w.ch, s: s, w: w}, nil
+	return sub, nil
+}
+
+// snapshotEvents renders the current adjacencies and routes as the events that
+// would have reported them, adjacencies first and each group ordered so two
+// subscribers see the same sequence. Called only on the Serve goroutine.
+func (s *IsisServer) snapshotEvents() []Event {
+	var adjs []AdjacencyInfo
+	for _, c := range s.circuits {
+		adjs = append(adjs, c.adjacencyInfos()...)
+	}
+	sort.Slice(adjs, func(i, j int) bool {
+		if adjs[i].Interface != adjs[j].Interface {
+			return adjs[i].Interface < adjs[j].Interface
+		}
+		if adjs[i].Level != adjs[j].Level {
+			return adjs[i].Level < adjs[j].Level
+		}
+		return bytes.Compare(adjs[i].SystemID[:], adjs[j].SystemID[:]) < 0
+	})
+	routes := make([]RouteInfo, 0, len(s.rib))
+	for _, r := range s.rib {
+		routes = append(routes, r)
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		return routes[i].Prefix.String() < routes[j].Prefix.String()
+	})
+
+	out := make([]Event, 0, len(adjs)+len(routes))
+	for i := range adjs {
+		out = append(out, Event{Adjacency: &adjs[i]})
+	}
+	for i := range routes {
+		out = append(out, Event{Route: &routes[i]})
+	}
+	return out
 }
 
 // emit delivers an event to all subscribers without blocking the Serve loop:

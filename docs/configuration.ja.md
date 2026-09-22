@@ -136,7 +136,8 @@ ambient capability として付与します。
 
 CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマンド:
 `global` / `circuit` / `neighbor` / `database` / `route` / `prefix` /
-`overload` / `locator` / `flex-algo` / `monitor`(`WatchEvent` をストリーミング)。
+`overload` / `locator` / `flex-algo` / `monitor`(`WatchEvent` をストリーミング。
+`--initial` を付けると変化を追う前に現在の隣接と経路を出力)。
 
 `--addr` は `unix:///絶対パス` も取り、`goisisd -api-listen
 unix:///run/goisis/goisisd.sock` で起動したデーモンに接続します。API は無認証

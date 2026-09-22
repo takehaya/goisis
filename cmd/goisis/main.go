@@ -486,11 +486,13 @@ func nextHops(r *goisisv1.Route) string {
 }
 
 func newMonitorCmd(addr *string) *cobra.Command {
-	return &cobra.Command{
+	var initial bool
+	cmd := &cobra.Command{
 		Use:   "monitor",
 		Short: "Stream adjacency and route changes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			stream, err := newClient(*addr).WatchEvent(cmd.Context(), connect.NewRequest(&goisisv1.WatchEventRequest{}))
+			stream, err := newClient(*addr).WatchEvent(cmd.Context(),
+				connect.NewRequest(&goisisv1.WatchEventRequest{IncludeInitial: initial}))
 			if err != nil {
 				return err
 			}
@@ -511,6 +513,8 @@ func newMonitorCmd(addr *string) *cobra.Command {
 			return stream.Err()
 		},
 	}
+	cmd.Flags().BoolVar(&initial, "initial", false, "dump the current adjacencies and routes before following changes")
+	return cmd
 }
 
 func newVersionCmd() *cobra.Command {

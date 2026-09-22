@@ -67,6 +67,13 @@ func main() {
 	defer sub.Unsubscribe()
 
 	log.Printf("watching IS-IS events on %s (%s)", *ifname, *net)
+	// The snapshot is taken as the subscription is registered, so programming
+	// it and then following Events misses nothing in between.
+	for _, ev := range sub.Initial {
+		if ev.Route != nil {
+			log.Printf("route current %s metric=%d nexthops=%v", ev.Route.Prefix, ev.Route.Metric, ev.Route.NextHops)
+		}
+	}
 	for ev := range sub.Events {
 		switch {
 		case ev.Route != nil:

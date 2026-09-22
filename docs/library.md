@@ -111,6 +111,9 @@ s.ClearAdjacency(ctx, "eth0", nil) // nil: every adjacency on the circuit
 sub, err := s.Subscribe(ctx)
 if err != nil { return err }
 defer sub.Unsubscribe()
+for _, ev := range sub.Initial {     // adjacencies, then routes, as they are now
+    // same shape as the events below; ev.Withdrawn is never set here
+}
 for ev := range sub.Events {
     switch {
     case ev.Adjacency != nil:           // adjacency state change
@@ -119,6 +122,12 @@ for ev := range sub.Events {
     }
 }
 ```
+
+`sub.Initial` is a snapshot of the adjacencies and routes taken in the same
+management operation that registers the watcher, so the snapshot followed by
+`Events` is gap-free: unlike `ListRoutes` then `Subscribe`, no change can slip
+through in between. Ask for it over RPC with `WatchEventRequest.include_initial`
+(`goisis monitor --initial`).
 
 The subscription has a bounded buffer; a consumer that falls behind is dropped
 (the channel closes and `sub.Lagged()` reports true) rather than stalling the

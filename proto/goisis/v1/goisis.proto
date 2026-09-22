@@ -233,7 +233,12 @@ message ClearAdjacencyRequest {
 }
 message ClearAdjacencyResponse {}
 
-message WatchEventRequest {}
+message WatchEventRequest {
+  // include_initial asks for a snapshot of the current adjacencies and routes
+  // before the live events. The snapshot is taken as the subscription is
+  // registered, so it leaves no gap that a separate List call would.
+  bool include_initial = 1;
+}
 
 message WatchEventResponse {
   oneof event {
