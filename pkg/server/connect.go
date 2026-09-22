@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
+	"strings"
 
 	"connectrpc.com/connect"
 
@@ -37,7 +39,7 @@ func (h *connectHandler) GetIsis(
 		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.GetIsisResponse{
-		Global: &goisisv1.Global{Version: g.Version, SystemId: g.SystemID.String()},
+		Global: &goisisv1.Global{Version: g.Version, SystemId: g.SystemID.String(), Overload: g.Overload},
 	}), nil
 }
 
@@ -236,6 +238,75 @@ func (h *connectHandler) DeleteFlexAlgo(
 		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&goisisv1.DeleteFlexAlgoResponse{}), nil
+}
+
+func (h *connectHandler) AddPrefix(
+	ctx context.Context,
+	req *connect.Request[goisisv1.AddPrefixRequest],
+) (*connect.Response[goisisv1.AddPrefixResponse], error) {
+	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := h.s.AddPrefix(ctx, AdvertisedPrefix{Prefix: prefix, Metric: req.Msg.GetMetric()}); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&goisisv1.AddPrefixResponse{}), nil
+}
+
+func (h *connectHandler) DeletePrefix(
+	ctx context.Context,
+	req *connect.Request[goisisv1.DeletePrefixRequest],
+) (*connect.Response[goisisv1.DeletePrefixResponse], error) {
+	prefix, err := netip.ParsePrefix(req.Msg.GetPrefix())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if err := h.s.DeletePrefix(ctx, prefix); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&goisisv1.DeletePrefixResponse{}), nil
+}
+
+func (h *connectHandler) SetOverload(
+	ctx context.Context,
+	req *connect.Request[goisisv1.SetOverloadRequest],
+) (*connect.Response[goisisv1.SetOverloadResponse], error) {
+	if err := h.s.SetOverload(ctx, req.Msg.GetOverload()); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&goisisv1.SetOverloadResponse{}), nil
+}
+
+func (h *connectHandler) ClearAdjacency(
+	ctx context.Context,
+	req *connect.Request[goisisv1.ClearAdjacencyRequest],
+) (*connect.Response[goisisv1.ClearAdjacencyResponse], error) {
+	var sysID *packet.SystemID
+	if raw := req.Msg.GetSystemId(); raw != "" {
+		id, err := parseSystemID(raw)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		sysID = &id
+	}
+	if err := h.s.ClearAdjacency(ctx, req.Msg.GetInterface(), sysID); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&goisisv1.ClearAdjacencyResponse{}), nil
+}
+
+// parseSystemID parses a system ID in the dotted-hex form SystemID.String()
+// produces (e.g. "0000.0000.0001").
+func parseSystemID(s string) (packet.SystemID, error) {
+	raw, err := hex.DecodeString(strings.ReplaceAll(s, ".", ""))
+	if err != nil {
+		return packet.SystemID{}, fmt.Errorf("system ID %q: %w", s, err)
+	}
+	if len(raw) != 6 {
+		return packet.SystemID{}, fmt.Errorf("system ID %q: %d octets, want 6", s, len(raw))
+	}
+	return packet.SystemID(raw), nil
 }
 
 // toConnectError maps a handler error to a Connect error code — the single

@@ -39,6 +39,8 @@ func newRootCmd() *cobra.Command {
 		newNeighborCmd(&addr),
 		newDatabaseCmd(&addr),
 		newRouteCmd(&addr),
+		newPrefixCmd(&addr),
+		newOverloadCmd(&addr),
 		newLocatorCmd(&addr),
 		newFlexAlgoCmd(&addr),
 		newMonitorCmd(&addr),
@@ -72,7 +74,7 @@ func newGlobalCmd(addr *string) *cobra.Command {
 				return err
 			}
 			g := res.Msg.GetGlobal()
-			cmd.Printf("version:   %s\nsystem-id: %s\n", g.GetVersion(), g.GetSystemId())
+			cmd.Printf("version:   %s\nsystem-id: %s\noverload:  %t\n", g.GetVersion(), g.GetSystemId(), g.GetOverload())
 			return nil
 		},
 	}
@@ -117,7 +119,7 @@ func circuitLevels(c *goisisv1.Circuit) string {
 }
 
 func newNeighborCmd(addr *string) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "neighbor",
 		Aliases: []string{"neighbors", "adjacency"},
 		Short:   "List IS-IS adjacencies",
@@ -134,6 +136,99 @@ func newNeighborCmd(addr *string) *cobra.Command {
 			}
 			return w.Flush()
 		},
+	}
+	cmd.AddCommand(newNeighborClearCmd(addr))
+	return cmd
+}
+
+func newNeighborClearCmd(addr *string) *cobra.Command {
+	var iface, systemID string
+	cmd := &cobra.Command{
+		Use:   "clear",
+		Short: "Tear down adjacencies on a circuit so hellos re-form them",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := newClient(*addr).ClearAdjacency(cmd.Context(), connect.NewRequest(&goisisv1.ClearAdjacencyRequest{
+				Interface: iface,
+				SystemId:  systemID,
+			}))
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&iface, "interface", "", "circuit whose adjacencies to clear")
+	cmd.Flags().StringVar(&systemID, "system-id", "", "clear only this neighbor (dotted, e.g. 0000.0000.0001)")
+	_ = cmd.MarkFlagRequired("interface")
+	return cmd
+}
+
+func newPrefixCmd(addr *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "prefix",
+		Short: "Configure the prefixes this node originates",
+	}
+	cmd.AddCommand(newPrefixAddCmd(addr), newPrefixDeleteCmd(addr))
+	return cmd
+}
+
+func newPrefixAddCmd(addr *string) *cobra.Command {
+	var metric uint32
+	cmd := &cobra.Command{
+		Use:   "add <prefix>",
+		Short: "Originate a prefix in this node's LSP",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := newClient(*addr).AddPrefix(cmd.Context(), connect.NewRequest(&goisisv1.AddPrefixRequest{
+				Prefix: args[0],
+				Metric: metric,
+			}))
+			return err
+		},
+	}
+	cmd.Flags().Uint32Var(&metric, "metric", 10, "wide metric advertised with the prefix")
+	return cmd
+}
+
+func newPrefixDeleteCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete <prefix>",
+		Aliases: []string{"del", "remove"},
+		Short:   "Withdraw a prefix this node originates",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := newClient(*addr).DeletePrefix(cmd.Context(), connect.NewRequest(&goisisv1.DeletePrefixRequest{
+				Prefix: args[0],
+			}))
+			return err
+		},
+	}
+}
+
+func newOverloadCmd(addr *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "overload on|off",
+		Short: "Set or clear the overload bit by hand (maintenance)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			on, err := parseOnOff(args[0])
+			if err != nil {
+				return err
+			}
+			_, err = newClient(*addr).SetOverload(cmd.Context(), connect.NewRequest(&goisisv1.SetOverloadRequest{
+				Overload: on,
+			}))
+			return err
+		},
+	}
+}
+
+func parseOnOff(s string) (bool, error) {
+	switch s {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown argument %q (want on or off)", s)
 	}
 }
 

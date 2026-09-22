@@ -28,6 +28,14 @@ service IsisService {
   rpc AddFlexAlgo(AddFlexAlgoRequest) returns (AddFlexAlgoResponse);
   // DeleteFlexAlgo stops this node participating in a Flexible Algorithm.
   rpc DeleteFlexAlgo(DeleteFlexAlgoRequest) returns (DeleteFlexAlgoResponse);
+  // AddPrefix originates a new prefix in this node's LSP.
+  rpc AddPrefix(AddPrefixRequest) returns (AddPrefixResponse);
+  // DeletePrefix withdraws a prefix this node originates.
+  rpc DeletePrefix(DeletePrefixRequest) returns (DeletePrefixResponse);
+  // SetOverload sets or clears the overload bit by hand (maintenance).
+  rpc SetOverload(SetOverloadRequest) returns (SetOverloadResponse);
+  // ClearAdjacency tears down adjacencies on a circuit so hellos re-form them.
+  rpc ClearAdjacency(ClearAdjacencyRequest) returns (ClearAdjacencyResponse);
   // WatchEvent streams adjacency and route changes as they happen.
   rpc WatchEvent(WatchEventRequest) returns (stream WatchEventResponse);
 }
@@ -44,6 +52,9 @@ message Global {
   string version = 1;
   // system_id is the IS-IS system identifier, dotted (e.g. 0000.0000.0001).
   string system_id = 2;
+  // overload is the effective overload bit: set by hand or by the startup
+  // window.
+  bool overload = 3;
 }
 
 // Level is an IS-IS level.
@@ -192,6 +203,35 @@ message DeleteFlexAlgoRequest {
   uint32 algorithm = 1;
 }
 message DeleteFlexAlgoResponse {}
+
+message AddPrefixRequest {
+  // prefix is the prefix to originate (IPv4 or IPv6).
+  string prefix = 1;
+  // metric is the wide metric advertised with the prefix.
+  uint32 metric = 2;
+}
+message AddPrefixResponse {}
+
+message DeletePrefixRequest {
+  // prefix identifies the originated prefix to withdraw (matched masked).
+  string prefix = 1;
+}
+message DeletePrefixResponse {}
+
+message SetOverloadRequest {
+  // overload sets (true) or clears (false) the manual overload bit.
+  bool overload = 1;
+}
+message SetOverloadResponse {}
+
+message ClearAdjacencyRequest {
+  // interface is the circuit whose adjacencies to tear down.
+  string interface = 1;
+  // system_id restricts the teardown to one neighbor, dotted
+  // (e.g. 0000.0000.0001); empty clears every adjacency on the circuit.
+  string system_id = 2;
+}
+message ClearAdjacencyResponse {}
 
 message WatchEventRequest {}
 

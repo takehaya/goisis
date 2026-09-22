@@ -90,6 +90,21 @@ Flex-Algo range 128-255, a non-zero locator algorithm must be participated in,
 no duplicates). `DeleteFlexAlgo` is refused while a locator is still bound to
 the algorithm — delete the locator first.
 
+Advertised prefixes, the overload bit and adjacencies are equally mutable:
+`AddPrefix`/`DeletePrefix` originate or withdraw a prefix (matched on its
+masked form; deleting one that came from a connected subnet keeps its
+directly-connected marker), `SetOverload` sets or clears the overload bit by
+hand for maintenance (independently of the startup window), and
+`ClearAdjacency` tears down a circuit's adjacencies — all of them, or one
+neighbor's — so hellos re-form them:
+
+```go
+s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("10.9.9.0/24"), Metric: 10})
+s.DeletePrefix(ctx, netip.MustParsePrefix("10.9.9.0/24"))
+s.SetOverload(ctx, true)
+s.ClearAdjacency(ctx, "eth0", nil) // nil: every adjacency on the circuit
+```
+
 ## Watching changes
 
 ```go

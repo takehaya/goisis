@@ -86,6 +86,20 @@ s.DeleteFlexAlgo(ctx, 128)
 `DeleteFlexAlgo` は locator が algo にバインドされている間は拒否されます —
 先に locator を削除してください。
 
+広告プレフィックス、オーバーロードビット、隣接も同様に変更できます。
+`AddPrefix` / `DeletePrefix` はプレフィックスの生成・取り下げ(マスク後の形で照合。
+接続サブネット由来のものを削除しても directly-connected マーカーは残ります)、
+`SetOverload` は保守用にオーバーロードビットを手動で設定・解除(起動時ウィンドウとは独立)、
+`ClearAdjacency` はサーキットの隣接(全部、または指定した 1 つ)を落として
+hello による再形成を促します:
+
+```go
+s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("10.9.9.0/24"), Metric: 10})
+s.DeletePrefix(ctx, netip.MustParsePrefix("10.9.9.0/24"))
+s.SetOverload(ctx, true)
+s.ClearAdjacency(ctx, "eth0", nil) // nil: サーキット上の全隣接
+```
+
 ## 変更の監視
 
 ```go

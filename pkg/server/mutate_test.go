@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/fib"
@@ -165,5 +166,207 @@ func TestAddLocatorRequiresAlgoParticipation(t *testing.T) {
 	}
 	if err := s.AddLocator(ctx, SRv6LocatorConfig{Prefix: loc, Algo: 128}); err != nil {
 		t.Errorf("AddLocator after participation: %v", err)
+	}
+}
+
+// hasPrefixTLV reports whether this node's own LSP advertises the given prefix
+// in its IP reachability TLVs (135 for IPv4, 236 for IPv6).
+func hasPrefixTLV(t *testing.T, s *IsisServer, p netip.Prefix) bool {
+	t.Helper()
+	for _, tlv := range ownLSPTLVs(t, s) {
+		switch r := tlv.(type) {
+		case *packet.ExtendedIPReachabilityTLV:
+			for _, e := range r.Prefixes {
+				if e.Prefix.Masked() == p.Masked() {
+					return true
+				}
+			}
+		case *packet.IPv6ReachabilityTLV:
+			for _, e := range r.Prefixes {
+				if e.Prefix.Masked() == p.Masked() {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// ownLSPSeq returns the sequence number of this node's own fragment-0 LSP.
+func ownLSPSeq(t *testing.T, s *IsisServer) uint32 {
+	t.Helper()
+	var seq uint32
+	if err := s.mgmtOperation(context.Background(), func() error {
+		if e := s.dbs[packet.Level2].get(lspID(s.systemID, 0)); e != nil {
+			seq = e.lsp.SequenceNumber
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("mgmtOperation: %v", err)
+	}
+	return seq
+}
+
+// mutatePair returns two servers converged on one LAN at Level 2, A with an
+// IPv4 interface address so its prefixes resolve to a next hop on B.
+func mutatePair(t *testing.T) (*IsisServer, *IsisServer, context.CancelFunc) {
+	t.Helper()
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
+	fastHello(&cfgA)
+	fastHello(&cfgB)
+
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	waitFor(t, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitFor(t, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+	return a, b, cancel
+}
+
+func TestAddDeletePrefix(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+	v4 := netip.MustParsePrefix("10.9.9.0/24")
+	v6 := netip.MustParsePrefix("fc00:9::/64")
+
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: v4, Metric: 10}); err != nil {
+		t.Fatalf("AddPrefix(v4): %v", err)
+	}
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: v6, Metric: 20}); err != nil {
+		t.Fatalf("AddPrefix(v6): %v", err)
+	}
+	waitFor(t, "prefixes advertised", func() bool { return hasPrefixTLV(t, s, v4) && hasPrefixTLV(t, s, v6) })
+
+	// A prefix already advertised is rejected, matched on its masked form.
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: netip.MustParsePrefix("10.9.9.7/24")}); err == nil {
+		t.Error("expected error re-adding an advertised prefix")
+	}
+	// An invalid prefix is rejected.
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{}); err == nil {
+		t.Error("expected error for an invalid prefix")
+	}
+
+	seq := ownLSPSeq(t, s)
+	if err := s.DeletePrefix(ctx, v4); err != nil {
+		t.Fatalf("DeletePrefix: %v", err)
+	}
+	waitFor(t, "prefix withdrawn", func() bool { return !hasPrefixTLV(t, s, v4) })
+	if got := ownLSPSeq(t, s); got <= seq {
+		t.Errorf("own LSP sequence = %d, want > %d (the withdrawal must re-originate)", got, seq)
+	}
+
+	// Deleting an unadvertised prefix is rejected.
+	if err := s.DeletePrefix(ctx, v4); err == nil {
+		t.Error("expected error deleting an unadvertised prefix")
+	}
+}
+
+// TestAddPrefixReachesPeerRIB checks a runtime prefix floods and is installed
+// by the peer, and that deleting it withdraws the peer's route.
+func TestAddPrefixReachesPeerRIB(t *testing.T) {
+	a, b, cancel := mutatePair(t)
+	defer cancel()
+	ctx := context.Background()
+	dst := netip.MustParsePrefix("10.9.9.0/24")
+
+	hasRoute := func() bool {
+		routes, err := b.ListRoutes(ctx)
+		if err != nil {
+			return false
+		}
+		for _, r := range routes {
+			if r.Prefix == dst {
+				return true
+			}
+		}
+		return false
+	}
+
+	if err := a.AddPrefix(ctx, AdvertisedPrefix{Prefix: dst, Metric: 10}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	waitFor(t, "b installs a's new prefix", hasRoute)
+
+	if err := a.DeletePrefix(ctx, dst); err != nil {
+		t.Fatalf("DeletePrefix: %v", err)
+	}
+	waitFor(t, "b withdraws the deleted prefix", func() bool { return !hasRoute() })
+}
+
+func TestSetOverload(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+
+	if err := s.SetOverload(ctx, true); err != nil {
+		t.Fatalf("SetOverload(true): %v", err)
+	}
+	waitFor(t, "own LSP has the overload bit set", func() bool { set, ok := ownOverload(t, s); return ok && set })
+	g, err := s.GetGlobal(ctx)
+	if err != nil {
+		t.Fatalf("GetGlobal: %v", err)
+	}
+	if !g.Overload {
+		t.Error("GetGlobal().Overload = false, want true while overloaded")
+	}
+
+	if err := s.SetOverload(ctx, false); err != nil {
+		t.Fatalf("SetOverload(false): %v", err)
+	}
+	waitFor(t, "own LSP clears the overload bit", func() bool { set, ok := ownOverload(t, s); return ok && !set })
+	if g, err = s.GetGlobal(ctx); err != nil {
+		t.Fatalf("GetGlobal: %v", err)
+	} else if g.Overload {
+		t.Error("GetGlobal().Overload = true, want false once cleared")
+	}
+}
+
+func TestClearAdjacency(t *testing.T) {
+	a, _, cancel := mutatePair(t)
+	defer cancel()
+	ctx := context.Background()
+
+	sub, err := a.Subscribe(ctx)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	if err := a.ClearAdjacency(ctx, "a", nil); err != nil {
+		t.Fatalf("ClearAdjacency: %v", err)
+	}
+	deadline := time.After(3 * time.Second)
+	for down := false; !down; {
+		select {
+		case ev, ok := <-sub.Events:
+			if !ok {
+				t.Fatal("watch channel closed unexpectedly")
+			}
+			down = ev.Adjacency != nil && ev.Adjacency.State == AdjDown
+		case <-deadline:
+			t.Fatal("timed out waiting for the adjacency Down event")
+		}
+	}
+	// Hellos re-form the adjacency without any further action.
+	waitFor(t, "adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+
+	// Clearing an adjacency that does not exist is a no-op, not an error.
+	absent := packet.SystemID{0, 0, 0, 0, 0, 9}
+	if err := a.ClearAdjacency(ctx, "a", &absent); err != nil {
+		t.Errorf("ClearAdjacency for an absent neighbor: %v", err)
+	}
+	// An unknown circuit is an error.
+	if err := a.ClearAdjacency(ctx, "nope", nil); err == nil {
+		t.Error("expected error clearing adjacencies on an unknown circuit")
 	}
 }
