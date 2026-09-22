@@ -44,12 +44,13 @@ type IsisServer struct {
 	fib          fib.FIB
 	metrics      Metrics
 	rib          map[netip.Prefix]RouteInfo
-	connected    map[netip.Prefix]bool // directly-connected prefixes (never installed)
-	fibPending   map[netip.Prefix]bool // routes whose last FIB write failed; retried
-	fibInstalled map[netip.Prefix]bool // routes currently written to the FIB (gated by fibFilter)
-	spfDirty     bool                  // a topology change needs an SPF recompute
-	watchers     map[*watcher]struct{} // WatchEvent subscribers
-	algoWarned   map[algoKey]bool      // (level,algo) whose unsupported metric-type was logged
+	l1Export     map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
+	connected    map[netip.Prefix]bool   // directly-connected prefixes (never installed)
+	fibPending   map[netip.Prefix]bool   // routes whose last FIB write failed; retried
+	fibInstalled map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
+	spfDirty     bool                    // a topology change needs an SPF recompute
+	watchers     map[*watcher]struct{}   // WatchEvent subscribers
+	algoWarned   map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)

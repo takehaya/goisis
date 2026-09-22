@@ -253,7 +253,7 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 
 | Limitation | Notes |
 |------------|-------|
-| Single area | L1/L2 adjacencies and per-level SPF work, and an L1-only node does install a default route toward the nearest attached L1L2 IS (the ATT bit, RFC 1195 §3.2). Route leaking itself is missing in both directions — no L1→L2 propagation, no L2→L1 leaking — and the up/down bit (RFC 5305 §4.1 / RFC 5308 §2) is parsed and preserved, never set by origination. |
+| Single area | L1/L2 adjacencies and per-level SPF work, an L1-only node installs a default route toward the nearest attached L1L2 IS (the ATT bit, RFC 1195 §3.2), and an L1L2 IS propagates the prefixes its Level-1 SPF reached into its Level-2 LSP (ISO 10589 7.2.9 / RFC 1195 §3.1). Only L2→L1 leaking is missing: the up/down bit (RFC 5305 §4.1 / RFC 5308 §2) is parsed and honored — a down-marked prefix is never propagated upward — but never set by origination. |
 | Wide metrics only | Narrow-metric TLVs are parsed but never originated (`metric-style wide` peers only). |
 | No multi-topology (RFC 5120) | The SPF/RIB key is `(level, algorithm)`; MT-IDs are parsed where they appear but not threaded through the pipeline. Adding MT means widening that key — a known, contained change. |
 | No graceful restart (RFC 5306) | A peer that crash-restarts and re-originates at sequence 1 is out-shouted by our stored higher-seq copy until it ages out (up to MaxAge, 1200s). Clean shutdowns purge, so this affects only ungraceful restarts. |

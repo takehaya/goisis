@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"maps"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -138,6 +140,21 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	for _, lc := range s.locators {
 		if lc.Algo == 0 {
 			v6 = append(v6, packet.IPv6ReachEntry{Metric: 0, Prefix: lc.Prefix.Masked()})
+		}
+	}
+	// ISO 10589 7.2.9 / RFC 1195 §3.1: the Level-2 LSP of an L1L2 IS also
+	// carries what is reachable inside its Level-1 area (updateRIB's l1Export).
+	// Sorted, because originate compares the marshalled body and a map's range
+	// order would re-flood the LSP on every regeneration. The up/down bit stays
+	// clear: this is the upward direction (RFC 5305 §4.1).
+	if level == packet.Level2 && s.levelCap.has(packet.Level1) {
+		for _, p := range slices.SortedFunc(maps.Keys(s.l1Export), netip.Prefix.Compare) {
+			m := min(s.l1Export[p], maxPathMetric-1)
+			if p.Addr().Is4() {
+				v4 = append(v4, packet.ExtendedIPReachEntry{Metric: m, Prefix: p})
+			} else {
+				v6 = append(v6, packet.IPv6ReachEntry{Metric: m, Prefix: p})
+			}
 		}
 	}
 	variable = append(variable, tlvChunks(v4, func(e []packet.ExtendedIPReachEntry) packet.TLV {

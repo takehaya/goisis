@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"maps"
 	"net/netip"
 	"slices"
 	"sort"
@@ -100,6 +101,52 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// neither loses the withdraw bookkeeping nor re-emits change events.
 	s.programFIB(next)
 	s.rib = next
+
+	// ISO 10589 7.2.9 / RFC 1195 §3.1: an L1L2 IS advertises the prefixes
+	// reachable inside its Level-1 area in its Level-2 LSP. Re-originating marks
+	// dirty, so the next loop iteration recomputes; the export set is unchanged
+	// then and the cascade stops after that one extra pass.
+	if export := s.l1ExportSet(merged); !maps.Equal(export, s.l1Export) {
+		s.l1Export = export
+		s.regenerateLSPs(false, now)
+	}
+}
+
+// l1ExportSet returns the Level-1 prefixes this IS propagates upward into its
+// Level-2 LSP, keyed by masked prefix to the total Level-1 path metric. Only an
+// L1L2 IS exports anything; for anyone else the set is empty.
+func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix]uint32 {
+	if !s.levelCap.has(packet.Level1) || !s.levelCap.has(packet.Level2) {
+		return nil
+	}
+	own := map[netip.Prefix]bool{}
+	for _, p := range s.prefixes {
+		own[p.Prefix.Masked()] = true
+	}
+	for p := range s.connected {
+		own[p] = true
+	}
+	for _, lc := range s.locators {
+		own[lc.Prefix.Masked()] = true
+	}
+	var export map[netip.Prefix]uint32
+	for p, r := range merged {
+		switch {
+		case r.level != packet.Level1 || r.algo != 0:
+			continue // only intra-area algorithm-0 reachability propagates
+		case r.down:
+			continue // leaked down from L2 already; sending it back up would loop
+		case p == defaultV4 || p == defaultV6:
+			continue // a default is not area reachability, whatever produced it
+		case own[p]:
+			continue // regenerateNodeLSP already originates this one at both levels
+		}
+		if export == nil {
+			export = map[netip.Prefix]uint32{}
+		}
+		export[p] = r.metric
+	}
+	return export
 }
 
 // betterRoute reports whether candidate should replace incumbent as the route

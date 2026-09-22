@@ -30,6 +30,10 @@ type spfEdge struct {
 type spfPrefix struct {
 	prefix netip.Prefix
 	metric uint32
+	// down is the up/down bit of the advertisement (RFC 5305 §4.1 / RFC 5308
+	// §2, and the SRv6 locator D-flag): the prefix was leaked down from a
+	// higher level and must never travel back up.
+	down bool
 }
 
 // route is one computed prefix reachability: the total metric, the algorithm it
@@ -39,6 +43,7 @@ type route struct {
 	metric   uint32
 	level    packet.Level
 	algo     uint8
+	down     bool
 	nextHops []packet.SystemID
 }
 
@@ -112,7 +117,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
+						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric, down: p.Down})
 						have[nid][pfx] = true
 					}
 				}
@@ -123,7 +128,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 				for _, p := range t.Prefixes {
 					if p.Metric < maxPathMetric {
 						pfx := p.Prefix.Masked()
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric})
+						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric, down: p.Down})
 						have[nid][pfx] = true
 					}
 				}
@@ -133,7 +138,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 						locs = append(locs, struct {
 							nid packet.NodeID
 							p   spfPrefix
-						}{nid, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric}})
+						}{nid, spfPrefix{prefix: loc.Locator.Masked(), metric: loc.Metric, down: loc.Flags&0x80 != 0}}) // D-flag (RFC 9352 §7.1)
 					}
 				}
 			}
@@ -258,7 +263,7 @@ func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) m
 			if sum >= maxPathMetric {
 				continue
 			}
-			addRoute(routes, p.prefix, route{metric: uint32(sum), level: level, algo: algo, nextHops: nh})
+			addRoute(routes, p.prefix, route{metric: uint32(sum), level: level, algo: algo, down: p.down, nextHops: nh})
 		}
 	}
 
@@ -316,15 +321,27 @@ func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*
 
 // addRoute merges one computed route for a prefix into the route set: a lower
 // total metric wins outright, an equal one merges the first-hop sets (ECMP).
+//
+// The up/down bit is merged conservatively: the route is down when ANY
+// contributing advertisement was, even one whose path lost. RFC 5305 §4.1
+// forbids re-advertising a down-marked prefix upward, and the LSDB alone cannot
+// tell an independently reachable copy from the same leaked prefix
+// re-originated without the bit — so the safe answer is the sticky one.
 func addRoute(routes map[netip.Prefix]route, p netip.Prefix, r route) {
 	cur, ok := routes[p]
-	switch {
-	case !ok || r.metric < cur.metric:
+	if !ok {
 		routes[p] = r
+		return
+	}
+	down := cur.down || r.down
+	switch {
+	case r.metric < cur.metric:
+		cur = r
 	case r.metric == cur.metric:
 		cur.nextHops = mergeHops(cur.nextHops, r.nextHops)
-		routes[p] = cur
 	}
+	cur.down = down
+	routes[p] = cur
 }
 
 // firstHopsFor returns the first-hop set for neighbor `to` reached from cur.
