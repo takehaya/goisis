@@ -85,7 +85,7 @@ flowchart LR
 
 ### Serve ループ
 
-`IsisServer.Serve` は 4 つのソースに対する単一の `select` です
+`IsisServer.Serve` は 5 つのソースに対する単一の `select` です
 （`pkg/server/server.go`）:
 
 ```go
@@ -94,8 +94,9 @@ case <-ctx.Done():        // シャットダウン
 case op := <-s.mgmtCh:    // 管理操作（公開 API 呼び出し）
 case ev := <-s.eventCh:   // プロトコルイベント（受信フレーム等）
 case t := <-ticker.C:     // 1 秒のハウスキーピング tick
+case <-hold.C:            // SPF back-off の hold 満了
 }
-if s.spfDirty { s.updateRIB(...) }   // イベント駆動 SPF
+if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC 8405 風の hold 付き）
 ```
 
 プロトコル状態を変更するものはすべて、このゴルーチン上で上記いずれかの
@@ -109,9 +110,9 @@ if s.spfDirty { s.updateRIB(...) }   // イベント駆動 SPF
   `ErrServerStopped` のいずれかで、シャットダウンと競合した結果も失われ
   ません（`server.go` の `done`/`errCh` の二重 select）。
 - **イベント駆動 SPF。** 状態変更は SPF を直接呼ばず、`markDirty()` で
-  `spfDirty` を立てるだけです。ループの*毎回*の反復後にフラグを確認する
-  ので、固定の SPF タイマーなしに変更へ即応でき、イベントのバーストは
-  1 ターンにつき 1 回の再計算にまとまります。
+  `spfDirty` を立てるだけです。最初の変更はそのループ反復の末尾で即座に
+  再計算し、続く 200 ms の hold 中に届いた変更は hold 満了時の 1 回の
+  再計算にまとまります（RFC 8405 の 2 状態版、LONG_WAIT 段階なし）。
 - **ハウスキーピング（1 秒 tick）。** hello 送信、隣接の期限切れ、LSP の
   エージング/リフレッシュ、SRM/SSN 再送、自分が DIS のサーキットでの
   周期 CSNP、ローカル SID の再アサート、ゲージ発行。

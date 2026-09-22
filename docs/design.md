@@ -86,7 +86,7 @@ goroutine, serially.
 
 ### The Serve loop
 
-`IsisServer.Serve` is a single `select` over four sources
+`IsisServer.Serve` is a single `select` over five sources
 (`pkg/server/server.go`):
 
 ```go
@@ -95,8 +95,9 @@ case <-ctx.Done():        // shutdown
 case op := <-s.mgmtCh:    // a management operation (public API call)
 case ev := <-s.eventCh:   // a protocol event (received frame, ...)
 case t := <-ticker.C:     // 1s housekeeping tick
+case <-hold.C:            // SPF back-off hold expired
 }
-if s.spfDirty { s.updateRIB(...) }   // event-driven SPF
+if s.spfDirty && !holding { s.updateRIB(...) }   // event-driven SPF with an RFC 8405-lite hold
 ```
 
 Everything that mutates protocol state runs inside one of those arms, on this
@@ -110,9 +111,10 @@ the Serve goroutine, you do not touch `IsisServer` fields.**
   `ErrServerStopped`; a result that races with shutdown is not lost
   (`server.go`, the `done`/`errCh` double-select).
 - **Event-driven SPF.** Mutations never call SPF directly; they set
-  `spfDirty` via `markDirty()`. After *every* loop iteration the flag is
-  checked, so routes recompute promptly after a change without a fixed SPF
-  timer, and a burst of events coalesces into one recompute per turn.
+  `spfDirty` via `markDirty()`. The first change recomputes at the end of
+  that loop iteration; changes arriving during the following 200 ms hold
+  coalesce into one more recompute when the hold expires (a two-state
+  RFC 8405 back-off without its LONG_WAIT stage).
 - **Housekeeping (1s tick).** Hellos, adjacency expiry, LSP aging/refresh,
   SRM/SSN retransmission, periodic CSNPs on circuits where we are DIS, local
   SID re-assertion, and gauge emission.
