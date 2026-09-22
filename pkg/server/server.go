@@ -306,6 +306,7 @@ func (s *IsisServer) installLocalSIDs() {
 	for _, sid := range s.localSIDs() {
 		if err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd}); err != nil {
 			s.logger.Error("install local End SID", "sid", sid, "error", err)
+			s.metrics.FIBError(fibOpAddSID)
 		}
 	}
 }
@@ -316,6 +317,7 @@ func (s *IsisServer) removeLocalSIDs() {
 	for _, sid := range s.localSIDs() {
 		if err := s.fib.RemoveLocalSID(sid); err != nil {
 			s.logger.Error("remove local End SID", "sid", sid, "error", err)
+			s.metrics.FIBError(fibOpRemoveSID)
 		}
 	}
 }
@@ -427,7 +429,16 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	for level, db := range s.dbs {
 		s.metrics.LSDBSize(levelLabel(level), len(db.entries))
 	}
+	// Report every configured circuit and level, not just those holding an
+	// adjacency, so losing the last neighbor shows as 0 rather than as a gauge
+	// that simply stops moving.
+	for _, c := range s.circuits {
+		for _, l := range c.cfg.levels() {
+			s.metrics.AdjacencyCount(c.cfg.Name, levelLabel(l), c.upAdjacencyCount(l))
+		}
+	}
 	s.metrics.FIBPending(len(s.fibPending))
+	s.metrics.EventQueueDepth(len(s.eventCh))
 }
 
 // mgmtOperation runs f on the Serve loop and waits for its result. State

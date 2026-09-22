@@ -27,7 +27,50 @@ type Metrics interface {
 	// FIBPending reports the number of routes whose last FIB write failed and
 	// are awaiting retry.
 	FIBPending(n int)
+	// PDURx records one PDU received on a circuit and successfully decoded.
+	// pduType is a short label: "lan_hello_l1", "lan_hello_l2", "p2p_hello",
+	// "lsp", "csnp" or "psnp".
+	PDURx(circuit, pduType string)
+	// PDUDrop records one received PDU discarded on a circuit, with the reason
+	// it was discarded: "decode", "auth", "no_adjacency", "checksum",
+	// "lsdb_limit", "unknown_purge" or "own_sysid_purge".
+	PDUDrop(circuit, reason string)
+	// AdjacencyCount reports the number of Up adjacencies on a circuit at a
+	// level. Every configured circuit and level reports on every housekeeping
+	// tick, so a circuit that loses its last neighbor reports 0 instead of
+	// leaving a stale value behind.
+	AdjacencyCount(circuit, level string, n int)
+	// RouteCount reports the number of RIB routes for a level and routing
+	// algorithm (decimal; "0" is plain reachability).
+	RouteCount(level, algo string, n int)
+	// FIBError records one failed FIB write, by operation: "update",
+	// "withdraw", "add_sid" or "remove_sid".
+	FIBError(op string)
+	// EventQueueDepth reports the number of received frames waiting to be
+	// handled by the management loop.
+	EventQueueDepth(n int)
 }
+
+// Reasons reported through Metrics.PDUDrop, one per point at which a received
+// PDU is discarded.
+const (
+	dropDecode          = "decode"
+	dropAuth            = "auth"
+	dropNoAdjacency     = "no_adjacency"
+	dropChecksum        = "checksum"
+	dropLSDBLimit       = "lsdb_limit"
+	dropUnknownPurge    = "unknown_purge"
+	dropOwnSysIDPurge   = "own_sysid_purge"
+	dropOwnLSPReclaimed = "own_lsp_reclaimed" // a copy of an LSP we originate, superseded by re-origination
+)
+
+// Operations reported through Metrics.FIBError.
+const (
+	fibOpUpdate    = "update"
+	fibOpWithdraw  = "withdraw"
+	fibOpAddSID    = "add_sid"
+	fibOpRemoveSID = "remove_sid"
+)
 
 // NoopMetrics discards every event. It is the default when no Metrics sink is
 // configured.
@@ -48,6 +91,24 @@ func (NoopMetrics) FloodTx(string) {}
 // FIBPending implements Metrics.
 func (NoopMetrics) FIBPending(int) {}
 
+// PDURx implements Metrics.
+func (NoopMetrics) PDURx(string, string) {}
+
+// PDUDrop implements Metrics.
+func (NoopMetrics) PDUDrop(string, string) {}
+
+// AdjacencyCount implements Metrics.
+func (NoopMetrics) AdjacencyCount(string, string, int) {}
+
+// RouteCount implements Metrics.
+func (NoopMetrics) RouteCount(string, string, int) {}
+
+// FIBError implements Metrics.
+func (NoopMetrics) FIBError(string) {}
+
+// EventQueueDepth implements Metrics.
+func (NoopMetrics) EventQueueDepth(int) {}
+
 // levelLabel renders a level as a short metric label.
 func levelLabel(l packet.Level) string {
 	switch l {
@@ -55,6 +116,29 @@ func levelLabel(l packet.Level) string {
 		return "L1"
 	case packet.Level2:
 		return "L2"
+	default:
+		return "?"
+	}
+}
+
+// pduLabel renders a PDU type as a short metric label. LSPs and SNPs collapse
+// their level: the receive counter is already per circuit, and splitting it by
+// level as well would double its cardinality without telling an operator
+// anything the LSDB gauges do not.
+func pduLabel(t packet.PDUType) string {
+	switch t {
+	case packet.PDUTypeL1LANHello:
+		return "lan_hello_l1"
+	case packet.PDUTypeL2LANHello:
+		return "lan_hello_l2"
+	case packet.PDUTypeP2PHello:
+		return "p2p_hello"
+	case packet.PDUTypeL1LSP, packet.PDUTypeL2LSP:
+		return "lsp"
+	case packet.PDUTypeL1CSNP, packet.PDUTypeL2CSNP:
+		return "csnp"
+	case packet.PDUTypeL1PSNP, packet.PDUTypeL2PSNP:
+		return "psnp"
 	default:
 		return "?"
 	}

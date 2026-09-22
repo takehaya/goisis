@@ -58,6 +58,7 @@ func (s *IsisServer) helloAuthOK(c *circuit, raw []byte, pt packet.PDUType) bool
 	}
 	if !spec.verify(raw, packet.HeaderLen(pt), false) {
 		s.logger.Debug("drop hello failing authentication", "circuit", c.cfg.Name)
+		s.metrics.PDUDrop(c.cfg.Name, dropAuth)
 		return false
 	}
 	return true
@@ -195,8 +196,10 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 	pdu, err := packet.DecodePDU(raw)
 	if err != nil {
 		s.logger.Debug("drop undecodable PDU", "circuit", c.cfg.Name, "src", frame.Src, "error", err)
+		s.metrics.PDUDrop(c.cfg.Name, dropDecode)
 		return
 	}
+	s.metrics.PDURx(c.cfg.Name, pduLabel(pdu.PDUType()))
 	switch h := pdu.(type) {
 	case *packet.LANHello:
 		if s.helloAuthOK(c, raw, h.PDUType()) {
@@ -207,15 +210,15 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 			s.processP2PHello(c, frame.Src, h)
 		}
 	case *packet.LSP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, true) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, true) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processLSP(c, raw, h, time.Now())
 		}
 	case *packet.CSNP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processCSNP(c, h, time.Now())
 		}
 	case *packet.PSNP:
-		if s.pduAuthOK(raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
 			s.processPSNP(c, h, time.Now())
 		}
 	}
@@ -230,6 +233,7 @@ func (s *IsisServer) adjacencyGate(c *circuit, pt packet.PDUType, level packet.L
 	}
 	s.logger.Debug("drop PDU from a source without an Up adjacency",
 		"circuit", c.cfg.Name, "pdu", pt, "level", level, "src", src)
+	s.metrics.PDUDrop(c.cfg.Name, dropNoAdjacency)
 	return false
 }
 

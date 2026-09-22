@@ -149,7 +149,9 @@ type FIB interface {
 ## 独自メトリクス
 
 テレメトリ基盤へ流すには `server.Metrics`(`AdjacencyTransition` / `SPFRun` /
-`LSDBSize` / `FloodTx`)を実装するか、Prometheus アダプタを使います:
+`LSDBSize` / `FloodTx` / `FIBPending` / `PDURx` / `PDUDrop` /
+`AdjacencyCount` / `RouteCount` / `FIBError` / `EventQueueDepth`)を実装するか、
+Prometheus アダプタを使います:
 
 ```go
 import "github.com/takehaya/goisis/pkg/metrics"

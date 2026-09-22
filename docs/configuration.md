@@ -168,4 +168,9 @@ $ goisis neighbor clear --interface eth0      # add --system-id for one neighbor
 
 `goisisd` serves Prometheus metrics at `/metrics`:
 `goisis_adjacency_transitions_total`, `goisis_spf_duration_seconds`,
-`goisis_lsdb_lsps`, `goisis_flooding_lsp_tx_total`.
+`goisis_lsdb_lsps`, `goisis_flooding_lsp_tx_total`,
+`goisis_pdu_rx_total{circuit,type}`, `goisis_pdu_drops_total{circuit,reason}`
+(reasons: `decode`, `auth`, `no_adjacency`, `checksum`, `lsdb_limit`,
+`unknown_purge`, `own_sysid_purge`, `own_lsp_reclaimed`), `goisis_adjacencies{circuit,level}`,
+`goisis_routes{level,algorithm}`, `goisis_fib_errors_total{op}` (ops: `update`,
+`withdraw`, `add_sid`, `remove_sid`) and `goisis_event_queue_depth`.
