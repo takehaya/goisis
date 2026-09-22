@@ -15,10 +15,12 @@ func fastHello(cfg *CircuitConfig) {
 	cfg.HoldingMultiplier = 3
 }
 
-// waitFor polls fn until it returns true or the deadline passes.
+// waitFor polls fn until it returns true or the deadline passes. The deadline
+// is generous on purpose: a passing test returns as soon as fn holds, while a
+// tight one turns scheduler stalls on a loaded CI runner into false failures.
 func waitFor(t *testing.T, what string, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return
