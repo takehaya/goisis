@@ -68,11 +68,21 @@ func TestLinuxTransportLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Read until our own frame turns up rather than trusting the first one:
+	// the socket delivers everything the interface sees, and a freshly created
+	// veth is not quiet (IPv6 autoconfiguration alone puts multicast listener
+	// reports on it the moment it comes up).
 	recvd := make(chan Frame, 1)
 	go func() {
-		f, err := tb.Recv()
-		if err == nil {
-			recvd <- f
+		for {
+			f, err := tb.Recv()
+			if err != nil {
+				return
+			}
+			if f.Src == ta.LocalSNPA() {
+				recvd <- f
+				return
+			}
 		}
 	}()
 
@@ -84,9 +94,6 @@ func TestLinuxTransportLoopback(t *testing.T) {
 	select {
 	case f := <-recvd:
 		t.Logf("received src=%v", f.Src)
-		if f.Src != ta.LocalSNPA() {
-			t.Errorf("src = %v, want %v", f.Src, ta.LocalSNPA())
-		}
 		pdu, err := packet.DecodePDU(f.PDU)
 		if err != nil {
 			t.Fatalf("decode received PDU: %v", err)
