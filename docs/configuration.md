@@ -72,7 +72,9 @@ Each locator is advertised in the SRv6 Locator TLV (27) with an End SID at the
 locator's base address and the SRv6 Capabilities sub-TLV in the Router
 Capability TLV (242). It is also mirrored into IPv6 reachability (TLV 236) for
 peers that don't parse TLV 27. With `fib: true` the End SID is installed as a
-`seg6local` End route.
+`seg6local` End route on `isis-srv6`, a dummy device the daemon creates for its
+local SIDs and removes again with the last one (Linux drops the encapsulation
+of a `seg6local` route whose device is the loopback).
 
 An adjacency also gets an End.X SID per locator, taken from the locator's
 function space starting at 1 and advertised in the neighbour's IS reachability

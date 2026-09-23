@@ -247,6 +247,19 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
   失敗は pending 集合に入って次の再計算でリトライされ、
   `goisis_fib_pending` ゲージで観測できます。起動時には前回の残骸経路
   を FIB からスイープします。
+- **ローカル SID。** End / End.DT SID は `isis-srv6` という dummy デバイス上の
+  `seg6local` 経路として置きます。このデバイスは netlink FIB が必要になった
+  時点で作り、最後の SID が消えたときに削除します（起動時の sweep でも同様に
+  刈るため、locator を広報しなくなった実行では経路もデバイスも残りません）。
+  ループバックには載せられません: Linux（6.12 で確認）は出力デバイスが `lo` の
+  `seg6local` 経路の lwtunnel state を落とすため、encap の無い素の経路だけが
+  残り、その SID に向いたパケットは黙って捨てられます。デバイスは経路をぶら
+  下げる場所でしかないので locator ごとではなく 1 本を共有し、名前も固定に
+  して、再起動時は前回作ったものをそのまま使います。End.X SID だけは例外で、
+  隣接のある回線に載せます。デバイスを作れない場合はログを 1 回だけ出し
+  （投入自体は housekeeping ごとに再試行します）、
+  `goisis_fib_errors_total{op="add_sid"}` で数えます。デーモンは起動も経路
+  計算も続けます。
 - **Flex-Algo（RFC 9350）。** 定義の勝者選出は priority / system-ID
   順。参加はアルゴリズムごとにトポロジを剪定します。現在計算するのは
   IGP メトリックのみで、制約 sub-sub-TLV は将来の ASLA 対応計算のため
@@ -296,9 +309,10 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
 | RFC 8405 の LONG_WAIT なし | SPF back-off は 2 状態です（最初は即時再計算、その後 200 ms まとめる）。継続的な変動時に長い待ちへ段階を上げる挙動は意図的に省いています。MVP 規模では 2 つ目のしきい値は収束をさらに遅らせるだけだからです。 |
 | 変更ごとの全再計算 | インクリメンタル SPF はなく、トポロジ変更のたびに `(レベル, アルゴリズム)` のトポロジを再構築します。MVP 規模のエリアには十分です。 |
 | RFC 7987 の lifetime 下限なし | 受信 LSP のエージングは広告された remaining lifetime にそのまま従います。 |
+| ローカル SID には専用デバイスが要る | End/End.DT SID はループバックではなく netlink FIB が作る `isis-srv6` dummy デバイスに置きます。理由となるカーネル挙動は上の **ローカル SID** を参照してください。デバイスは全 locator で共有し、最後の SID と一緒に削除します。 |
 | End.DT46 | `fib` API では宣言されていますが netlink FIB ではプログラムできません（vendored ライブラリに該当 seg6local アクションがないため）。End/End.X/End.DT4/End.DT6 は動きます。 |
 | End.X SID は無保護 | End.X SID は (locator, 隣接) ごとに 1 つで、flags と weight は 0 で広報します。backup (B)・SID セット (S)・再起動をまたぐ永続化 (P) はいずれも扱わないため、再起動すると function 値は割り当て直しになります。B フラグの利用先である TI-LFA は対象外です。 |
-| End.X には隣接のグローバル on-link アドレスが必要 | End.X SID の割り当て・広報・FIB 投入は、隣接がその回線の connected プレフィクス内にグローバル IPv6 アドレスを持つ場合に限ります。アドレスは隣接の hello、無ければ fragment 0 LSP の TLV 232 から取ります。Linux の End.X は次ホップを*入力*インタフェース側で解決するため、RFC 5308 が与える link-local を次ホップにすると hairpin しか転送できず transit は落ちます。hello に link-local、LSP にグローバルを載せる FRR が相手なら、リンクにグローバルな subnet があれば End.X が付きます。goisisd 同士では付きません: 本デーモンは hello に link-local しか載せず(RFC 5308 3)、自分の TLV 232 も広報しないため、転送先になるアドレスを公開していないからです。アドレスが分からない間は割り当ても広報も FIB 投入もせず、隣接ごとに 1 回警告します。 |
+| End.X には隣接のグローバル on-link アドレスが必要 | End.X SID の割り当て・広報・FIB 投入は、隣接がその回線の connected プレフィクス内にグローバル IPv6 アドレスを持つ場合に限ります。アドレスは隣接の hello、無ければ fragment 0 LSP の TLV 232 から取ります。Linux の End.X は次ホップを*入力*インタフェース側で解決するため、RFC 5308 が与える link-local を次ホップにすると hairpin しか転送できず transit は落ちます。現状どのピアもそのアドレスを公開していません。FRR は hello に link-local を載せ、LSP には IPv6 Interface Address TLV を一切載せない(`pkg/packet/testdata` の FRR 実キャプチャ LSP に TLV 232 は無い)ため、FRR 相手には End.X を広報しません。goisisd 同士でも付きません: 本デーモンは hello に link-local しか載せず(RFC 5308 3)、自分の TLV 232 も広報しないため、転送先になるアドレスを公開していないからです。アドレスが分からない間は割り当ても広報も FIB 投入もせず、隣接ごとに 1 回警告します。 |
 
 ## テスト戦略
 

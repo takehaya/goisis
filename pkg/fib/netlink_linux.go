@@ -28,6 +28,16 @@ const rtprotoISIS = unix.RTPROT_ISIS
 // else installs the SID address, and RemoveLocalSID must keep matching them.
 const routePriority = 115
 
+// srv6DummyDev is the dummy interface every non-End.X local SID is installed
+// on. It cannot be the loopback: Linux 6.12 drops the lwtunnel state of a
+// seg6local route whose output device is `lo` (the route reads back with no
+// RTA_ENCAP and every packet steered at the SID is dropped), while the same
+// route on a dummy device forwards. One shared device rather than one per
+// locator — the device is only somewhere to hang the route, so N of them would
+// be N link-locals and N lifecycles for no gain — and a fixed name so a
+// restart finds and reuses the device it made last time.
+const srv6DummyDev = "isis-srv6"
+
 // Netlink is a Linux FIB that programs routes via rtnetlink. Routes are
 // installed in the given table tagged with the IS-IS route protocol. It
 // requires CAP_NET_ADMIN.
@@ -94,7 +104,9 @@ func (n *Netlink) Sweep(keep func(netip.Prefix) bool) error {
 			}
 		}
 	}
-	return nil
+	// A previous run may have left the SRv6 dummy device behind with every SID
+	// on it now swept; the sweep is what keeps it from outliving them.
+	return n.pruneSRv6Dummy()
 }
 
 // baseRoute is the key shared by every IS-IS route: Update, Withdraw and the
@@ -156,15 +168,16 @@ func (n *Netlink) RemoveLocalSID(sid netip.Addr) error {
 	if err := netlink.RouteDel(r); err != nil && !isNotExist(err) {
 		return fmt.Errorf("fib: remove local SID %s: %w", sid, err)
 	}
-	return nil
+	return n.pruneSRv6Dummy()
 }
 
 func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 	enc := &netlink.SEG6LocalEncap{Flags: [nl.SEG6_LOCAL_MAX]bool{}}
 	enc.Flags[nl.SEG6_LOCAL_ACTION] = true
-	// seg6local routes attach to the loopback device, except End.X, which
-	// points at the neighbor's link on the circuit the adjacency is on.
-	dev := "lo"
+	// seg6local routes attach to our dummy device (see srv6DummyDev), except
+	// End.X, which points at the neighbor's link on the circuit the adjacency
+	// is on.
+	dev := ""
 	switch sid.Behavior {
 	case BehaviorEnd:
 		enc.Action = nl.SEG6_LOCAL_ACTION_END
@@ -200,17 +213,82 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 	default:
 		return nil, fmt.Errorf("fib: unsupported SID behavior %d", sid.Behavior)
 	}
-	link, err := netlink.LinkByName(dev)
+	index, err := n.localSIDDevice(dev)
 	if err != nil {
-		return nil, fmt.Errorf("fib: interface %q for local SID: %w", dev, err)
+		return nil, err
 	}
 	return &netlink.Route{
 		Dst:       &net.IPNet{IP: sid.SID.AsSlice(), Mask: net.CIDRMask(128, 128)},
 		Protocol:  rtprotoISIS,
 		Table:     n.table,
-		LinkIndex: link.Attrs().Index,
+		LinkIndex: index,
 		Encap:     enc,
 	}, nil
+}
+
+// localSIDDevice resolves the output device of a local SID route, creating the
+// SRv6 dummy device when dev is empty (everything but End.X). The device is
+// ours: AddLocalSID is re-run every housekeeping tick, so one deleted or
+// brought down out-of-band is repaired on the next pass.
+func (n *Netlink) localSIDDevice(dev string) (int, error) {
+	if dev != "" {
+		link, err := netlink.LinkByName(dev)
+		if err != nil {
+			return 0, fmt.Errorf("fib: interface %q for local SID: %w", dev, err)
+		}
+		return link.Attrs().Index, nil
+	}
+	link, err := netlink.LinkByName(srv6DummyDev)
+	if err != nil {
+		if !isLinkNotFound(err) {
+			return 0, fmt.Errorf("fib: interface %q for local SID: %w", srv6DummyDev, err)
+		}
+		attrs := netlink.NewLinkAttrs()
+		attrs.Name = srv6DummyDev
+		if err := netlink.LinkAdd(&netlink.Dummy{LinkAttrs: attrs}); err != nil && !errors.Is(err, unix.EEXIST) {
+			return 0, fmt.Errorf("fib: create %q for local SIDs: %w", srv6DummyDev, err)
+		}
+		if link, err = netlink.LinkByName(srv6DummyDev); err != nil {
+			return 0, fmt.Errorf("fib: interface %q for local SID: %w", srv6DummyDev, err)
+		}
+	}
+	if link.Attrs().Flags&net.FlagUp == 0 {
+		if err := netlink.LinkSetUp(link); err != nil {
+			return 0, fmt.Errorf("fib: bring %q up for local SIDs: %w", srv6DummyDev, err)
+		}
+	}
+	return link.Attrs().Index, nil
+}
+
+// pruneSRv6Dummy removes the SRv6 dummy device once no local SID is left on
+// it, so neither a clean shutdown nor a startup sweep leaves it orphaned. Any
+// proto-isis route on the device holds it, in any table: a second instance
+// writing to another table shares the device.
+func (n *Netlink) pruneSRv6Dummy() error {
+	link, err := netlink.LinkByName(srv6DummyDev)
+	if err != nil {
+		if isLinkNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("fib: interface %q: %w", srv6DummyDev, err)
+	}
+	filter := &netlink.Route{Protocol: rtprotoISIS, LinkIndex: link.Attrs().Index}
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V6, filter, netlink.RT_FILTER_PROTOCOL|netlink.RT_FILTER_OIF)
+	if err != nil {
+		return fmt.Errorf("fib: list local SIDs on %q: %w", srv6DummyDev, err)
+	}
+	if len(routes) > 0 {
+		return nil
+	}
+	if err := netlink.LinkDel(link); err != nil && !isLinkNotFound(err) {
+		return fmt.Errorf("fib: remove %q: %w", srv6DummyDev, err)
+	}
+	return nil
+}
+
+func isLinkNotFound(err error) bool {
+	var nf netlink.LinkNotFoundError
+	return errors.As(err, &nf) || errors.Is(err, unix.ENODEV) || isNotExist(err)
 }
 
 func prefixToIPNet(p netip.Prefix) *net.IPNet {

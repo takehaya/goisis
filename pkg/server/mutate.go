@@ -73,6 +73,7 @@ func (s *IsisServer) DeleteLocator(ctx context.Context, prefix netip.Prefix) err
 		}
 		removed := s.locators[idx]
 		s.locators = append(s.locators[:idx], s.locators[idx+1:]...)
+		delete(s.endSIDFailed, removed.endSID())
 		if err := s.fib.RemoveLocalSID(removed.endSID()); err != nil {
 			s.logger.Error("remove local End SID", "sid", removed.endSID(), "error", err)
 			s.metrics.FIBError(fibOpRemoveSID)

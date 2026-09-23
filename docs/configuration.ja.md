@@ -70,7 +70,9 @@ srv6:
 各 locator は SRv6 Locator TLV(27)で広報され、locator のベースアドレスに End SID を、
 Router Capability TLV(242)に SRv6 Capabilities sub-TLV を載せます。TLV 27 を解さない
 ピア向けに IPv6 到達性(TLV 236)へもミラーされます。`fib: true` のとき End SID は
-`seg6local` End ルートとして設置されます。
+`isis-srv6` 上の `seg6local` End ルートとして設置されます。`isis-srv6` はローカル
+SID 用にデーモンが作る dummy デバイスで、最後の SID が消えると削除します
+(ループバックを出力デバイスにした `seg6local` 経路は Linux が encap を落とすため)。
 
 隣接には locator ごとに End.X SID も割り当てます。値は locator の function 空間の 1 番から取り、
 隣接の IS reachability エントリに載せます(RFC 9352 §8)。`fib: true` なら各 End.X SID は

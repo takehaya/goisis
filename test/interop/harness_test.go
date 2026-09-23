@@ -238,15 +238,30 @@ func (n *frrNode) databaseContains(t *testing.T, substr string) bool {
 // seg6localSupported reports whether the host kernel honors seg6local route
 // encapsulation (CONFIG_IPV6_SEG6_LWTUNNEL). Containers share the host kernel,
 // so this gates SRv6 End SID dataplane assertions. It probes by adding a
-// temporary End route on lo and checking the encap survives readback.
+// temporary End route and checking the encap survives readback.
+//
+// The probe device is a dummy, not lo: Linux (6.12 observed) drops the
+// lwtunnel state of a seg6local route whose output device is the loopback, so
+// probing there reports "unsupported" on a kernel that supports it — the same
+// defect that makes goisis install its own local SIDs on a dummy device.
 func seg6localSupported(t *testing.T) bool {
 	t.Helper()
-	const probe = "fc00:6109:ca1::/128"
-	if err := exec.Command("ip", "-6", "route", "add", probe, "encap", "seg6local", "action", "End", "dev", "lo").Run(); err != nil {
+	const (
+		probe = "fc00:6109:ca1::/128"
+		dev   = "seg6probe0"
+	)
+	if err := exec.Command("ip", "link", "add", dev, "type", "dummy").Run(); err != nil {
+		return false
+	}
+	// Deleting the device takes the probe route with it.
+	defer func() { _ = exec.Command("ip", "link", "del", dev).Run() }()
+	if err := exec.Command("ip", "link", "set", dev, "up").Run(); err != nil {
+		return false
+	}
+	if err := exec.Command("ip", "-6", "route", "add", probe, "encap", "seg6local", "action", "End", "dev", dev).Run(); err != nil {
 		return false
 	}
 	out, _ := exec.Command("ip", "-6", "route", "show", probe).CombinedOutput()
-	_ = exec.Command("ip", "-6", "route", "del", probe).Run()
 	return strings.Contains(string(out), "seg6local")
 }
 
