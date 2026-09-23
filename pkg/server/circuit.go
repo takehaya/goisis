@@ -35,6 +35,13 @@ type circuit struct {
 	ssn      map[packet.Level]map[packet.LSPID]bool
 	ssnAck   map[packet.Level]map[packet.LSPID]packet.LSPEntry
 	nextCSNP map[packet.Level]time.Time
+
+	// syncHold is the earliest time a whole-database synchronization may run
+	// again at a level, and syncDeferred records that one was asked for while
+	// the hold-down was in force and still owes the neighbor the database.
+	// See syncCircuitLevel.
+	syncHold     map[packet.Level]time.Time
+	syncDeferred map[packet.Level]bool
 }
 
 func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circuit {
@@ -48,6 +55,8 @@ func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circui
 		ssn:          map[packet.Level]map[packet.LSPID]bool{},
 		ssnAck:       map[packet.Level]map[packet.LSPID]packet.LSPEntry{},
 		nextCSNP:     map[packet.Level]time.Time{},
+		syncHold:     map[packet.Level]time.Time{},
+		syncDeferred: map[packet.Level]bool{},
 	}
 	for _, l := range cfg.levels() {
 		c.adjs[l] = map[packet.SystemID]*adjacency{}
