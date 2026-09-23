@@ -163,6 +163,31 @@ for an exact-length match). The flooded LSDB is never affected. For per-topology
 or per-algorithm separate RIBs (the IGP analogue of multiple BGP tables), use
 Flexible Algorithm rather than a filter.
 
+## Reloading
+
+`goisisd` re-reads its `-f` file on `SIGHUP` and applies the differences the
+runtime API can express. Every other difference is left alone and named in the
+log, so a reload is never half a file applied silently:
+
+```console
+$ systemctl reload goisisd         # or: kill -HUP $(pidof goisisd)
+WARN configuration reload: this change needs a restart and was not applied key="circuits: eth1 added"
+```
+
+| Key | On `SIGHUP` |
+|-----|-------------|
+| `prefixes` | Applied. A changed metric is a withdrawal and a re-advertisement. |
+| `srv6.locators` | Applied, with each locator's End SID. |
+| `flex-algo` | Applied. A changed definition is deleted and re-added, and a locator bound to it steps aside and comes back with it. |
+| `circuits` | **Restart.** Adding or removing one needs a transport and a reader goroutine to appear or go away; changing a level, metric, timer or key means rebuilding it the same way. An interface's addresses and carrier are followed live and need neither. |
+| `net`, `hostname` | **Restart.** The System ID and area addresses identify every LSP this node has originated. |
+| `area-*` / `domain-*` passwords, algorithms and key IDs | **Restart** — a rolling one, not a flag day, via [Key rotation](#key-rotation). |
+| `fib`, `fib-table`, `lsp-mtu`, `lsdb-entry-limit`, `overload-on-startup`, `policy` | **Restart.** |
+
+A file that will not parse leaves the daemon exactly as it was, and a `SIGHUP`
+to a daemon started without `-f` is ignored rather than fatal. The overload bit
+is not a file key at all: `goisis overload on` sets it at runtime.
+
 ## Capabilities
 
 `goisisd` needs `CAP_NET_RAW` (AF_PACKET) and, with `fib: true`, `CAP_NET_ADMIN`:

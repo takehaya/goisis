@@ -7,6 +7,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/goisisd -f /etc/goisis/goisisd.yaml -api-listen unix:///run/goisis/goisisd.sock
+# SIGHUP re-reads the configuration file and applies what the runtime API can
+# express; what it cannot is named in the log and waits for a restart. See
+# docs/configuration.md.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2
 
