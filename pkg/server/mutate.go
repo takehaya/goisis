@@ -46,10 +46,7 @@ func (s *IsisServer) AddLocator(ctx context.Context, cfg SRv6LocatorConfig) erro
 			}
 		}
 		s.locators = append(s.locators, cfg)
-		if err := s.fib.AddLocalSID(fib.LocalSID{SID: cfg.endSID(), Behavior: fib.BehaviorEnd}); err != nil {
-			s.logger.Error("install local End SID", "sid", cfg.endSID(), "error", err)
-			s.metrics.FIBError(fibOpAddSID)
-		}
+		s.programSID(fib.LocalSID{SID: cfg.endSID(), Behavior: fib.BehaviorEnd})
 		s.regenerateLSPs(false, time.Now())
 		s.markDirty()
 		return nil
@@ -73,11 +70,7 @@ func (s *IsisServer) DeleteLocator(ctx context.Context, prefix netip.Prefix) err
 		}
 		removed := s.locators[idx]
 		s.locators = append(s.locators[:idx], s.locators[idx+1:]...)
-		delete(s.endSIDFailed, removed.endSID())
-		if err := s.fib.RemoveLocalSID(removed.endSID()); err != nil {
-			s.logger.Error("remove local End SID", "sid", removed.endSID(), "error", err)
-			s.metrics.FIBError(fibOpRemoveSID)
-		}
+		s.unprogramSID(removed.endSID())
 		s.regenerateLSPs(false, time.Now())
 		s.markDirty()
 		return nil

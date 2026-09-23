@@ -55,7 +55,8 @@ type IsisServer struct {
 	endXSIDs      map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 	seqWrapUntil  map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
 	endXNoNexthop map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
-	endSIDFailed  map[netip.Addr]bool     // End SIDs whose failed install was already logged
+	sidPending    map[netip.Addr]bool     // local SIDs whose removal failed; retried from housekeeping
+	sidFailed     edgeLog[netip.Addr]     // local SIDs whose failed FIB write was already logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
@@ -122,7 +123,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		endXSIDs:          map[endXKey]endXSID{},
 		seqWrapUntil:      map[lspKey]time.Time{},
 		endXNoNexthop:     map[endXAdjKey]bool{},
-		endSIDFailed:      map[netip.Addr]bool{},
+		sidPending:        map[netip.Addr]bool{},
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,
@@ -346,22 +347,7 @@ func (s *IsisServer) localSIDs() []netip.Addr {
 // initial install and repairs a SID deleted out-of-band while the daemon runs.
 func (s *IsisServer) installLocalSIDs() {
 	for _, lc := range s.locators {
-		sid := lc.endSID()
-		err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd})
-		if err == nil {
-			delete(s.endSIDFailed, sid)
-			continue
-		}
-		s.metrics.FIBError(fibOpAddSID)
-		// A failure that persists — no seg6local support in the kernel, no
-		// dummy device to install the SID on — would otherwise be logged once
-		// per housekeeping tick, so the log is edge-triggered and the counter
-		// carries the rate. The daemon keeps running either way: an End SID
-		// that cannot be programmed does not stop us from routing.
-		if !s.endSIDFailed[sid] {
-			s.endSIDFailed[sid] = true
-			s.logger.Error("install local End SID", "sid", sid, "error", err)
-		}
+		s.programSID(fib.LocalSID{SID: lc.endSID(), Behavior: fib.BehaviorEnd})
 	}
 	s.installEndXSIDs()
 }
@@ -370,11 +356,53 @@ func (s *IsisServer) installLocalSIDs() {
 // shutdown leaves no orphaned seg6local routes in the kernel.
 func (s *IsisServer) removeLocalSIDs() {
 	for _, sid := range s.localSIDs() {
-		if err := s.fib.RemoveLocalSID(sid); err != nil {
-			s.logger.Error("remove local SID", "sid", sid, "error", err)
-			s.metrics.FIBError(fibOpRemoveSID)
-		}
+		s.unprogramSID(sid)
 	}
+}
+
+// programSID writes one local SID to the FIB. Every local SID write goes
+// through here (or unprogramSID) so that the counter and the log cannot drift
+// apart: a failure is always counted, so a FIB that cannot program SIDs shows
+// in goisis_fib_errors_total and not only in the log, and the log is
+// edge-triggered per SID because installs are re-asserted from housekeeping —
+// a failure that persists (no seg6local support in the kernel, no dummy device
+// to install the SID on) would otherwise be logged once per tick. The daemon
+// keeps running either way: a SID that cannot be programmed does not stop us
+// from routing. attrs are extra log attributes naming what the SID is for.
+func (s *IsisServer) programSID(sid fib.LocalSID, attrs ...any) {
+	// The SID is wanted again, so a removal of it that failed earlier is moot.
+	delete(s.sidPending, sid.SID)
+	if err := s.fib.AddLocalSID(sid); err != nil {
+		s.metrics.FIBError(fibOpAddSID)
+		s.sidFailed.warn(sid.SID, func() {
+			s.logger.Error("install local SID", append([]any{"sid", sid.SID, "error", err}, attrs...)...)
+		})
+		return
+	}
+	s.sidFailed.recovered(sid.SID, func() {
+		s.logger.Info("local SID installed after an earlier failure", "sid", sid.SID)
+	})
+}
+
+// unprogramSID removes one local SID, and keeps a failed removal in
+// s.sidPending for housekeeping to retry. The caller drops its own record of
+// the SID (a locator, an endXSIDs entry) either way, so without the pending
+// set nothing would ever ask for that SID again and its seg6local route would
+// sit in the kernel until a restart. RemoveLocalSID reports a route that is
+// already gone as success, so the retry stops once the kernel agrees.
+func (s *IsisServer) unprogramSID(sid netip.Addr, attrs ...any) {
+	if err := s.fib.RemoveLocalSID(sid); err != nil {
+		s.metrics.FIBError(fibOpRemoveSID)
+		s.sidPending[sid] = true
+		s.sidFailed.warn(sid, func() {
+			s.logger.Error("remove local SID", append([]any{"sid", sid, "error", err}, attrs...)...)
+		})
+		return
+	}
+	delete(s.sidPending, sid)
+	s.sidFailed.recovered(sid, func() {
+		s.logger.Info("local SID removed after an earlier failure", "sid", sid)
+	})
 }
 
 // overloaded reports whether the overload bit should be set in our own LSP.
@@ -479,6 +507,11 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	s.floodTransmit(now)
 	if len(s.locators) > 0 || len(s.endXSIDs) > 0 {
 		s.installLocalSIDs()
+	}
+	// Retry the removals that failed. Unlike an install, nothing else re-asserts
+	// these: the SID is already out of s.locators and s.endXSIDs.
+	for sid := range s.sidPending {
+		s.unprogramSID(sid)
 	}
 	for level, db := range s.dbs {
 		s.metrics.LSDBSize(levelLabel(level), len(db.entries))

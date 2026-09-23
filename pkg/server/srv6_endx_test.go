@@ -289,10 +289,10 @@ var endXNeighbor = packet.SystemID{0, 0, 0, 0, 0, 2}
 // whose connected subnet is 2001:db8::/64, holding an Up adjacency to
 // endXNeighbor that listed helloAddrs in its hellos (TLV 232). Serve is not
 // started: the tests drive syncEndXSIDs directly, as the regeneration path does.
-func endXServer(t *testing.T, logs io.Writer, helloAddrs []netip.Addr) (*IsisServer, *recordFIB) {
+func endXServer(t *testing.T, logs io.Writer, helloAddrs []netip.Addr, opts ...ServerOption) (*IsisServer, *recordFIB) {
 	t.Helper()
 	rf := newRecordFIB()
-	s := mustServer(t,
+	s := mustServer(t, append([]ServerOption{
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{
@@ -304,7 +304,7 @@ func endXServer(t *testing.T, logs io.Writer, helloAddrs []netip.Addr) (*IsisSer
 		WithSRv6Locator(netip.MustParsePrefix("fc00:0:1::/48")),
 		WithFIB(rf),
 		WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
-	)
+	}, opts...)...)
 	var lv levelSet
 	lv.add(packet.Level2)
 	s.circuits[0].p2pAdj = &adjacency{systemID: endXNeighbor, state: AdjUp, levels: lv, neighborIPv6: helloAddrs}
@@ -557,5 +557,69 @@ func TestEndXSIDsFormBetweenTwoGoisisNodes(t *testing.T) {
 	}
 	if !slices.Equal(learned, []netip.Addr{bLL}) {
 		t.Errorf("a learned %v from b's hellos, want only the link-local %s", learned, bLL)
+	}
+}
+
+// TestEndXFIBFailureIsCountedAndRepairedByHousekeeping: a FIB that refuses an
+// End.X SID is visible in the fib_error counter and not only in the log; the
+// log line is edge-triggered, so a failure that persists does not repeat once
+// per housekeeping tick; and housekeeping both re-asserts a failed install and
+// retries a failed removal, so neither a missing SID nor the kernel route a
+// failed removal leaves behind survives until a restart.
+func TestEndXFIBFailureIsCountedAndRepairedByHousekeeping(t *testing.T) {
+	sid := netip.MustParseAddr("fc00:0:1:1::")
+	now := time.Now()
+	var logs syncBuf
+	m := newCountingMetrics()
+	s, rf := endXServer(t, &logs,
+		[]netip.Addr{netip.MustParseAddr("fe80::b2"), netip.MustParseAddr("2001:db8::2")},
+		WithMetrics(m))
+	// Housekeeping expires an adjacency it has not heard from; keep this one.
+	s.circuits[0].p2pAdj.holding, s.circuits[0].p2pAdj.lastHeard = 30, now
+
+	rf.failSID(sid, true, false)
+	s.syncEndXSIDs()
+	installErrors := m.count("fib_error", fibOpAddSID)
+	if installErrors == 0 {
+		t.Fatal("a failed End.X SID install was not counted as a FIB error")
+	}
+	for range 2 {
+		s.housekeeping(now)
+	}
+	if n := m.count("fib_error", fibOpAddSID); n <= installErrors {
+		t.Errorf("add_sid FIB errors = %d after two housekeeping ticks, want more than the %d at install: the counter carries the rate", n, installErrors)
+	}
+	if n := strings.Count(logs.String(), "install local SID"); n != 1 {
+		t.Errorf("the failed install was logged %d times, want 1: the log is edge-triggered", n)
+	}
+
+	rf.failSID(sid, false, false)
+	s.housekeeping(now)
+	if _, ok := rf.getSID(sid); !ok {
+		t.Fatal("housekeeping did not reinstall the End.X SID after the FIB recovered")
+	}
+	if n := strings.Count(logs.String(), "local SID installed after an earlier failure"); n != 1 {
+		t.Errorf("the recovery was logged %d times, want 1", n)
+	}
+
+	// The adjacency goes away while the FIB refuses the removal. Its endXSIDs
+	// entry is gone, so only a pending-removal set can get the seg6local route
+	// out of the kernel.
+	rf.failSID(sid, false, true)
+	s.circuits[0].p2pAdj = nil
+	s.syncEndXSIDs()
+	if n := m.count("fib_error", fibOpRemoveSID); n != 1 {
+		t.Errorf("remove_sid FIB errors = %d, want 1", n)
+	}
+	if !s.sidPending[sid] {
+		t.Fatal("a failed End.X SID removal was forgotten; the kernel route leaks until a restart")
+	}
+	rf.failSID(sid, false, false)
+	s.housekeeping(now)
+	if _, ok := rf.getSID(sid); ok {
+		t.Error("housekeeping did not retry the failed End.X SID removal")
+	}
+	if s.sidPending[sid] {
+		t.Error("a removal that succeeded on retry is still pending")
 	}
 }

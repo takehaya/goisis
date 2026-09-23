@@ -13,15 +13,31 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-// recordFIB records the routes and local SIDs currently programmed.
+// recordFIB records the routes and local SIDs currently programmed. A SID
+// named in failAdd/failRemove has its write rejected, so a test can break one
+// SID's programming while the rest of the FIB keeps working.
 type recordFIB struct {
-	mu     sync.Mutex
-	routes map[netip.Prefix][]fib.Nexthop
-	sids   map[netip.Addr]fib.LocalSID
+	mu         sync.Mutex
+	routes     map[netip.Prefix][]fib.Nexthop
+	sids       map[netip.Addr]fib.LocalSID
+	failAdd    map[netip.Addr]bool
+	failRemove map[netip.Addr]bool
 }
 
 func newRecordFIB() *recordFIB {
-	return &recordFIB{routes: map[netip.Prefix][]fib.Nexthop{}, sids: map[netip.Addr]fib.LocalSID{}}
+	return &recordFIB{
+		routes:     map[netip.Prefix][]fib.Nexthop{},
+		sids:       map[netip.Addr]fib.LocalSID{},
+		failAdd:    map[netip.Addr]bool{},
+		failRemove: map[netip.Addr]bool{},
+	}
+}
+
+// failSID selects which of this SID's writes the FIB rejects.
+func (f *recordFIB) failSID(sid netip.Addr, add, remove bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failAdd[sid], f.failRemove[sid] = add, remove
 }
 
 func (f *recordFIB) Update(p netip.Prefix, nh []fib.Nexthop) error {
@@ -43,6 +59,9 @@ func (f *recordFIB) Sweep(func(netip.Prefix) bool) error { return nil }
 func (f *recordFIB) AddLocalSID(s fib.LocalSID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failAdd[s.SID] {
+		return errFIB
+	}
 	f.sids[s.SID] = s
 	return nil
 }
@@ -50,6 +69,9 @@ func (f *recordFIB) AddLocalSID(s fib.LocalSID) error {
 func (f *recordFIB) RemoveLocalSID(sid netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failRemove[sid] {
+		return errFIB
+	}
 	delete(f.sids, sid)
 	return nil
 }

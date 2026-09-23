@@ -124,9 +124,7 @@ func (s *IsisServer) syncEndXSIDs() {
 		if live[k] {
 			continue
 		}
-		if err := s.fib.RemoveLocalSID(e.sid); err != nil {
-			s.logger.Error("remove End.X SID", "sid", e.sid, "neighbor", k.neighbor, "error", err)
-		}
+		s.unprogramSID(e.sid, "neighbor", k.neighbor)
 		delete(s.endXSIDs, k)
 	}
 	for _, w := range wanted {
@@ -259,10 +257,8 @@ func locatorSID(loc netip.Prefix, fnBits int, fn uint32) netip.Addr {
 // was removed out-of-band is repaired without a restart.
 func (s *IsisServer) installEndXSIDs() {
 	for k, e := range s.endXSIDs {
-		sid := fib.LocalSID{SID: e.sid, Behavior: fib.BehaviorEndX, Nexthop: e.nexthop, Interface: k.circuit}
-		if err := s.fib.AddLocalSID(sid); err != nil {
-			s.logger.Error("install End.X SID", "sid", e.sid, "neighbor", k.neighbor, "error", err)
-		}
+		s.programSID(fib.LocalSID{SID: e.sid, Behavior: fib.BehaviorEndX, Nexthop: e.nexthop, Interface: k.circuit},
+			"neighbor", k.neighbor)
 	}
 }
 
