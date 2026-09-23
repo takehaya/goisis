@@ -78,12 +78,11 @@ func TestLSPMTUBelowMinimumRejected(t *testing.T) {
 	}
 }
 
-// TestTransmitSRMDropsLSPOverCircuitMTU: a foreign LSP larger than a circuit's
-// MTU cannot be re-fragmented by this transit node, so it is never sent there.
-// The SRM flag is cleared rather than rescheduled forever (p2p, where the flag
-// would otherwise survive the send), and the drop is warned once per circuit.
-func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
-	var logBuf bytes.Buffer
+// oversizeSRMServer is a p2p L2 node on a 1000-octet circuit with an Up
+// neighbor, so transmitSRM reaches the circuit-MTU check. It returns the other
+// end of the segment, to see what (if anything) was actually sent.
+func oversizeSRMServer(t *testing.T, logBuf *bytes.Buffer, m Metrics) (*IsisServer, *circuit, *datalink.MockTransport) {
+	t.Helper()
 	local := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1000)
 	peer := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 2}, 1000)
 	datalink.Link(local, peer)
@@ -91,19 +90,24 @@ func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{Name: "c", Transport: local, Level2: true, P2P: true, Padding: ptrFalse()}),
-		WithLogger(slog.New(slog.NewTextHandler(&logBuf, nil))),
+		WithLogger(slog.New(slog.NewTextHandler(logBuf, nil))),
+		WithMetrics(m),
 	)
-	now := time.Now()
 	c := s.circuits[0]
-	upP2PAdj(c, packet.SystemID{0, 0, 0, 0, 0, 9}, now) // p2p floods only to an Up neighbor
+	upP2PAdj(c, packet.SystemID{0, 0, 0, 0, 0, 9}, time.Now()) // p2p floods only to an Up neighbor
+	return s, c, peer
+}
 
-	// 1400 octets: past this circuit's 997-octet budget, inside the 1492-octet
-	// buffer, so a wider circuit would flood it unchanged.
+// injectOversizeLSP stores a foreign LSP of 1400 octets under sys: past the
+// 997-octet budget of a 1000-octet circuit, inside the 1492-octet buffer, so a
+// wider circuit would flood it unchanged.
+func injectOversizeLSP(t *testing.T, s *IsisServer, sys packet.SystemID, now time.Time) packet.LSPID {
+	t.Helper()
 	tlvs := []packet.TLV{&packet.UnknownTLV{TLVType: 200, Value: make([]byte, 111)}}
 	for i := 0; i < 5; i++ {
 		tlvs = append(tlvs, &packet.UnknownTLV{TLVType: 200, Value: make([]byte, 250)})
 	}
-	id := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+	id := lspID(sys, 0)
 	lsp := &packet.LSP{Level: packet.Level2, RemainingTime: maxAgeSeconds, LSPID: id, SequenceNumber: 1, ISType: 2, TLVs: tlvs}
 	raw, err := lsp.Serialize()
 	if err != nil {
@@ -113,6 +117,20 @@ func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
 		t.Fatalf("test LSP is %d octets, want 1400", len(raw))
 	}
 	s.dbs[packet.Level2].entries[id] = &lspEntry{lsp: lsp, raw: raw, inserted: now, lifetime: maxAgeSeconds}
+	return id
+}
+
+// TestTransmitSRMDropsLSPOverCircuitMTU: a foreign LSP larger than a circuit's
+// MTU cannot be re-fragmented by this transit node, so it is never sent there.
+// The SRM flag is cleared rather than rescheduled forever (p2p, where the flag
+// would otherwise survive the send). The neighbor keeps asking for it, so every
+// attempt is counted even though only the first one is logged.
+func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
+	var logBuf bytes.Buffer
+	m := newCountingMetrics()
+	s, c, peer := oversizeSRMServer(t, &logBuf, m)
+	now := time.Now()
+	id := injectOversizeLSP(t, s, packet.SystemID{0, 0, 0, 0, 0, 9}, now)
 
 	c.setSRM(packet.Level2, id, now)
 	s.transmitSRM(c, packet.Level2, now)
@@ -123,7 +141,7 @@ func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
 	// Nothing may have gone out: a sentinel sent afterwards is the first frame
 	// the peer sees.
 	sentinel := []byte{0xde, 0xad}
-	if err := local.Send(c.dest(packet.Level2), sentinel); err != nil {
+	if err := c.cfg.Transport.Send(c.dest(packet.Level2), sentinel); err != nil {
 		t.Fatalf("send sentinel: %v", err)
 	}
 	f, err := peer.Recv()
@@ -134,10 +152,35 @@ func TestTransmitSRMDropsLSPOverCircuitMTU(t *testing.T) {
 		t.Errorf("sent %d octets on a circuit that cannot carry them", len(f.PDU))
 	}
 
-	// The warning is per circuit, not per retransmission attempt.
+	// A second PSNP for the same LSP drops it again: the drop is counted per
+	// attempt, the warning stays at one.
 	c.setSRM(packet.Level2, id, now)
 	s.transmitSRM(c, packet.Level2, now)
+	if got := m.count("flood_drop", "c", floodDropOversize); got != 2 {
+		t.Errorf("counted %d oversize flood drops, want one per attempt (2)", got)
+	}
 	if n := strings.Count(logBuf.String(), "level=WARN"); n != 1 {
-		t.Errorf("logged %d warnings, want exactly one", n)
+		t.Errorf("logged %d warnings for one LSP, want exactly one", n)
+	}
+}
+
+// TestTransmitSRMWarnsForEachOversizeLSP: the suppression is keyed per
+// (circuit, LSP ID), so a second, different LSP that cannot be flooded is
+// reported instead of inheriting the first one's silence.
+func TestTransmitSRMWarnsForEachOversizeLSP(t *testing.T) {
+	var logBuf bytes.Buffer
+	m := newCountingMetrics()
+	s, c, _ := oversizeSRMServer(t, &logBuf, m)
+	now := time.Now()
+	for _, sys := range []packet.SystemID{{0, 0, 0, 0, 0, 9}, {0, 0, 0, 0, 0, 0xa}} {
+		id := injectOversizeLSP(t, s, sys, now)
+		c.setSRM(packet.Level2, id, now)
+		s.transmitSRM(c, packet.Level2, now)
+	}
+	if n := strings.Count(logBuf.String(), "level=WARN"); n != 2 {
+		t.Errorf("logged %d warnings for two oversize LSPs, want one each", n)
+	}
+	if got := m.count("flood_drop", "c", floodDropOversize); got != 2 {
+		t.Errorf("counted %d oversize flood drops, want 2", got)
 	}
 }

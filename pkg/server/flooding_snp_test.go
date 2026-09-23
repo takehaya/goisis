@@ -478,7 +478,7 @@ func TestUnknownPurgeDoesNotConsumeLSDBEntryLimit(t *testing.T) {
 	if len(db.entries) != 1 {
 		t.Errorf("%d entries after an unknown purge, want 1", len(db.entries))
 	}
-	if s.lsdbLimitWarned[packet.Level2] {
+	if s.lsdbLimitWarned.fired[packet.Level2] {
 		t.Error("an unknown purge reached the entry-limit check instead of being discarded first")
 	}
 }

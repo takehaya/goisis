@@ -17,11 +17,6 @@ type circuit struct {
 	adjs   map[packet.Level]map[packet.SystemID]*adjacency
 	p2pAdj *adjacency
 
-	// dupSystemIDWarned suppresses repeats of the duplicate-system-ID warning:
-	// hellos arrive every few seconds, so warning per PDU would turn one
-	// misconfiguration into log amplification on the management loop.
-	dupSystemIDWarned bool
-
 	dis       map[packet.Level]packet.NodeID // elected DIS LAN ID per level
 	nextHello time.Time
 
@@ -40,8 +35,6 @@ type circuit struct {
 	ssn      map[packet.Level]map[packet.LSPID]bool
 	ssnAck   map[packet.Level]map[packet.LSPID]packet.LSPEntry
 	nextCSNP map[packet.Level]time.Time
-
-	oversizeWarned bool // an LSP too large for this circuit was already logged
 }
 
 func newCircuit(cfg CircuitConfig, pseudonodeID uint8, extCircID uint32) *circuit {

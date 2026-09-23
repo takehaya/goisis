@@ -61,6 +61,9 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 			s.dropAdjacencies(c, "adjacency down: circuit link down", func(*adjacency) bool { return true })
 			return nil
 		}
+		// The segment may have been re-cabled while it was down, so a duplicate
+		// system ID heard after this is news again.
+		s.dupSystemIDWarned.clear(name)
 		s.sendHellos(c, now)
 		return nil
 	})

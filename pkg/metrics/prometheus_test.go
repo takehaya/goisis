@@ -14,6 +14,7 @@ func TestPrometheusRecords(t *testing.T) {
 	m.SPFRun("L2", 5*time.Millisecond)
 	m.LSDBSize("L2", 3)
 	m.FloodTx("eth0")
+	m.FloodDrop("eth0", "oversize")
 	m.FIBPending(2)
 	m.PDURx("eth0", "lsp")
 	m.PDUDrop("eth0", "auth")
@@ -35,6 +36,7 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_spf_duration_seconds",
 		"goisis_lsdb_lsps",
 		"goisis_flooding_lsp_tx_total",
+		"goisis_flooding_lsp_drops_total",
 		"goisis_fib_pending",
 		"goisis_pdu_rx_total",
 		"goisis_pdu_drops_total",
@@ -71,6 +73,7 @@ func TestPrometheusRecords(t *testing.T) {
 		name string
 		want float64
 	}{
+		{"goisis_flooding_lsp_drops_total", 1},
 		{"goisis_fib_pending", 2},
 		{"goisis_pdu_rx_total", 1},
 		{"goisis_pdu_drops_total", 1},

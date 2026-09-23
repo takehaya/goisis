@@ -127,7 +127,7 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 		// Re-arm the unsupported-metric-type warning for this algo across levels,
 		// so a future re-add logs it again.
 		for _, level := range []packet.Level{packet.Level1, packet.Level2} {
-			delete(s.algoWarned, algoKey{level: level, algo: algo})
+			s.algoWarned.clear(algoKey{level: level, algo: algo})
 		}
 		s.regenerateLSPs(false, time.Now())
 		s.markDirty()

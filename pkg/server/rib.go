@@ -60,15 +60,13 @@ func (s *IsisServer) updateRIB(now time.Time) {
 					// elects its FAD independently: warn once until the
 					// metric-type becomes supported again so a persistent
 					// misconfiguration does not re-log on every recompute.
-					key := algoKey{level: level, algo: algo}
-					if !s.algoWarned[key] {
+					s.algoWarned.warn(algoKey{level: level, algo: algo}, func() {
 						s.logger.Warn("flex-algo metric-type unsupported; not computing routes",
 							"algo", algo, "level", level, "metric_type", fi.Definition.MetricType)
-						s.algoWarned[key] = true
-					}
+					})
 					continue
 				}
-				delete(s.algoWarned, algoKey{level: level, algo: algo}) // re-arm
+				s.algoWarned.clear(algoKey{level: level, algo: algo}) // re-arm
 			}
 			for p, r := range s.computeSPF(level, algo, now) {
 				if cur, ok := merged[p]; ok && !betterRoute(r, cur) {

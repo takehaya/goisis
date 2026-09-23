@@ -207,7 +207,9 @@ unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の�
 `goisisd` は `/metrics` で Prometheus メトリクスを公開します:
 `goisis_adjacency_transitions_total{circuit,level,state}` /
 `goisis_spf_duration_seconds{level}` / `goisis_lsdb_lsps{level}` /
-`goisis_flooding_lsp_tx_total{circuit}` / `goisis_fib_pending` /
+`goisis_flooding_lsp_tx_total{circuit}` /
+`goisis_flooding_lsp_drops_total{circuit,reason}` (reason は `oversize`) /
+`goisis_fib_pending` /
 `goisis_pdu_rx_total{circuit,type}` / `goisis_pdu_drops_total{circuit,reason}`
 (reason は `decode` / `auth` / `no_adjacency` / `checksum` / `lsdb_limit` /
 `unknown_purge` / `own_sysid_purge` / `own_fragment_purge` /
@@ -224,4 +226,13 @@ unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の�
 ```
 rate(goisis_pdu_drops_total{reason!~"own_.*"}[5m]) > 0
 rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
+```
+
+`oversize` の flood drop は、隣接のデータベースが永久に追いつけない状態を示す。
+サーキット MTU を超える LSP は、他ノードの LSP を中継ノードが再フラグメントできない
+(ISO 10589 7.3.3) ため送れず、PSNP で要求されるたびに捨て続ける。継続的に出ている
+ときは、発信元の LSP MTU を小さくする必要がある:
+
+```
+rate(goisis_flooding_lsp_drops_total[5m]) > 0
 ```
