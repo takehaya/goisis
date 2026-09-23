@@ -229,6 +229,13 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 					continue
 				}
 				next, err := config.Reload(gctx, isis, running, configFile, logger)
+				if errors.Is(err, config.ErrPartiallyApplied) {
+					// The two failures are not the same operational event: this
+					// one has already changed the node, and no further signal
+					// repairs it by itself.
+					logger.Error("configuration reload was refused part way; the node is not in the state the file describes; fix the file and send SIGHUP again", "file", configFile, "error", err)
+					continue
+				}
 				if err != nil {
 					logger.Error("configuration reload failed; the running configuration is unchanged", "error", err)
 					continue
