@@ -202,3 +202,13 @@ $ goisis neighbor clear --interface eth0      # --system-id で 1 隣接のみ
 `goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
 `remove_sid`) / `goisis_event_queue_depth`。
+
+`own_*` の 4 つは「自分の System ID を持つ PDU を受けて再生成または purge した」
+記録で、破棄ではない。再起動直後に自分の古いコピーが残っている場合や DIS 交代で
+通常発生するため、アラートは除外し、別途監視する。定常的に出ているときは他ノードが
+こちらの名前で LSP を出している:
+
+```
+rate(goisis_pdu_drops_total{reason!~"own_.*"}[5m]) > 0
+rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
+```
