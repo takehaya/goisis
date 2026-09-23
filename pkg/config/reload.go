@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/server"
@@ -279,6 +280,11 @@ func flexAlgoSet(c *Config) (map[uint8]server.FlexAlgoConfig, error) {
 // a typo in an edited configuration must not take down a running IGP. A call
 // the server refuses once the batch has begun is ErrPartiallyApplied, the one
 // outcome that does change the node without adopting the file.
+// applyTimeout bounds a reload's calls into the server. It is generous: the
+// management loop answers in microseconds unless something is wrong, and the
+// point is to fail a wedged reload loudly rather than to police latency.
+const applyTimeout = 30 * time.Second
+
 func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string, logger *slog.Logger) (*Config, error) {
 	next, err := Load(path)
 	if err != nil {
@@ -291,6 +297,12 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	for _, key := range ch.Ignored {
 		logger.Warn("configuration reload: this change needs a restart and was not applied", "key", key)
 	}
+	// A deadline, because the caller's context is the daemon's lifetime: every
+	// call below queues behind the Serve loop, so a loop wedged on a slow sink
+	// would otherwise hold the reload — and the signal handler behind it —
+	// until the process ends, with nothing said.
+	ctx, cancel := context.WithTimeout(ctx, applyTimeout)
+	defer cancel()
 	if err := ch.apply(ctx, s); err != nil {
 		// No rollback: undoing what landed would need the inverse of every
 		// mutator, and stopping leaves a state the operator can see. What is

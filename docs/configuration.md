@@ -199,9 +199,16 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `srv6.locators` | Applied, with each locator's End SID. |
 | `flex-algo` | Applied. A changed definition is deleted and re-added, and a locator bound to it steps aside and comes back with it. |
 | `circuits` | **Restart.** Adding or removing one needs a transport and a reader goroutine to appear or go away; changing a level, metric, timer or key means rebuilding it the same way. An interface's addresses and carrier are followed live and need neither. |
-| `net`, `hostname` | **Restart.** The System ID and area addresses identify every LSP this node has originated. |
+| `net` | **Restart.** The System ID and area addresses identify every LSP this node has originated. |
+| `hostname` | **Restart.** It is advertised in the node's own LSP, which a reload has no way to re-originate under a new name without the System ID beneath it. |
 | `area-*` / `domain-*` passwords, algorithms and key IDs | **Restart** — a rolling one, not a flag day, via [Key rotation](#key-rotation). |
 | `fib`, `fib-table`, `lsp-mtu`, `lsdb-entry-limit`, `overload-on-startup`, `policy` | **Restart.** |
+
+Of those, `policy` is the one an operator iterates on, and it is the one a
+reload cannot apply: a prefix-list change needs a restart. Reaching it at
+runtime would mean an RPC for the filters, which the management API does not
+have.
+
 
 A file that will not parse, or that a restart would refuse, leaves the daemon
 exactly as it was: the whole file is validated before the first call goes out.
