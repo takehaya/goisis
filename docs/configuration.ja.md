@@ -167,10 +167,16 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
 の行の下にその TLV を並べるので、パケットキャプチャなしで対向の広告内容を読めます。
 
+`goisisd -api-listen` の既定は `127.0.0.1:50051` で、ホスト外から届くアドレスに
+バインドするには `-api-allow-remote` の明示が必要です。`:50051` のようにホスト部
+を空にした指定もこれに当たります。空のホストは `0.0.0.0` と同じく全インターフェ
+イスにバインドします。
+
 `--addr` は `unix:///絶対パス` も取り、`goisisd -api-listen
 unix:///run/goisis/goisisd.sock` で起動したデーモンに接続します。API は無認証
-なので、共有ホストでは unix ソケットが最も手軽な保護手段です。ソケットはモード
-`0660` で作られ、接続できる範囲はその置き場所のディレクトリで決まります。
+なので、共有ホストでは unix ソケットが最も手軽な保護手段です。ソケットは umask
+を掛けて bind するので生成された瞬間からモード `0660` で、接続できる範囲はその
+置き場所のディレクトリで決まります。
 
 `prefix` / `overload` / `neighbor clear` / `locator` / `flex-algo` は実行時に
 デーモンを再構成もできます:
@@ -184,6 +190,11 @@ $ goisis prefix add 10.9.9.0/24 --metric 10   # 削除は goisis prefix delete 1
 $ goisis overload on                          # 保守用。"off" で解除
 $ goisis neighbor clear --interface eth0      # --system-id で 1 隣接のみ
 ```
+
+`prefix add` は、そもそも経路にならないものを拒否します。マルチキャスト、
+unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の到達不能しきい
+値 (`0xfe000000`) 以上のメトリックです。デフォルトルートは拒否しません。広報自体
+は正当な手段で、抑止するなら `policy.advertise` を使います。
 
 `prefix delete` が取り下げられるのは `prefixes` か `prefix add` が広報している
 ものだけです。インターフェイスの接続サブネットは、どのインターフェイスで直結して

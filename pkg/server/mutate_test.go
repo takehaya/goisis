@@ -272,6 +272,41 @@ func TestAddDeletePrefix(t *testing.T) {
 	}
 }
 
+// TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics pins the validation
+// the runtime API owes the LSDB: a prefix nobody can route to is never
+// originated, and neither is a metric SPF would treat as unreachable. The
+// default route is not unroutable — default-information origination is
+// legitimate, and suppressing it is policy.advertise's job.
+func TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		prefix string
+		metric uint32
+		ok     bool
+	}{
+		{"224.0.0.0/4", 10, false},               // IPv4 multicast
+		{"ff00::/8", 10, false},                  // IPv6 multicast
+		{"169.254.0.0/16", 10, false},            // IPv4 link-local
+		{"fe80::/10", 10, false},                 // IPv6 link-local
+		{"::ffff:10.0.0.0/120", 10, false},       // IPv4-mapped IPv6
+		{"0.0.0.0/8", 10, false},                 // unspecified, not the default route
+		{"::/8", 10, false},                      // unspecified, not the default route
+		{"10.1.0.0/16", maxPathMetric, false},    // at the reachability ceiling
+		{"10.2.0.0/16", maxPathMetric - 1, true}, // just below it
+		{"0.0.0.0/0", 10, true},                  // default-information origination
+		{"::/0", 10, true},                       // default-information origination
+		{"fc00:1::/64", 0, true},                 // an ordinary ULA prefix
+	} {
+		err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: netip.MustParsePrefix(tc.prefix), Metric: tc.metric})
+		if (err == nil) != tc.ok {
+			t.Errorf("AddPrefix(%s, metric %d) err = %v, want ok=%v", tc.prefix, tc.metric, err, tc.ok)
+		}
+	}
+}
+
 // TestAddPrefixReachesPeerRIB checks a runtime prefix floods and is installed
 // by the peer, and that deleting it withdraws the peer's route.
 func TestAddPrefixReachesPeerRIB(t *testing.T) {

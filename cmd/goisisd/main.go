@@ -71,7 +71,9 @@ func listenAPI(addr string) (net.Listener, error) {
 		return nil, err
 	}
 	if network == "unix" {
-		if fi, err := os.Stat(address); err == nil {
+		// Lstat, not Stat: a symlink planted at the path is not a stale socket
+		// of ours, whatever it points at.
+		if fi, err := os.Lstat(address); err == nil {
 			if fi.Mode()&os.ModeSocket == 0 {
 				return nil, fmt.Errorf("refusing to replace %s: not a socket", address)
 			}
@@ -79,6 +81,11 @@ func listenAPI(addr string) (net.Listener, error) {
 				return nil, err
 			}
 		}
+		// Bind under a umask rather than chmod afterwards: a chmod leaves the
+		// socket world-connectable between bind and chmod, and resolves the
+		// path a second time. Umask is process-wide, but listenAPI runs once,
+		// at startup, before the daemon creates anything else.
+		defer syscall.Umask(syscall.Umask(0o117))
 	}
 	// net.Listen unlinks the socket again on Close, so shutdown needs no
 	// cleanup of its own.
@@ -86,28 +93,26 @@ func listenAPI(addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if network == "unix" {
-		if err := os.Chmod(address, 0o660); err != nil {
-			_ = ln.Close()
-			return nil, err
-		}
-	}
 	return ln, nil
 }
 
 // nonLoopbackAPI reports whether the API listen address is reachable from off
 // the host. The Connect/gRPC API is unauthenticated plaintext h2c, so binding
-// it beyond loopback (a specific external IP, or 0.0.0.0/:: for all interfaces)
-// exposes routing state and requires the explicit -api-allow-remote opt-in. A
-// hostname or an unparseable address is left to the operator's judgment.
+// it beyond loopback (a specific external IP, an empty host, or 0.0.0.0/:: for
+// all interfaces) exposes routing state and requires the explicit
+// -api-allow-remote opt-in. A hostname or an unparseable address is left to the
+// operator's judgment.
 func nonLoopbackAPI(addr string) bool {
 	network, address, err := parseAPIListen(addr)
 	if err != nil || network != "tcp" {
 		return false // a unix socket is reachable only from this host
 	}
 	host, _, err := net.SplitHostPort(address)
-	if err != nil || host == "" {
+	if err != nil {
 		return false
+	}
+	if host == "" {
+		return true // ":50051" binds every interface, exactly like 0.0.0.0
 	}
 	ip, err := netip.ParseAddr(host)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -96,6 +97,58 @@ func TestListenAPIReplacesStaleSocket(t *testing.T) {
 	}
 }
 
+// TestListenAPIUnixSocketIsGroupOnlyUnderAPermissiveUmask asserts the socket is
+// never created wider than 0660, whatever umask the daemon inherited, and that
+// listenAPI leaves the process umask as it found it.
+func TestListenAPIUnixSocketIsGroupOnlyUnderAPermissiveUmask(t *testing.T) {
+	prev := syscall.Umask(0)
+	t.Cleanup(func() { syscall.Umask(prev) })
+
+	path := filepath.Join(t.TempDir(), "goisisd.sock")
+	ln, err := listenAPI("unix://" + path)
+	if err != nil {
+		t.Fatalf("listenAPI: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat socket: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o660 {
+		t.Errorf("socket mode = %o, want 660", got)
+	}
+	if got := syscall.Umask(0); got != 0 {
+		syscall.Umask(got)
+		t.Errorf("umask after listenAPI = %o, want it restored to 0", got)
+	}
+}
+
+// TestListenAPIRefusesASymlinkInPlaceOfTheSocket asserts the stale-socket check
+// looks at the path itself, so a symlink planted where the socket belongs is
+// refused rather than followed.
+func TestListenAPIRefusesASymlinkInPlaceOfTheSocket(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.sock")
+	ln, err := net.Listen("unix", target)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	path := filepath.Join(dir, "goisisd.sock")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := listenAPI("unix://" + path); err == nil {
+		t.Fatal("listenAPI over a symlink succeeded, want refusal")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Errorf("the symlink was removed: %v", err)
+	}
+}
+
 func TestListenAPIRefusesNonSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "not-a-socket")
 	if err := os.WriteFile(path, []byte("precious"), 0o600); err != nil {
@@ -123,7 +176,7 @@ func TestNonLoopbackAPI(t *testing.T) {
 		{"192.0.2.1:50051", true},
 		{"[2001:db8::1]:50051", true},
 		{"localhost:50051", false}, // hostnames are left to the operator
-		{":50051", false},          // empty host
+		{":50051", true},           // an empty host binds every interface
 		{"127.0.0.1", false},       // missing port: unparseable
 		{"not an address", false},
 		{"unix:///tmp/x.sock", false}, // a unix socket is local by construction
