@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -22,6 +23,13 @@ import (
 // SO_RCVBUFFORCE needs CAP_NET_ADMIN, and refusing to start over a buffer hint
 // would be worse than running with the kernel's rmem_max cap.
 const netlinkReceiveBufferSize = 1 << 20
+
+// resyncInterval is how often the watched interfaces are re-read even with no
+// event pending. Netlink delivery is not guaranteed — a full receive buffer
+// drops messages — and a lost RTM_NEWLINK leaves a circuit marked down for as
+// long as the daemon runs: deaf and mute with no event left to repair it. The
+// period is long because the re-read is a safety net, not the event path.
+const resyncInterval = 30 * time.Second
 
 // circuitSetter is the part of *server.IsisServer the watcher drives. It exists
 // so the event mapping can be exercised without opening a netlink socket.
@@ -40,9 +48,10 @@ type circuitSetter interface {
 // that silently ignores link events is worse than one that refuses to start —
 // the operator would find out at the next cable pull.
 //
-// Only changes are followed, never a dump of the current state: Options already
-// read the addresses, and asserting a link state nobody asked about would risk
-// tearing circuits down at boot over a driver that reports carrier late.
+// No dump is taken at startup: Options already read the addresses, and
+// asserting a link state nobody asked about would risk tearing circuits down at
+// boot over a driver that reports carrier late. After that, events are the
+// fast path and the periodic re-read below is what makes a lost one survivable.
 func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, logger *slog.Logger) error {
 	watched := map[string]bool{}
 	for _, cc := range cfg.Circuits {
@@ -53,22 +62,52 @@ func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, log
 	done := make(chan struct{})
 	defer close(done)
 
+	// A resync re-reads state, so one pending request covers any number of
+	// triggers and the extras are dropped. That also keeps the ErrorCallbacks,
+	// which run on the library's reader goroutines, from ever blocking.
+	resync := make(chan struct{}, 1)
+	trigger := func() {
+		select {
+		case resync <- struct{}{}:
+		default:
+		}
+	}
+
 	addrCh := make(chan netlink.AddrUpdate, 64)
 	if err := netlink.AddrSubscribeWithOptions(addrCh, done, netlink.AddrSubscribeOptions{
-		ErrorCallback:     func(err error) { logger.Warn("interface address subscription", "error", err) },
+		ErrorCallback: func(err error) {
+			logger.Warn("interface address subscription", "error", err)
+			trigger() // the error is a message we did not get; re-read instead
+		},
 		ReceiveBufferSize: netlinkReceiveBufferSize,
 	}); err != nil {
 		return fmt.Errorf("subscribe to interface addresses: %w", err)
 	}
 	linkCh := make(chan netlink.LinkUpdate, 64)
 	if err := netlink.LinkSubscribeWithOptions(linkCh, done, netlink.LinkSubscribeOptions{
-		ErrorCallback:     func(err error) { logger.Warn("interface link subscription", "error", err) },
+		ErrorCallback: func(err error) {
+			logger.Warn("interface link subscription", "error", err)
+			trigger()
+		},
 		ReceiveBufferSize: netlinkReceiveBufferSize,
 	}); err != nil {
 		return fmt.Errorf("subscribe to link changes: %w", err)
 	}
 
-	return watchLoop(ctx, s, watched, addrCh, linkCh, logger)
+	ticker := time.NewTicker(resyncInterval)
+	defer ticker.Stop()
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				trigger()
+			case <-done: // closed when this function returns
+				return
+			}
+		}
+	}()
+
+	return watchLoop(ctx, s, watched, addrCh, linkCh, resync, logger)
 }
 
 // watchLoop maps subscription events onto the server until ctx is done.
@@ -80,11 +119,13 @@ func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, log
 // looks healthy until the next cable pull. Ignoring the close is not an option
 // either: the zero LinkUpdate has a nil Link and would panic in Attrs(), and
 // the address case would spin on the closed channel.
-func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate, logger *slog.Logger) error {
+func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate, resync <-chan struct{}, logger *slog.Logger) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-resync:
+			resyncAll(ctx, s, watched, logger)
 		case u, ok := <-addrCh:
 			if !ok {
 				return errors.New("interface address subscription closed")
@@ -117,6 +158,32 @@ func linkUp(attrs *netlink.LinkAttrs) bool {
 		return attrs.Flags&net.FlagUp != 0
 	}
 	return attrs.OperState == netlink.OperUp
+}
+
+// resyncAll re-reads every watched interface and pushes its state, repairing a
+// circuit whose last event was dropped. The setters are idempotent, so a
+// resync that finds nothing changed costs two no-ops per circuit.
+//
+// An interface the kernel no longer has is reported down, the same conclusion
+// RTM_DELLINK carries — that message going missing is precisely what this
+// repairs. Any other error means the state could not be read, not that it
+// changed, so the interface is left alone rather than torn down on a transient
+// netlink failure.
+func resyncAll(ctx context.Context, s circuitSetter, watched map[string]bool, logger *slog.Logger) {
+	for name := range watched {
+		link, err := netlink.LinkByName(name)
+		if err != nil {
+			var notFound netlink.LinkNotFoundError
+			if errors.As(err, &notFound) {
+				applyLinkEvent(ctx, s, watched, name, false, logger)
+				continue
+			}
+			logger.Warn("resync interface state", "circuit", name, "error", err)
+			continue
+		}
+		applyLinkEvent(ctx, s, watched, name, linkUp(link.Attrs()), logger)
+		applyAddrEvent(ctx, s, watched, name, logger)
+	}
 }
 
 // applyAddrEvent re-reads the interface's addresses and pushes them to the

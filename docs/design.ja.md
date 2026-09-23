@@ -123,7 +123,9 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
   （`pkg/config.WatchInterfaces`）、管理操作として流し込みます — 付け替えは
   `SetCircuitAddresses`、キャリアは `SetCircuitLinkState` です。リンクダウン
   が報告されたサーキットは、隣接のホールドタイム満了を待たずに即座に隣接を
-  落とします。コアは netlink に依存しないままです: watcher はデーモン側の
+  落とします。netlink の配送は保証されないため、購読エラー時と 30 秒ごとに
+  監視対象インタフェースを読み直します。どちらのセッタも冪等なので、メッセージ
+  の取りこぼしは再起動ではなく 1 周期で回復します。コアは netlink に依存しないままです: watcher はデーモン側の
   パッケージにあり、組み込み利用者はイベント源を自分で持ちます。
 
 ### バックプレッシャーなしのファンアウト
@@ -244,7 +246,8 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
 - **RIB → FIB。** レベル・アルゴリズム横断の経路選択は明示的な比較器
   （`betterRoute`）です: Level-1 が Level-2 に勝ち、次にアルゴリズム 0
   が Flex-Algo に勝ちます。RIB は*望ましい*状態を保持し、FIB 書き込み
-  失敗は pending 集合に入って次の再計算でリトライされ、
+  失敗は pending 集合に入り、次の再計算で、無変化のネットワークでは
+  housekeeping ティックごとにリトライされます。集合の大きさは
   `goisis_fib_pending` ゲージで観測できます。起動時には前回の残骸経路
   を FIB からスイープします。
 - **ローカル SID。** End / End.DT SID は `isis-srv6` という dummy デバイス上の

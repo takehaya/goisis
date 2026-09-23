@@ -89,7 +89,7 @@ func watchLoopError(t *testing.T, addrCh <-chan netlink.AddrUpdate, linkCh <-cha
 	t.Helper()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- watchLoop(t.Context(), &fakeSetter{}, map[string]bool{"isis0": true}, addrCh, linkCh, slog.New(slog.DiscardHandler))
+		errCh <- watchLoop(t.Context(), &fakeSetter{}, map[string]bool{"isis0": true}, addrCh, linkCh, nil, slog.New(slog.DiscardHandler))
 	}()
 	select {
 	case err := <-errCh:
@@ -120,5 +120,74 @@ func TestWatchLoopReturnsWhenAddrSubscriptionCloses(t *testing.T) {
 	close(addrCh)
 	if err := watchLoopError(t, addrCh, nil); err == nil {
 		t.Fatal("watchLoop returned nil, want an error naming the closed address subscription")
+	}
+}
+
+// TestResyncPushesCurrentInterfaceState pins the recovery from a lost netlink
+// message: re-reading an interface pushes its carrier state and its addresses,
+// and an interface that is gone is reported down — that is exactly the event
+// whose loss would otherwise leave a circuit deaf and mute until a restart.
+func TestResyncPushesCurrentInterfaceState(t *testing.T) {
+	tests := []struct {
+		name      string
+		iface     string
+		wantAddrs bool
+		wantLink  bool // whether a link state was pushed at all
+		wantUp    bool
+	}{
+		// The loopback stands in for a real interface: reading it needs no
+		// privileges, and it exists in every namespace a test can run in.
+		{"present interface", "lo", true, true, true},
+		{"interface already gone", "goisis-absent0", false, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeSetter{}
+			resyncAll(t.Context(), f, map[string]bool{tt.iface: true}, slog.New(slog.DiscardHandler))
+
+			if got := len(f.addrCalls) > 0; got != tt.wantAddrs {
+				t.Errorf("addresses pushed = %v (calls %v), want %v", got, f.addrCalls, tt.wantAddrs)
+			}
+			up, ok := f.linkCalls[tt.iface]
+			if ok != tt.wantLink {
+				t.Fatalf("link state pushed = %v (calls %v), want %v", ok, f.linkCalls, tt.wantLink)
+			}
+			if ok && up != tt.wantUp {
+				t.Errorf("%s reported up = %v, want %v", tt.iface, up, tt.wantUp)
+			}
+		})
+	}
+}
+
+// signalSetter reports each address push on a channel, so a test can wait for
+// the watcher goroutine instead of racing it.
+type signalSetter struct{ addrs chan string }
+
+func (s *signalSetter) SetCircuitAddresses(_ context.Context, name string, _, _ []netip.Addr, _ []netip.Prefix) error {
+	s.addrs <- name
+	return nil
+}
+
+func (s *signalSetter) SetCircuitLinkState(context.Context, string, bool) error { return nil }
+
+// TestWatchLoopResyncsOnTrigger: the periodic tick (and the subscription's
+// ErrorCallback, which shares the channel) re-reads the watched interfaces
+// without any event arriving, so a dropped RTM_NEWLINK or RTM_DELADDR is
+// repaired within one interval instead of surviving until a restart.
+func TestWatchLoopResyncsOnTrigger(t *testing.T) {
+	s := &signalSetter{addrs: make(chan string, 1)}
+	resync := make(chan struct{}, 1)
+	go func() {
+		_ = watchLoop(t.Context(), s, map[string]bool{"lo": true}, nil, nil, resync, slog.New(slog.DiscardHandler))
+	}()
+
+	resync <- struct{}{}
+	select {
+	case name := <-s.addrs:
+		if name != "lo" {
+			t.Errorf("resync pushed %q, want lo", name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watchLoop did not resync the watched interfaces on a tick")
 	}
 }

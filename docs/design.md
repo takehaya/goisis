@@ -125,7 +125,10 @@ the Serve goroutine, you do not touch `IsisServer` fields.**
   (`pkg/config.WatchInterfaces`) and pushes each one in as a management
   operation — `SetCircuitAddresses` for a renumbering, `SetCircuitLinkState`
   for carrier. A link reported down drops its adjacencies immediately instead
-  of after the neighbor's holding time. The core stays netlink-free: the
+  of after the neighbor's holding time. Netlink delivery is not guaranteed, so
+  the watched interfaces are re-read on a subscription error and every 30 s;
+  both setters are idempotent, so a lost message costs one interval, not a
+  restart. The core stays netlink-free: the
   watcher lives in the daemon-side package, and an embedder owns the event
   source itself.
 
@@ -246,8 +249,8 @@ Two invariants matter beyond the codec:
 - **RIB → FIB.** Route selection across levels and algorithms is an explicit
   comparator (`betterRoute`): Level-1 beats Level-2, then algorithm 0 beats
   Flex-Algo. The RIB holds the *desired* state; FIB write failures land in a
-  pending set retried on the next recompute, surfaced by the
-  `goisis_fib_pending` gauge. Routes carry metric 115 (the IS-IS
+  pending set retried on the next recompute and, in a quiet network, on every
+  housekeeping tick; its size is the `goisis_fib_pending` gauge. Routes carry metric 115 (the IS-IS
   administrative distance), so they never share the kernel's
   `[prefix, tos, priority]` key with a connected route and cannot replace one.
   On startup the FIB is swept of routes a previous incarnation left behind.
