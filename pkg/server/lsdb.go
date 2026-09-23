@@ -9,14 +9,43 @@ import (
 )
 
 // LSP lifetime constants (ISO 10589 architectural defaults).
-//
-// goisis deliberately does not apply an RFC 7987 minimum-remaining-lifetime
-// floor to received LSPs; aging follows the advertised remaining lifetime.
 const (
 	maxAgeSeconds  = 1200 // MaxAge
 	refreshSeconds = 900  // maximumLSPGenerationInterval
 	zeroAgeSeconds = 60   // ZeroAgeLifetime: hold a purge this long
 )
+
+// receivedLifetime returns the lifetime a received LSP is aged from.
+//
+// The Remaining Lifetime field sits outside the Fletcher checksum (see
+// LSP.Serialize) and outside the authentication hash, so corruption of it in
+// flight — or a man in the middle rewriting it under authentication — is
+// undetectable. Corrupted downward, it makes every receiver purge the LSP
+// before its originator refreshes it, and the originator's re-origination
+// floods the area again: the storm RFC 7987 exists to stop. Its remedy is one
+// added action on the ISO 10589 7.3.15.1 e) 1) install path: a lifetime below
+// MaxAge is stored as MaxAge (RFC 7987 section 2, vi), so a node other than the
+// originator never purges an LSP it has held for less than MaxAge. The stored
+// value is what we flood on (lspEntry.wire patches the field), so the floor
+// reaches downstream neighbors as well.
+//
+// Two values are deliberately left alone:
+//   - Zero. A purge stays a purge: RFC 7987 changes nothing in 7.3.15.1 b), and
+//     flooring here would resurrect every purge as a live LSP for MaxAge.
+//   - Above MaxAge. The originator may run a larger MaxAge than we do (section
+//     3.1) and a lifetime longer than intended is benign (section 1), so
+//     clamping down is precisely what would purge that originator's LSPs
+//     prematurely. RFC 7987 raises a short lifetime; it never lowers a long one.
+//
+// The floor is fixed at our own MaxAge rather than configurable (section 3.1
+// permits a configurable value but requires it to be at least the local
+// MaxAge), because goisis does not make MaxAge configurable either.
+func receivedLifetime(remaining uint16) uint16 {
+	if remaining == 0 {
+		return 0
+	}
+	return max(remaining, maxAgeSeconds)
+}
 
 // maxLSPSeq is the highest sequence number an LSP can carry. Reaching it
 // exhausts the ID's sequence number space (ISO 10589 7.3.16.1); see exhaustSeq.

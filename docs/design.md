@@ -210,7 +210,10 @@ Two invariants matter beyond the codec:
 
 - **LSDB.** One database per level; entries hold both the decoded LSP and
   the raw bytes (see above). `newer()` implements the ISO 10589 ordering;
-  purges are held for ZeroAgeLifetime after going to zero.
+  a received remaining lifetime below MaxAge is stored as MaxAge, so corruption
+  of a field that sits outside the checksum cannot age an LSP out before its
+  originator refreshes it (RFC 7987 §2); purges are held for ZeroAgeLifetime
+  after going to zero.
 - **Flooding.** Per-circuit SRM/SSN flag sets drive retransmission: LAN
   reliability comes from the DIS's periodic CSNPs — split into per-PDU LSP-ID
   ranges so a database larger than one PDU still fits the MTU, and the only
@@ -327,12 +330,12 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No graceful restart (RFC 5306) | A peer that crash-restarts and re-originates at sequence 1 is out-shouted by our stored higher-seq copy until it ages out (up to MaxAge, 1200s). Clean shutdowns purge, so this affects only ungraceful restarts. |
 | No BFD | Failure detection is hello-based (hold time). |
 | No runtime circuit add/remove | Prefixes, locators, Flex-Algos, the overload bit and adjacency resets change at runtime, and a circuit's addresses and carrier are followed live (`SetCircuitAddresses` / `SetCircuitLinkState`). `SIGHUP` re-reads the configuration file and applies that same set, naming every difference it leaves behind. Adding or removing a circuit, and changing the System ID, the area or an authentication key, still need a restart — accept lists (`*-accept-passwords`) make a key change a rolling restart rather than a flag day. |
-| Sequence-number wrap unhandled | ISO 10589's exhaustion procedure at 2³² is documented-not-implemented; at the 900s refresh rate that is ~120k years away. |
+| Sequence-number exhaustion costs an outage of that LSP ID | Natural refreshes never reach 2³²−1 (~120k years at the 900s rate), but one forged LSP does it in a packet, so the ISO 10589 7.3.16.1 procedure is implemented (`exhaustSeq`): flood a purge at 2³²−1 — which supersedes the live copy at equal sequence under 7.3.16.2, so no higher number is needed — then hold the ID down for ZeroAgeLifetime plus a margin until every node has dropped that purge, and re-originate it from 1. That hold-down is an area-wide outage of that one LSP ID; authentication is what keeps the forgery off the wire. |
 | Flex-Algo computes IGP metric only | FAD constraints (admin groups, SRLG, delay) are preserved on the wire, not evaluated. |
 | Synchronous egress/FIB on the loop | See [Sink contracts](#sink-contracts): non-blocking is a contract on implementations, not enforced by structure. |
 | No RFC 8405 LONG_WAIT | SPF back-off is two-state (recompute immediately, then coalesce for 200 ms). The escalation to a long wait under sustained churn is deliberately omitted: a second threshold would only delay convergence further at MVP scale. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. Fine for MVP-scale areas. |
-| No RFC 7987 lifetime floor | Received-LSP aging follows the advertised remaining lifetime as-is. |
+| No RFC 7987 §3.2 corruption reporting | The floor itself is implemented (see **LSDB** above): a received lifetime below MaxAge is stored as MaxAge, one above it is kept as advertised because the originator may run a larger MaxAge (§3.1), and the floor is fixed at MaxAge rather than configurable. What is missing is the `CorruptRemainingLifetime` event, so a repaired lifetime is repaired silently: §3.2's false-positive filter needs how long the receiving adjacency has been Up, which the update process does not carry down to the LSP it is installing. |
 | Local SIDs need a device of their own | End/End.DT SIDs go on the `isis-srv6` dummy device the netlink FIB creates, never the loopback — see **Local SIDs** above for the kernel behaviour that forces it. The device is shared by every locator and is removed with the last SID on it. |
 | End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.X/End.DT4/End.DT6 work. |
 | End.X SIDs are unprotected | One End.X SID per (locator, adjacency), advertised with flags and weight zero: no backup (B) flag, no SID sets (S), and no persistence across restarts (P), so a restart reallocates function values. TI-LFA, which is what the B flag would feed, is out of scope. |
