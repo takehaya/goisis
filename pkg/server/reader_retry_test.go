@@ -48,7 +48,8 @@ func (b *syncBuf) String() string {
 
 // TestReaderSurvivesTransientRecvError checks that a transient Recv error
 // does not kill a circuit's reader: the adjacency still forms after the
-// retry, and the outage is warned about once rather than per retry.
+// retry, the outage is counted, and it is warned about once rather than per
+// retry.
 func TestReaderSurvivesTransientRecvError(t *testing.T) {
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -61,8 +62,9 @@ func TestReaderSurvivesTransientRecvError(t *testing.T) {
 	fastHello(&cfgB)
 
 	var logs syncBuf
+	m := newCountingMetrics()
 	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area),
-		WithCircuit(cfgA), WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+		WithCircuit(cfgA), WithMetrics(m), WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
 	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -76,5 +78,10 @@ func TestReaderSurvivesTransientRecvError(t *testing.T) {
 
 	if n := strings.Count(logs.String(), "circuit receive error"); n != 1 {
 		t.Errorf("warnings for one transient Recv error = %d, want 1", n)
+	}
+	// The warning is edge-triggered, so the counter is the only thing that
+	// tells a silent, once-a-minute outage from a healthy circuit.
+	if n := m.count("pdu_rx_error", "a"); n != 1 {
+		t.Errorf("receive errors counted on circuit a = %d, want 1", n)
 	}
 }

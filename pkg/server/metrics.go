@@ -37,9 +37,11 @@ type Metrics interface {
 	// "lsp", "csnp" or "psnp".
 	PDURx(circuit, pduType string)
 	// PDUDrop records one received PDU that was not installed as it arrived,
-	// with the reason: "decode", "auth", "no_adjacency", "checksum",
-	// "lsdb_limit", "adjacency_limit", "unknown_purge", "own_sysid_purge",
-	// "own_fragment_purge", "own_lsp_reclaimed" or "own_seq_wrap".
+	// with the reason: "decode", "auth", "link_down", "no_adjacency",
+	// "checksum", "lsdb_limit", "adjacency_limit", "hello_invalid",
+	// "hello_mismatch", "duplicate_system_id", "unknown_purge",
+	// "own_sysid_purge", "own_fragment_purge", "own_lsp_reclaimed" or
+	// "own_seq_wrap".
 	//
 	// The four "own_*" reasons are handled rather than discarded: the PDU
 	// carried this node's own System ID, so it drove a re-origination or a
@@ -63,6 +65,18 @@ type Metrics interface {
 	// EventQueueDepth reports the number of received frames waiting to be
 	// handled by the management loop.
 	EventQueueDepth(n int)
+	// PDUTxError records one PDU that never reached the wire on a circuit,
+	// by the step that failed: "serialize", "auth" or "send". Hellos, SNPs
+	// and flooded LSPs share this counter — to an operator they are one
+	// fault, "this circuit cannot transmit". Unlike FloodDrop, which reports
+	// an LSP that can never be sent on that circuit, these are transient and
+	// retried on the next tick, so the rate is what matters.
+	PDUTxError(circuit, reason string)
+	// PDURxError records one failed receive on a circuit. The reader retries
+	// rather than returning, so what is lost is frames, not the circuit; the
+	// log is edge-triggered per outage, which leaves this the only sign of a
+	// socket that keeps failing.
+	PDURxError(circuit string)
 }
 
 // Reasons reported through Metrics.PDUDrop, one per point at which a received
@@ -79,7 +93,29 @@ const (
 	dropOwnLSPReclaimed  = "own_lsp_reclaimed"  // a copy of an LSP we originate, superseded by re-origination
 	dropOwnSeqWrap       = "own_seq_wrap"       // a copy of one of ours at the maximum sequence number (ISO 10589 7.3.16.1)
 	dropAdjacencyLimit   = "adjacency_limit"    // a hello from a new neighbor on a circuit at its adjacency limit
+	dropLinkDown         = "link_down"          // a frame that raced the circuit's link going down
+	// The adjacency state machine refuses a hello for one of three kinds of
+	// reason, and reports the kind rather than the branch: an operator asking
+	// "why is this adjacency not coming up" needs to know whether the hello
+	// was unusable, whether it described a network we are not part of, or
+	// whether it was our own, and a label per branch would only cost
+	// cardinality. The branch itself is in the Debug log (see dropHello).
+	dropHelloInvalid      = "hello_invalid"       // wrong circuit type, zero holding time, or a level this circuit does not run
+	dropHelloMismatch     = "hello_mismatch"      // no common area (ISO 10589 8.4.2) or no common level
+	dropDuplicateSystemID = "duplicate_system_id" // a hello carrying our own System ID
 )
+
+// Steps reported through Metrics.PDUTxError: where a PDU stopped on its way to
+// the wire.
+const (
+	txErrSerialize = "serialize"
+	txErrAuth      = "auth"
+	txErrSend      = "send"
+)
+
+// txErrReasons is every reason above, for re-arming the transmit-failure log
+// once a PDU goes out (see txSucceeded).
+var txErrReasons = [...]string{txErrSerialize, txErrAuth, txErrSend}
 
 // Reasons reported through Metrics.FloodDrop.
 const (
@@ -133,6 +169,41 @@ func (NoopMetrics) FIBError(string) {}
 
 // EventQueueDepth implements Metrics.
 func (NoopMetrics) EventQueueDepth(int) {}
+
+// PDUTxError implements Metrics.
+func (NoopMetrics) PDUTxError(string, string) {}
+
+// PDURxError implements Metrics.
+func (NoopMetrics) PDURxError(string) {}
+
+// txFailKey identifies one kind of transmit failure on one circuit. The key is
+// (circuit, step) and not the PDU: what fails is the circuit's socket or its
+// authentication configuration, not one hello or one LSP, so keying per PDU
+// would put back the log amplification the edge log exists to stop.
+type txFailKey struct {
+	circuit string
+	reason  string
+}
+
+// txFailed counts one PDU that never reached the wire and logs the edge of
+// that failure. Every send path runs off a timer, so without the edge log one
+// dead socket writes a line per PDU per tick for as long as it stays dead.
+func (s *IsisServer) txFailed(c *circuit, reason string, err error, args ...any) {
+	s.metrics.PDUTxError(c.cfg.Name, reason)
+	s.txFailWarned.warn(txFailKey{circuit: c.cfg.Name, reason: reason}, func() {
+		s.logger.Error("circuit cannot transmit; suppressing repeats",
+			append([]any{"circuit", c.cfg.Name, "step", reason, "error", err}, args...)...)
+	})
+}
+
+// txSucceeded re-arms the transmit-failure log for a circuit that has just put
+// a PDU on the wire: whatever failed before is over, so the next failure is
+// news again.
+func (s *IsisServer) txSucceeded(c *circuit) {
+	for _, reason := range txErrReasons {
+		s.txFailWarned.clear(txFailKey{circuit: c.cfg.Name, reason: reason})
+	}
+}
 
 // levelLabel renders a level as a short metric label.
 func levelLabel(l packet.Level) string {

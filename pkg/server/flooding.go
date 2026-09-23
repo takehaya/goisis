@@ -317,10 +317,14 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 			c.clearSRM(level, id)
 			continue
 		}
+		// A write that fails is transient, not the permanent undeliverability
+		// FloodDrop reports above: the SRM flag stays set, so the next tick
+		// retries this LSP on this circuit.
 		if err := c.cfg.Transport.Send(c.dest(level), wire); err != nil {
-			s.logger.Error("send LSP", "circuit", c.cfg.Name, "lsp", id, "error", err)
+			s.txFailed(c, txErrSend, err, "pdu", "lsp", "lsp", id)
 			continue
 		}
+		s.txSucceeded(c)
 		s.metrics.FloodTx(c.cfg.Name)
 		s.oversizeWarned.clear(oversizeKey{circuit: c.cfg.Name, id: id}) // it fits again: re-arm
 		if c.cfg.P2P {
@@ -469,18 +473,20 @@ func (s *IsisServer) sendSNP(c *circuit, level packet.Level, pdu packet.PDU) {
 	}
 	wire, err := pdu.Serialize()
 	if err != nil {
-		s.logger.Error("serialize SNP", "circuit", c.cfg.Name, "error", err)
+		s.txFailed(c, txErrSerialize, err, "pdu", pdu.PDUType())
 		return
 	}
 	if spec.on() {
 		if err := packet.PatchAuth(wire, packet.HeaderLen(pdu.PDUType()), spec.algo, spec.keyID, spec.key, false); err != nil {
-			s.logger.Error("authenticate SNP", "circuit", c.cfg.Name, "error", err)
+			s.txFailed(c, txErrAuth, err, "pdu", pdu.PDUType())
 			return
 		}
 	}
 	if err := c.cfg.Transport.Send(c.dest(level), wire); err != nil {
-		s.logger.Error("send SNP", "circuit", c.cfg.Name, "error", err)
+		s.txFailed(c, txErrSend, err, "pdu", pdu.PDUType())
+		return
 	}
+	s.txSucceeded(c)
 }
 
 // processCSNP reconciles the database against a CSNP: request LSPs we lack or

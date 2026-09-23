@@ -25,6 +25,8 @@ type Prometheus struct {
 	routes         *prometheus.GaugeVec
 	fibErrors      *prometheus.CounterVec
 	eventQueue     prometheus.Gauge
+	pduTxErrors    *prometheus.CounterVec
+	pduRxErrors    *prometheus.CounterVec
 }
 
 // NewPrometheus creates the collectors and registers them in reg (e.g.
@@ -81,9 +83,18 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_event_queue_depth",
 			Help: "Number of received frames waiting to be handled by the management loop.",
 		}),
+		pduTxErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_pdu_tx_errors_total",
+			Help: "Count of IS-IS PDUs that never reached the wire, by the step that failed.",
+		}, []string{"circuit", "reason"}),
+		pduRxErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_pdu_rx_errors_total",
+			Help: "Count of failed receives on a circuit; the reader retries.",
+		}, []string{"circuit"}),
 	}
 	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
-		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue)
+		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue,
+		p.pduTxErrors, p.pduRxErrors)
 	return p
 }
 
@@ -145,6 +156,16 @@ func (p *Prometheus) FIBError(op string) {
 // EventQueueDepth implements server.Metrics.
 func (p *Prometheus) EventQueueDepth(n int) {
 	p.eventQueue.Set(float64(n))
+}
+
+// PDUTxError implements server.Metrics.
+func (p *Prometheus) PDUTxError(circuit, reason string) {
+	p.pduTxErrors.WithLabelValues(circuit, reason).Inc()
+}
+
+// PDURxError implements server.Metrics.
+func (p *Prometheus) PDURxError(circuit string) {
+	p.pduRxErrors.WithLabelValues(circuit).Inc()
 }
 
 var _ server.Metrics = (*Prometheus)(nil)
