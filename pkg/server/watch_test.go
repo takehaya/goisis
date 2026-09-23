@@ -204,3 +204,50 @@ func TestWatchDropsLaggingSubscriber(t *testing.T) {
 		t.Error("dropped subscriber should report Lagged()=true")
 	}
 }
+
+// TestSubscribeInitialCarriesTheHostnamesListAdjacenciesResolves: Initial
+// documents itself as "the same content as ListAdjacencies", and a consumer
+// that keys on the hostname must not get a different answer depending on which
+// call it made.
+func TestSubscribeInitialCarriesTheHostnamesListAdjacenciesResolves(t *testing.T) {
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse()}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse()}
+	fastHello(&cfgA)
+	fastHello(&cfgB)
+
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithHostname("node-a"))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithHostname("node-b"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	// The hostname comes from the peer's LSP, so wait until ListAdjacencies
+	// resolves it: before that both answers are legitimately empty.
+	waitFor(t, "a to learn b's hostname", func() bool {
+		adjs, err := a.ListAdjacencies(ctx)
+		return err == nil && len(adjs) == 1 && adjs[0].Hostname == "node-b"
+	})
+
+	sub, err := a.Subscribe(ctx)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	var got []string
+	for _, ev := range sub.Initial {
+		if ev.Adjacency != nil {
+			got = append(got, ev.Adjacency.Hostname)
+		}
+	}
+	if len(got) != 1 || got[0] != "node-b" {
+		t.Errorf("Initial adjacency hostnames = %q, want [\"node-b\"] to match ListAdjacencies", got)
+	}
+}

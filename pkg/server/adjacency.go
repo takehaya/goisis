@@ -80,7 +80,10 @@ type AdjacencyInfo struct {
 	Priority  uint8
 	Holding   uint16
 	// Hostname is the neighbor's dynamic hostname (TLV 137) as advertised in
-	// its LSP, empty until that LSP arrives or when it carries no name.
+	// its LSP, empty until that LSP arrives or when it carries no name. It is
+	// resolved by ListAdjacencies and by a subscription's Initial snapshot;
+	// live watch events leave it empty, since resolving it costs a pass over
+	// the database for every adjacency change.
 	Hostname string
 }
 

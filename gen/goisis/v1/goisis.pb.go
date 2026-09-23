@@ -312,7 +312,9 @@ type Adjacency struct {
 	Priority    uint32                 `protobuf:"varint,6,opt,name=priority,proto3" json:"priority,omitempty"`
 	HoldingTime uint32                 `protobuf:"varint,7,opt,name=holding_time,json=holdingTime,proto3" json:"holding_time,omitempty"`
 	// hostname is the neighbor's dynamic hostname (TLV 137, RFC 5301), empty
-	// until its LSP arrives or when it advertises no name.
+	// until its LSP arrives or when it advertises no name. ListAdjacencies and
+	// the initial snapshot of a WatchEvent stream resolve it; later streamed
+	// events leave it empty.
 	Hostname      string `protobuf:"bytes,8,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

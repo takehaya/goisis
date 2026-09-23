@@ -5,6 +5,7 @@ import (
 	"context"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -38,7 +39,8 @@ type watcher struct {
 type Subscription struct {
 	// Initial is a snapshot of state as of the instant the subscription was
 	// registered: one event per adjacency (the same content as
-	// ListAdjacencies), then one per RIB entry (the same as ListRoutes).
+	// ListAdjacencies, hostnames included), then one per RIB entry (the same
+	// as ListRoutes).
 	// Because it is captured in the very management operation that registers
 	// the watcher, Initial followed by Events is a gap-free view — no change
 	// can fall between the two, as it can between a separate List call and a
@@ -90,9 +92,17 @@ func (s *IsisServer) Subscribe(ctx context.Context) (*Subscription, error) {
 // would have reported them, adjacencies first and each group ordered so two
 // subscribers see the same sequence. Called only on the Serve goroutine.
 func (s *IsisServer) snapshotEvents() []Event {
+	// Resolve hostnames once for the whole snapshot, so Initial really carries
+	// the same content as ListAdjacencies. Live events do not: the index is
+	// O(LSDB) and an adjacency change is not worth rebuilding it (see the
+	// Hostname field's doc).
+	hostnames := s.hostnameIndex(time.Now())
 	var adjs []AdjacencyInfo
 	for _, c := range s.circuits {
 		adjs = append(adjs, c.adjacencyInfos()...)
+	}
+	for i := range adjs {
+		adjs[i].Hostname = hostnames[adjs[i].SystemID]
 	}
 	sort.Slice(adjs, func(i, j int) bool {
 		if adjs[i].Interface != adjs[j].Interface {
