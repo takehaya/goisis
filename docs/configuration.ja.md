@@ -182,7 +182,8 @@ $ goisis neighbor clear --interface eth0      # --system-id で 1 隣接のみ
 `goisis_flooding_lsp_tx_total{circuit}` / `goisis_fib_pending` /
 `goisis_pdu_rx_total{circuit,type}` / `goisis_pdu_drops_total{circuit,reason}`
 (reason は `decode` / `auth` / `no_adjacency` / `checksum` / `lsdb_limit` /
-`unknown_purge` / `own_sysid_purge` / `own_lsp_reclaimed`) /
+`unknown_purge` / `own_sysid_purge` / `own_fragment_purge` /
+`own_lsp_reclaimed` / `own_seq_wrap`) /
 `goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
 `remove_sid`) / `goisis_event_queue_depth`。

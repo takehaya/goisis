@@ -365,6 +365,12 @@ func (s *IsisServer) purgeStaleFragments(level packet.Level, pseudonode uint8, k
 func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packet.TLV, att, forceRefresh bool, now time.Time) {
 	db := s.dbs[level]
 	ex := db.get(id)
+	// An ID whose sequence number space was exhausted stays un-originated until
+	// its purge has aged out area-wide, then restarts at 1 (ISO 10589 7.3.16.1;
+	// see exhaustSeq). refreshOwnLSPs clears the hold-down.
+	if until, held := s.seqWrapUntil[lspKey{level: level, id: id}]; held && now.Before(until) {
+		return
+	}
 	// The overload bit applies to fragment 0 of this node's own LSP, not to
 	// pseudonode LSPs or higher fragments (SPF reads it from fragment 0).
 	overload := id.IsNodeLSP() && id.FragmentID() == 0 && s.overloaded(now)
@@ -390,10 +396,14 @@ func (s *IsisServer) originate(level packet.Level, id packet.LSPID, tlvs []packe
 		}
 	}
 
-	// Seqno wrap (ISO 10589 7.3.16.1) is deliberately unhandled; see newer in
-	// lsdb.go.
 	seq := uint32(1)
 	if ex != nil {
+		if ex.lsp.SequenceNumber == maxLSPSeq {
+			// Bumping would serialize 0; run the exhaustion procedure instead
+			// (ISO 10589 7.3.16.1).
+			s.exhaustSeq(level, id, now)
+			return
+		}
 		seq = ex.lsp.SequenceNumber + 1
 	}
 	lsp := &packet.LSP{

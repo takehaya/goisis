@@ -33,7 +33,8 @@ type Metrics interface {
 	PDURx(circuit, pduType string)
 	// PDUDrop records one received PDU discarded on a circuit, with the reason
 	// it was discarded: "decode", "auth", "no_adjacency", "checksum",
-	// "lsdb_limit", "unknown_purge" or "own_sysid_purge".
+	// "lsdb_limit", "unknown_purge", "own_sysid_purge", "own_fragment_purge",
+	// "own_lsp_reclaimed" or "own_seq_wrap".
 	PDUDrop(circuit, reason string)
 	// AdjacencyCount reports the number of Up adjacencies on a circuit at a
 	// level. Every configured circuit and level reports on every housekeeping
@@ -54,14 +55,16 @@ type Metrics interface {
 // Reasons reported through Metrics.PDUDrop, one per point at which a received
 // PDU is discarded.
 const (
-	dropDecode          = "decode"
-	dropAuth            = "auth"
-	dropNoAdjacency     = "no_adjacency"
-	dropChecksum        = "checksum"
-	dropLSDBLimit       = "lsdb_limit"
-	dropUnknownPurge    = "unknown_purge"
-	dropOwnSysIDPurge   = "own_sysid_purge"
-	dropOwnLSPReclaimed = "own_lsp_reclaimed" // a copy of an LSP we originate, superseded by re-origination
+	dropDecode           = "decode"
+	dropAuth             = "auth"
+	dropNoAdjacency      = "no_adjacency"
+	dropChecksum         = "checksum"
+	dropLSDBLimit        = "lsdb_limit"
+	dropUnknownPurge     = "unknown_purge"
+	dropOwnSysIDPurge    = "own_sysid_purge"
+	dropOwnFragmentPurge = "own_fragment_purge" // a fragment of our node LSP we never originated
+	dropOwnLSPReclaimed  = "own_lsp_reclaimed"  // a copy of an LSP we originate, superseded by re-origination
+	dropOwnSeqWrap       = "own_seq_wrap"       // a copy of one of ours at the maximum sequence number (ISO 10589 7.3.16.1)
 )
 
 // Operations reported through Metrics.FIBError.

@@ -117,14 +117,6 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		return
 	}
 
-	if s.ownsLSP(level, id) {
-		// Someone advanced (or purged) one of our own LSPs; re-originate
-		// with a higher sequence number to reclaim it.
-		s.metrics.PDUDrop(c.cfg.Name, dropOwnLSPReclaimed)
-		s.reoriginateOwn(level, id, lsp.SequenceNumber, now)
-		return
-	}
-
 	// Cap the database size against an attacker flooding fabricated LSP IDs
 	// on an unauthenticated segment (see WithLSDBEntryLimit). Only new IDs
 	// count: updates to known IDs never grow the map. Warn once per level
@@ -144,19 +136,10 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		delete(s.lsdbLimitWarned, level) // headroom again: re-arm the warning
 	}
 
-	if id.NodeID().SystemID() == s.systemID && lsp.RemainingTime != 0 {
-		// Our System ID, but an LSP we do not originate: a pseudonode LSP for
-		// a circuit where we are not (or no longer) the DIS, or for a
-		// pseudonode number matching none of our circuits. Purge it rather
-		// than keep a stranger's claim about us alive (ISO 10589 7.3.16.4 c).
-		// A received purge is excluded: it is already dead, so the install
-		// path below propagates and acknowledges it as for any foreign LSP.
-		// Placed after the entry-limit check so forged LSPs naming us cannot
-		// grow the database past the cap.
-		s.metrics.PDUDrop(c.cfg.Name, dropOwnSysIDPurge)
-		e := &lspEntry{lsp: lsp}
-		db.entries[id] = e
-		s.expirePurge(level, id, e, now)
+	// An LSP carrying our own System ID is handled apart from foreign ones.
+	// Placed after the entry-limit check so forged LSPs naming us cannot grow
+	// the database past the cap.
+	if s.handleOwnSystemID(c, lsp, ex, now) {
 		return
 	}
 
@@ -185,6 +168,48 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	}
 }
 
+// handleOwnSystemID applies the update process to a newer received LSP that
+// carries our own System ID, and reports whether it consumed it (ISO 10589
+// 7.3.16.4 b and c). A purge for an ID we do not hold never reaches here:
+// processLSP drops it earlier under a).
+func (s *IsisServer) handleOwnSystemID(c *circuit, lsp *packet.LSP, ex *lspEntry, now time.Time) bool {
+	level, id := lsp.Level, lsp.LSPID
+	if id.NodeID().SystemID() != s.systemID {
+		return false
+	}
+	switch {
+	case s.ownsLSP(level, id) && ex != nil && ex.own && ex.purgedAt.IsZero():
+		// Someone advanced (or purged) an LSP we are currently originating;
+		// re-originate with a higher sequence number to reclaim it (b).
+		if lsp.SequenceNumber == maxLSPSeq {
+			s.metrics.PDUDrop(c.cfg.Name, dropOwnSeqWrap)
+		} else {
+			s.metrics.PDUDrop(c.cfg.Name, dropOwnLSPReclaimed)
+		}
+		s.reoriginateOwn(level, id, lsp.SequenceNumber, now)
+	case lsp.RemainingTime == 0:
+		// A purge of an LSP we do not originate is already dead: let the
+		// install path propagate and acknowledge it as for any foreign LSP.
+		return false
+	default:
+		// Our System ID, but an LSP we do not originate: a fragment of our node
+		// LSP we never built, a pseudonode LSP for a circuit where we are not
+		// (or no longer) the DIS, or a pseudonode number matching none of our
+		// circuits. Purge it rather than keep a stranger's claim about us alive
+		// (b and c); there is nothing of ours to reclaim, so re-origination
+		// would only lend our name to the forged body.
+		reason := dropOwnSysIDPurge
+		if id.IsNodeLSP() {
+			reason = dropOwnFragmentPurge
+		}
+		s.metrics.PDUDrop(c.cfg.Name, reason)
+		e := &lspEntry{lsp: lsp}
+		s.dbs[level].entries[id] = e
+		s.expirePurge(level, id, e, now)
+	}
+	return true
+}
+
 // reoriginateOwn rebuilds one of our own LSPs with a sequence number above
 // the one just seen on the wire, then re-floods it.
 func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq uint32, now time.Time) {
@@ -193,9 +218,15 @@ func (s *IsisServer) reoriginateOwn(level packet.Level, id packet.LSPID, seenSeq
 	if ex == nil {
 		return
 	}
+	if seenSeq == maxLSPSeq {
+		// seenSeq + 1 would wrap to 0, which every peer reads as older than
+		// the copy that forced the wrap: it would flood that copy back and our
+		// own LSP would never be accepted again. Run the exhaustion procedure
+		// instead (ISO 10589 7.3.16.1).
+		s.exhaustSeq(level, id, now)
+		return
+	}
 	lsp := *ex.lsp
-	// Seqno wrap (ISO 10589 7.3.16.1) is deliberately unhandled; see newer in
-	// lsdb.go.
 	lsp.SequenceNumber = seenSeq + 1
 	lsp.RemainingTime = maxAgeSeconds
 	raw, err := s.serializeLSP(&lsp)
