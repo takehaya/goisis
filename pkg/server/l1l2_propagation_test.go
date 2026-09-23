@@ -367,6 +367,15 @@ func TestL1L2NodeLeaksPermittedL2PrefixesIntoItsL1LSPWithTheDownBitSet(t *testin
 		}
 	}
 
+	// The leak goes into the Level-1 LSP and nowhere else: re-advertising into
+	// Level 2, down bit and all, what we learned from Level 2 is the loop the
+	// bit exists to prevent (RFC 5305 §4.1).
+	for _, p := range []netip.Prefix{leakV4, leakV6} {
+		if m, ok := l2OwnReach(t, s)[p]; ok {
+			t.Errorf("the leaker put %s back into its own Level-2 LSP at metric %v", p, m)
+		}
+	}
+
 	// Leaking into our own Level-1 LSP must not feed itself: the next pass sees
 	// the same leak set (our own prefixes are not part of our own SPF result)
 	// and leaves the LSP alone.
@@ -648,5 +657,151 @@ func TestInterLevelPrefixCountsAreReportedOnEveryRecompute(t *testing.T) {
 	s.updateRIB(now)
 	if n, _ := m.gauge("inter_level_prefixes", "l2_to_l1"); n != 0 {
 		t.Errorf("leaked into Level 1 = %d after the Level-2 route went away, want 0", n)
+	}
+}
+
+// l1OwnSeq returns the sequence number of this node's own Level-1 LSP.
+func l1OwnSeq(t *testing.T, s *IsisServer) uint32 {
+	t.Helper()
+	e := s.dbs[packet.Level1].entries[lspID(s.systemID, 0)]
+	if e == nil {
+		t.Fatal("no own Level-1 LSP")
+	}
+	return e.lsp.SequenceNumber
+}
+
+// A default route is not reachability to leak, whoever advertised it at Level
+// 2: what tells a Level-1-only IS to send everything else to a border router is
+// the ATT bit (RFC 1195 §3.2), and a leaked default would compete with it.
+func TestADefaultRouteIsNotLeakedIntoLevel1(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	injectB(s, now) // a Level-1 neighbour with no reachability of its own
+	injectBL2(s, now,
+		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+			{Prefix: defaultV4, Metric: 5},
+			{Prefix: leakV4, Metric: 5},
+		}},
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{
+			{Prefix: defaultV6, Metric: 5},
+			{Prefix: leakV6, Metric: 5},
+		}},
+	)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	for _, p := range []netip.Prefix{leakV4, leakV6} {
+		if _, ok := got[p]; !ok {
+			t.Fatalf("the ordinary %s was not leaked; the topology under test is wrong", p)
+		}
+	}
+	for _, p := range []netip.Prefix{defaultV4, defaultV6} {
+		if e, ok := got[p]; ok {
+			t.Errorf("the Level-2 default %s was leaked into the area as %v", p, e)
+		}
+	}
+}
+
+// A prefix this node originates itself is advertised once, as its own: leaking
+// the Level-2 copy back would put the same prefix in the same Level-1 LSP
+// twice, at two metrics and with two different up/down bits, for a Level-1-only
+// receiver to resolve however it happens to.
+func TestOurOwnPrefixIsNotLeakedBackIntoOurLevel1LSP(t *testing.T) {
+	own := netip.MustParsePrefix("10.6.0.0/24")
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()), WithAdvertisedPrefix(own, 20))
+	now := time.Now()
+	injectB(s, now)
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+		{Prefix: own, Metric: 5},
+		{Prefix: leakV4, Metric: 5},
+	}})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakV4]; !ok {
+		t.Fatalf("%s was not leaked; the topology under test is wrong", leakV4)
+	}
+	if want := []ownReach{{metric: 20}}; !slices.Equal(got[own], want) {
+		t.Errorf("L1 LSP entries for our own %s = %v, want %v (ours, once, not down-marked)", own, got[own], want)
+	}
+}
+
+// The up/down bit is only defined for a Level-1 advertisement (RFC 5305 §4.1),
+// so a Level-2 LSP carrying it is malformed or hostile. Leaking such a prefix
+// down would produce an entry indistinguishable from someone else's leak, which
+// is exactly what the bit exists to let a border router recognise and not
+// propagate.
+func TestADownMarkedLevel2PrefixIsNotLeaked(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	injectB(s, now)
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+		{Prefix: leakV4, Metric: 5, Down: true},
+		{Prefix: leakDeniedV4, Metric: 5},
+	}})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakDeniedV4]; !ok {
+		t.Fatalf("the ordinary %s was not leaked; the topology under test is wrong", leakDeniedV4)
+	}
+	if e, ok := got[leakV4]; ok {
+		t.Errorf("the down-marked Level-2 %s was leaked into the area as %v", leakV4, e)
+	}
+}
+
+// A leak is withdrawn when the Level-2 route behind it goes away. A stale leak
+// is worse than a stale export: a Level-1-only IS has no other view of the
+// prefix, so it keeps forwarding to us until the LSP ages out.
+func TestALeakIsWithdrawnWhenItsLevel2RouteDisappears(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	leakFixture(t, s, now)
+	if _, ok := ownIPReach(t, s, packet.Level1)[leakV4]; !ok {
+		t.Fatalf("%s was not leaked in the first place", leakV4)
+	}
+	seq := l1OwnSeq(t, s)
+
+	// B still exists and is still reachable; it just no longer advertises any
+	// reachability of its own.
+	injectBL2(s, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now.Add(minLSPGenInterval))
+
+	if len(s.l2Leak) != 0 {
+		t.Errorf("l2Leak = %v, want empty once the Level-2 routes are gone", s.l2Leak)
+	}
+	got := ownIPReach(t, s, packet.Level1)
+	for _, p := range []netip.Prefix{leakV4, leakV6, leakDeniedV4} {
+		if e, ok := got[p]; ok {
+			t.Errorf("%s still leaked as %v after its Level-2 route went away", p, e)
+		}
+	}
+	if got := l1OwnSeq(t, s); got <= seq {
+		t.Errorf("own L1 LSP sequence number = %d, want > %d (the withdrawal must be flooded)", got, seq)
+	}
+}
+
+// A leaked metric reaches the wire below the reachability ceiling, which RFC
+// 5305 §4 reserves for "unreachable". No topology can drive this: computeSPF
+// drops a path that reaches the ceiling, so l2LeakSet never holds one and the
+// clamp in regenerateNodeLSP is the belt to that pair of braces. Setting the
+// leak set directly is the only way to ask what origination does with one --
+// and without the clamp the leak would tell the whole area the prefix is
+// unreachable rather than distant.
+func TestALeakedMetricIsClampedBelowTheReachabilityCeilingOnTheWire(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	s.l2Leak = map[netip.Prefix]uint32{leakV4: maxPathMetric}
+	s.regenerateLSPs(false, time.Now())
+
+	want := []ownReach{{metric: maxPathMetric - 1, down: true}}
+	if got := ownIPReach(t, s, packet.Level1)[leakV4]; !slices.Equal(got, want) {
+		t.Errorf("L1 LSP entries for %s = %v, want %v", leakV4, got, want)
 	}
 }

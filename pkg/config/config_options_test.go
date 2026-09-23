@@ -510,3 +510,116 @@ func TestAcceptPasswordsWithoutPrimaryIsRejected(t *testing.T) {
 		}
 	}
 }
+
+// The prefixes the Level-2-only peer in leakTopology advertises: one the leak
+// policy under test permits, one it leaves to the deny-by-default.
+const (
+	leakPermitted = "198.51.100.0/24"
+	leakDenied    = "203.0.113.0/24"
+)
+
+// leakTopology builds an L1L2 border node from policy (appended to its file)
+// and a Level-2-only peer advertising leakPermitted and leakDenied, and returns
+// the border once it has learned both as Level-2 routes. The peer being Level-2
+// only is what makes the fixture a leak fixture: nothing it advertises is
+// reachable inside the border's Level-1 area by any other path.
+func leakTopology(t *testing.T, policy string) *server.IsisServer {
+	t.Helper()
+	ta := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xa}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xb}, 1500)
+	datalink.Link(ta, tb)
+	open := mockCircuits(map[string]mockCircuit{
+		"ifa": {tr: ta, v4: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+		"ifb": {tr: tb, v4: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
+	})
+	cfgA := loadConfig(t, `net: 49.0001.0000.0000.000a.00
+circuits:
+  - interface: ifa
+    level: "12"
+    p2p: true
+`+policy)
+	cfgB := loadConfig(t, `net: 49.0001.0000.0000.000b.00
+prefixes:
+  - `+leakPermitted+`
+  - `+leakDenied+`
+circuits:
+  - interface: ifb
+    level: "2"
+    p2p: true
+`)
+
+	ctx := t.Context()
+	var border *server.IsisServer
+	for i, cfg := range []*Config{cfgA, cfgB} {
+		cfg.OpenCircuit = open
+		opts, err := cfg.Options()
+		if err != nil {
+			t.Fatalf("Options[%d]: %v", i, err)
+		}
+		s, err := server.NewIsisServer(opts...)
+		if err != nil {
+			t.Fatalf("NewIsisServer[%d]: %v", i, err)
+		}
+		go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+		if i == 0 {
+			border = s
+		}
+	}
+	// Nothing below means anything until the border has something to leak.
+	for _, p := range []string{leakPermitted, leakDenied} {
+		waitFor(t, "the border to learn the Level-2 route to "+p, func() bool {
+			routes, err := border.ListRoutes(ctx)
+			if err != nil {
+				return false
+			}
+			return slices.ContainsFunc(routes, func(r server.RouteInfo) bool {
+				return r.Prefix == netip.MustParsePrefix(p) && r.Level == packet.Level2
+			})
+		})
+	}
+	return border
+}
+
+// ownLSPLines returns the rendered TLV lines of the node's own LSP at a level.
+func ownLSPLines(t *testing.T, s *server.IsisServer, level packet.Level) []string {
+	t.Helper()
+	lsps, err := s.ListLSDBDetail(t.Context())
+	if err != nil {
+		t.Fatalf("ListLSDBDetail: %v", err)
+	}
+	var out []string
+	for _, l := range lsps {
+		if l.Own && l.Level == level {
+			out = append(out, l.TLVs...)
+		}
+	}
+	return out
+}
+
+// TestLeakPolicyInTheFileReachesTheServer pins the only path an operator has to
+// Level-2 to Level-1 leaking: policy.leak-l2-to-l1 in the configuration file.
+// The file is driven through Options into a running border node, and the
+// assertion is on what that node puts on the wire — the permitted prefix in its
+// own Level-1 LSP with the up/down bit set, the other one left to the
+// deny-by-default. Options dropping the WithL2LeakFilter wiring, or handing the
+// server a filter built from the wrong list, both land here: everything below
+// the option has tests of its own, and none of them would notice.
+func TestLeakPolicyInTheFileReachesTheServer(t *testing.T) {
+	border := leakTopology(t, `policy:
+  leak-l2-to-l1:
+    rules:
+      - permit: `+leakPermitted+`
+`)
+
+	// 10 (the border's circuit metric to the peer) + 10 (the peer's default
+	// metric for the prefix), with the up/down bit RFC 5305 §4.1 requires.
+	want := "IPv4 Reachability: " + leakPermitted + " metric 20 down"
+	waitFor(t, "the permitted prefix in the border's own Level-1 LSP", func() bool {
+		return slices.Contains(ownLSPLines(t, border, packet.Level1), want)
+	})
+	for _, line := range ownLSPLines(t, border, packet.Level1) {
+		if strings.Contains(line, leakDenied) {
+			t.Errorf("Level-1 LSP carries %q: the leak policy's deny-by-default did not reach the server", line)
+		}
+	}
+}

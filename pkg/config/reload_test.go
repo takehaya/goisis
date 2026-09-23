@@ -87,6 +87,18 @@ func TestDiffAppliesRuntimeKeysAndNamesTheRest(t *testing.T) {
 			next: reloadBase + "  - interface: mock1\n",
 			want: Changes{Ignored: []string{"circuits: mock1 added"}},
 		},
+		// Retiming a circuit, or moving it between levels, is the edit an
+		// operator is likeliest to make: taking the circuit apart and building
+		// it again is a restart's job, so the reload has to say so rather than
+		// run the rest of the file and leave the circuit as it was.
+		"circuit changed": {
+			next: strings.Replace(reloadBase, "    level: \"2\"\n", "    level: \"1\"\n", 1),
+			want: Changes{Ignored: []string{"circuits: mock0 changed"}},
+		},
+		"circuit replaced": {
+			next: strings.Replace(reloadBase, "  - interface: mock0\n", "  - interface: mock1\n", 1),
+			want: Changes{Ignored: []string{"circuits: mock1 added", "circuits: mock0 removed"}},
+		},
 		"system id changed": {
 			next: strings.Replace(reloadBase, "0000.0000.0001.00", "0000.0000.0009.00", 1),
 			want: Changes{Ignored: []string{"net"}},
@@ -112,55 +124,93 @@ func TestDiffAppliesRuntimeKeysAndNamesTheRest(t *testing.T) {
 // restart. A key added to Config later and wired into neither is reported by
 // nothing, which is the silent half-applied reload this whole path exists to
 // avoid.
+//
+// The walk covers Config and the three nested structs Diff re-maps field by
+// field (prefixSet, locatorSet, flexAlgoSet), because a field added to one of
+// those is as silent as a new top-level key. The other nested types need no
+// entries: Diff compares CircuitConfig and the policy structs whole with
+// reflect.DeepEqual, so a new field in one of them is named by that comparison
+// without anything here knowing it exists.
 func TestDiffNamesEveryConfigKey(t *testing.T) {
-	// One mutation per Config field. A nil mutation is a field that is not a
-	// configuration key at all.
+	flexAlgo := func(fa FlexAlgoConfig) func(*Config) {
+		// Every mutation replaces a slice or pointer rather than editing
+		// through it: the copy the loop below mutates is shallow, so editing
+		// an element in place would change old as well and leave Diff
+		// comparing a configuration with itself.
+		return func(c *Config) { c.FlexAlgo = []FlexAlgoConfig{fa} }
+	}
+	// One mutation per field of each walked type. A nil mutation is a field
+	// that is not a configuration key at all.
 	mutations := map[string]func(*Config){
-		"NET":                   func(c *Config) { c.NET = "49.0009.0000.0000.0009.00" },
-		"Hostname":              func(c *Config) { c.Hostname = "r9" },
-		"FIB":                   func(c *Config) { c.FIB = !c.FIB },
-		"FIBTable":              func(c *Config) { c.FIBTable = 99 },
-		"Circuits":              func(c *Config) { c.Circuits = append(slices.Clone(c.Circuits), CircuitConfig{Interface: "mock9"}) },
-		"Prefixes":              func(c *Config) { c.Prefixes = append(slices.Clone(c.Prefixes), PrefixConfig{Prefix: "203.0.113.0/24"}) },
-		"SRv6":                  func(c *Config) { c.SRv6 = &SRv6Config{Locators: []string{"fc00:9::/48"}} },
-		"FlexAlgo":              func(c *Config) { c.FlexAlgo = nil },
-		"Policy":                func(c *Config) { c.Policy = &PolicyConfig{Advertise: &PrefixListConfig{Default: "permit"}} },
-		"OverloadOnStartup":     func(c *Config) { c.OverloadOnStartup = "60s" },
-		"AreaPassword":          func(c *Config) { c.AreaPassword = "rotated" },
-		"AreaAcceptPasswords":   func(c *Config) { c.AreaAcceptPasswords = []string{"old"} },
-		"AreaAuthAlgorithm":     func(c *Config) { c.AreaAuthAlgorithm = "sha256" },
-		"AreaKeyID":             func(c *Config) { c.AreaKeyID = 7 },
-		"DomainPassword":        func(c *Config) { c.DomainPassword = "rotated" },
-		"DomainAcceptPasswords": func(c *Config) { c.DomainAcceptPasswords = []string{"old"} },
-		"DomainAuthAlgorithm":   func(c *Config) { c.DomainAuthAlgorithm = "sha256" },
-		"DomainKeyID":           func(c *Config) { c.DomainKeyID = 7 },
-		"LSDBEntryLimit":        func(c *Config) { c.LSDBEntryLimit = 5000 },
-		"LSPMTU":                func(c *Config) { c.LSPMTU = 1400 },
-		"OpenCircuit":           nil, // the embedder's transport seam, not a YAML key
+		"Config.NET":                   func(c *Config) { c.NET = "49.0009.0000.0000.0009.00" },
+		"Config.Hostname":              func(c *Config) { c.Hostname = "r9" },
+		"Config.FIB":                   func(c *Config) { c.FIB = !c.FIB },
+		"Config.FIBTable":              func(c *Config) { c.FIBTable = 99 },
+		"Config.Circuits":              func(c *Config) { c.Circuits = append(slices.Clone(c.Circuits), CircuitConfig{Interface: "mock9"}) },
+		"Config.Prefixes":              func(c *Config) { c.Prefixes = append(slices.Clone(c.Prefixes), PrefixConfig{Prefix: "203.0.113.0/24"}) },
+		"Config.SRv6":                  func(c *Config) { c.SRv6 = &SRv6Config{Locators: []string{"fc00:9::/48"}} },
+		"Config.FlexAlgo":              func(c *Config) { c.FlexAlgo = nil },
+		"Config.Policy":                func(c *Config) { c.Policy = &PolicyConfig{Advertise: &PrefixListConfig{Default: "permit"}} },
+		"Config.OverloadOnStartup":     func(c *Config) { c.OverloadOnStartup = "60s" },
+		"Config.AreaPassword":          func(c *Config) { c.AreaPassword = "rotated" },
+		"Config.AreaAcceptPasswords":   func(c *Config) { c.AreaAcceptPasswords = []string{"old"} },
+		"Config.AreaAuthAlgorithm":     func(c *Config) { c.AreaAuthAlgorithm = "sha256" },
+		"Config.AreaKeyID":             func(c *Config) { c.AreaKeyID = 7 },
+		"Config.DomainPassword":        func(c *Config) { c.DomainPassword = "rotated" },
+		"Config.DomainAcceptPasswords": func(c *Config) { c.DomainAcceptPasswords = []string{"old"} },
+		"Config.DomainAuthAlgorithm":   func(c *Config) { c.DomainAuthAlgorithm = "sha256" },
+		"Config.DomainKeyID":           func(c *Config) { c.DomainKeyID = 7 },
+		"Config.LSDBEntryLimit":        func(c *Config) { c.LSDBEntryLimit = 5000 },
+		"Config.LSPMTU":                func(c *Config) { c.LSPMTU = 1400 },
+		"Config.OpenCircuit":           nil, // the embedder's transport seam, not a YAML key
+
+		"PrefixConfig.Prefix": func(c *Config) { c.Prefixes = []PrefixConfig{{Prefix: "203.0.113.0/24"}} },
+		"PrefixConfig.Metric": func(c *Config) { c.Prefixes = []PrefixConfig{{Prefix: "192.0.2.0/24", Metric: 50}} },
+
+		"SRv6Config.Locators": func(c *Config) { c.SRv6 = &SRv6Config{Locators: []string{"fc00:9::/48"}} },
+
+		"FlexAlgoConfig.Algo":       flexAlgo(FlexAlgoConfig{Algo: 129, Priority: 100, Advertise: true, Locator: "fc00:128:1::/48"}),
+		"FlexAlgoConfig.MetricType": flexAlgo(FlexAlgoConfig{Algo: 128, MetricType: "delay", Priority: 100, Advertise: true, Locator: "fc00:128:1::/48"}),
+		"FlexAlgoConfig.Priority":   flexAlgo(FlexAlgoConfig{Algo: 128, Priority: 200, Advertise: true, Locator: "fc00:128:1::/48"}),
+		"FlexAlgoConfig.Advertise":  flexAlgo(FlexAlgoConfig{Algo: 128, Priority: 100, Locator: "fc00:128:1::/48"}),
+		"FlexAlgoConfig.Locator":    flexAlgo(FlexAlgoConfig{Algo: 128, Priority: 100, Advertise: true, Locator: "fc00:129:1::/48"}),
 	}
 
 	old := loadConfig(t, reloadBase)
-	typ := reflect.TypeOf(Config{})
-	for i := range typ.NumField() {
-		name := typ.Field(i).Name
-		mutate, ok := mutations[name]
-		if !ok {
-			t.Errorf("Config field %s has no mutation here: add it to this table, and to whichever of Diff or restartOnly owns it", name)
-			continue
+	before := *old
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(Config{}),
+		reflect.TypeOf(PrefixConfig{}),
+		reflect.TypeOf(SRv6Config{}),
+		reflect.TypeOf(FlexAlgoConfig{}),
+	} {
+		for i := range typ.NumField() {
+			key := typ.Name() + "." + typ.Field(i).Name
+			mutate, ok := mutations[key]
+			if !ok {
+				t.Errorf("configuration key %s has no mutation here: add it to this table, and to whichever of Diff or restartOnly owns it", key)
+				continue
+			}
+			if mutate == nil {
+				continue
+			}
+			next := *old
+			mutate(&next)
+			got, err := Diff(old, &next)
+			if err != nil {
+				t.Errorf("%s: Diff: %v", key, err)
+				continue
+			}
+			if reflect.DeepEqual(got, Changes{}) {
+				t.Errorf("changing %s is reported by nothing: a reload would ignore it silently", key)
+			}
 		}
-		if mutate == nil {
-			continue
-		}
-		next := *old
-		mutate(&next)
-		got, err := Diff(old, &next)
-		if err != nil {
-			t.Errorf("%s: Diff: %v", name, err)
-			continue
-		}
-		if reflect.DeepEqual(got, Changes{}) {
-			t.Errorf("changing %s is reported by nothing: a reload would ignore it silently", name)
-		}
+	}
+	// The mutations edit a shallow copy, so one that reached through a slice or
+	// a pointer would have changed old too -- and every Diff after it would
+	// have compared a configuration against itself and found nothing.
+	if !reflect.DeepEqual(before, *old) {
+		t.Error("a mutation edited the baseline configuration through a shared slice or pointer; every case after it was vacuous")
 	}
 }
 
@@ -489,5 +539,208 @@ circuits:
 	}
 	if got := m.count("applied"); got != 1 {
 		t.Errorf("applied reloads = %d after a refusal, want the first one only", got)
+	}
+}
+
+// reloadOrderingBase fills every slice of Changes with more than one entry, so
+// the order they come out in is observable at all. reloadBase cannot: with one
+// prefix, one locator and one algorithm, map iteration order has nowhere to
+// show.
+const reloadOrderingBase = `net: 49.0001.0000.0000.0001.00
+prefixes:
+  - {prefix: 192.0.2.0/24, metric: 10}
+  - {prefix: 198.51.100.0/24, metric: 10}
+  - {prefix: 203.0.113.0/24, metric: 10}
+srv6:
+  locators:
+    - fc00:0:1::/48
+    - fc00:0:2::/48
+flex-algo:
+  - algo: 128
+    priority: 100
+  - algo: 129
+    priority: 100
+circuits:
+  - interface: mock0
+    level: "2"
+`
+
+// TestChangesAreOrderedDeterministically pins what a reload owes an operator
+// who applies the same file twice: the same calls in the same order. Diff reads
+// its three sets out of maps, whose iteration order Go randomizes per range, so
+// without the sorts the second SIGHUP would withdraw and re-add the same
+// prefixes in a different order -- and a diff of two daemons' logs, or a test
+// comparing Changes, would disagree for no reason at all.
+func TestChangesAreOrderedDeterministically(t *testing.T) {
+	old := loadConfig(t, reloadOrderingBase)
+	next := loadConfig(t, strings.NewReplacer(
+		"metric: 10", "metric: 20",
+		"fc00:0:1::/48", "fc00:1:1::/48",
+		"fc00:0:2::/48", "fc00:1:2::/48",
+		"priority: 100", "priority: 200",
+	).Replace(reloadOrderingBase))
+
+	first, err := Diff(old, next)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	// Every slice has to carry at least two entries, or the repetition below
+	// proves nothing about the one it does not exercise.
+	for name, n := range map[string]int{
+		"DeleteLocators": len(first.DeleteLocators), "DeleteFlexAlgos": len(first.DeleteFlexAlgos),
+		"AddFlexAlgos": len(first.AddFlexAlgos), "AddLocators": len(first.AddLocators),
+		"DeletePrefixes": len(first.DeletePrefixes), "AddPrefixes": len(first.AddPrefixes),
+	} {
+		if n < 2 {
+			t.Fatalf("%s has %d entries: this fixture cannot show an ordering at all", name, n)
+		}
+	}
+
+	// Diff is pure, so repetition is the whole test: only map iteration order
+	// can make two runs over the same pair of configurations differ.
+	for i := range 20 {
+		got, err := Diff(old, next)
+		if err != nil {
+			t.Fatalf("Diff: %v", err)
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("run %d disagrees with the first about the order of the calls:\n got %+v\nwant %+v", i+1, got, first)
+		}
+	}
+}
+
+// runningServer writes yaml to a file, builds a server from it over a mock
+// transport and starts its management loop. It returns the three things Reload
+// takes: the configuration the daemon is running, the server, and the path.
+func runningServer(t *testing.T, yaml string) (*Config, *server.IsisServer, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	go s.Serve(t.Context()) //nolint:errcheck // shut down via ctx
+	return cfg, s, path
+}
+
+// TestReloadReplacesAFlexAlgoWithoutLosingItsLocator drives the half of apply
+// no other test reaches, against a running server. A Flexible Algorithm has no
+// runtime update, so a changed definition is a withdrawal and a re-add -- and
+// the server refuses to delete an algorithm while a locator still names it, so
+// Diff makes the locator step aside and come back. That ordering is asserted
+// against Diff's output elsewhere; the rule it exists to satisfy lives in the
+// server. Only running the calls binds the two: a change to either side leaves
+// this reload refused part way, with the locator withdrawn and not restored.
+func TestReloadReplacesAFlexAlgoWithoutLosingItsLocator(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+srv6:
+  locators:
+    - fc00:0:1::/48
+flex-algo:
+  - algo: 128
+    priority: 100
+    advertise: true
+    locator: fc00:128:1::/48
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	cfg, s, path := runningServer(t, initial)
+	ctx := t.Context()
+	if err := os.WriteFile(path, []byte(strings.Replace(initial, "priority: 100", "priority: 200", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	if _, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(&logs, nil))); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// The definition is read back from the elected FAD in the LSDB, so this
+	// waits out the LSP generation throttle rather than reading the request
+	// back from the option it came from.
+	waitFor(t, "the reloaded Flex-Algo definition to be elected", func() bool {
+		fas, err := s.ListFlexAlgos(ctx)
+		if err != nil {
+			return false
+		}
+		return slices.ContainsFunc(fas, func(fa server.FlexAlgoInfo) bool {
+			return fa.Algo == 128 && fa.Definition != nil && fa.Definition.Priority == 200
+		})
+	})
+
+	locators, err := s.ListLocators(ctx)
+	if err != nil {
+		t.Fatalf("ListLocators: %v", err)
+	}
+	want := map[netip.Prefix]uint8{
+		netip.MustParsePrefix("fc00:0:1::/48"):   0,
+		netip.MustParsePrefix("fc00:128:1::/48"): 128,
+	}
+	got := map[netip.Prefix]uint8{}
+	for _, l := range locators {
+		got[l.Prefix] = l.Algorithm
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("locators after the reload = %v, want %v (the one that stepped aside has to come back)", got, want)
+	}
+}
+
+// TestReloadNamesAChangedSecretWithoutLoggingIt pins the contract Changes.Ignored
+// is written under: it carries keys and never values, because half of these keys
+// are authentication secrets. An operator rotating a password sends SIGHUP,
+// gets told the key needs a restart, and must not find the password itself in
+// the daemon's log -- wherever that log is shipped to.
+func TestReloadNamesAChangedSecretWithoutLoggingIt(t *testing.T) {
+	const (
+		oldArea  = "s3cr3t-area"
+		newArea  = "r0tat3d-area"
+		oldHello = "s3cr3t-hello"
+		newHello = "r0tat3d-hello"
+	)
+	initial := `net: 49.0001.1921.6800.1001.00
+area-password: ` + oldArea + `
+circuits:
+  - interface: mock0
+    level: "2"
+    hello-password: ` + oldHello + `
+`
+	cfg, s, path := runningServer(t, initial)
+	next := strings.NewReplacer(oldArea, newArea, oldHello, newHello).Replace(initial)
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	if _, err := Reload(t.Context(), s, cfg, path, slog.New(slog.NewTextHandler(&logs, nil))); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// Both rotations are named -- the area password by key, the hello password
+	// as the circuit it belongs to -- so the log really did have both values in
+	// reach when it wrote the warnings.
+	for _, key := range []string{"area-password", "circuits: mock0 changed"} {
+		if !strings.Contains(logs.String(), key) {
+			t.Fatalf("the log does not name %q, so it never came near either secret:\n%s", key, logs.String())
+		}
+	}
+	for _, secret := range []string{oldArea, newArea, oldHello, newHello} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("the reload logged the secret %q:\n%s", secret, logs.String())
+		}
 	}
 }
