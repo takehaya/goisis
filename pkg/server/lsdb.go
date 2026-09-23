@@ -117,10 +117,19 @@ type LSPInfo struct {
 	Hostname string
 	// TLVs renders the LSP's TLVs in wire order for display; a TLV carrying a
 	// list renders one line per entry, so there are usually more lines than
-	// TLVs.
+	// TLVs. Only ListLSDBDetail fills it in — see renderTLVs.
 	TLVs []string
+	// tlvs is the stored TLV list, carried out of the management operation so
+	// renderTLVs can format it off the Serve loop. Sharing the slice rather
+	// than copying the TLVs is safe because an installed entry is replaced,
+	// never edited: the only write to one in place swaps e.lsp for a freshly
+	// built purge (expirePurge), so nothing appends to or mutates the TLVs a
+	// snapshot captured.
+	tlvs []packet.TLV
 }
 
+// snapshot copies the entries out for a management read. It only copies: the
+// TLV text is rendered by renderTLVs, after the management operation returns.
 func (db *lsdb) snapshot(now time.Time, hostnames map[packet.SystemID]string) []LSPInfo {
 	out := make([]LSPInfo, 0, len(db.entries))
 	for id, e := range db.entries {
@@ -132,8 +141,19 @@ func (db *lsdb) snapshot(now time.Time, hostnames map[packet.SystemID]string) []
 			Checksum:       e.lsp.Checksum(),
 			Own:            e.own,
 			Hostname:       hostnames[id.NodeID().SystemID()],
-			TLVs:           tlvSummaries(e.lsp.TLVs),
+			tlvs:           e.lsp.TLVs,
 		})
 	}
 	return out
+}
+
+// renderTLVs fills in the TLVs field of a snapshot. It must run off the Serve
+// loop (the stored TLVs stay readable there, see LSPInfo.tlvs): a database of
+// a few thousand LSPs renders six figures of lines, which is far more than a
+// management read may take from the goroutine that also sends hellos, floods
+// and expires adjacencies.
+func renderTLVs(infos []LSPInfo) {
+	for i := range infos {
+		infos[i].TLVs = tlvSummaries(infos[i].tlvs)
+	}
 }

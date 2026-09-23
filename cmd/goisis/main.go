@@ -296,7 +296,7 @@ func newDatabaseCmd(addr *string) *cobra.Command {
 		Aliases: []string{"lsdb"},
 		Short:   "Show the link-state database",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			res, err := newClient(*addr).GetLsdb(cmd.Context(), connect.NewRequest(&goisisv1.GetLsdbRequest{}))
+			res, err := newClient(*addr).GetLsdb(cmd.Context(), connect.NewRequest(&goisisv1.GetLsdbRequest{Detail: detail}))
 			if err != nil {
 				return err
 			}

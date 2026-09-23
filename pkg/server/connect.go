@@ -82,9 +82,13 @@ func (h *connectHandler) ListAdjacencies(
 
 func (h *connectHandler) GetLsdb(
 	ctx context.Context,
-	_ *connect.Request[goisisv1.GetLsdbRequest],
+	req *connect.Request[goisisv1.GetLsdbRequest],
 ) (*connect.Response[goisisv1.GetLsdbResponse], error) {
-	lsps, err := h.s.ListLSDB(ctx)
+	list := h.s.ListLSDB
+	if req.Msg.GetDetail() {
+		list = h.s.ListLSDBDetail
+	}
+	lsps, err := list(ctx)
 	if err != nil {
 		return nil, toConnectError(err)
 	}

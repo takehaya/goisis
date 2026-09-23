@@ -78,20 +78,27 @@ func (sub *Subscription) Unsubscribe() {
 func (s *IsisServer) Subscribe(ctx context.Context) (*Subscription, error) {
 	w := &watcher{ch: make(chan Event, watcherBuffer)}
 	sub := &Subscription{Events: w.ch, s: s, w: w}
+	var adjs []AdjacencyInfo
+	var routes []RouteInfo
 	if err := s.mgmtOperation(ctx, func() error {
 		s.watchers[w] = struct{}{}
-		sub.Initial = s.snapshotEvents()
+		adjs, routes = s.snapshotState()
 		return nil
 	}); err != nil {
 		return nil, err
 	}
+	// Ordering the snapshot is pure work on a private copy, so it runs here
+	// rather than in the management operation: a full RIB costs far more to
+	// sort than the Serve loop can give a read (a lag-dropped monitor that
+	// resubscribes pays it again every time).
+	sub.Initial = initialEvents(adjs, routes)
 	return sub, nil
 }
 
-// snapshotEvents renders the current adjacencies and routes as the events that
-// would have reported them, adjacencies first and each group ordered so two
-// subscribers see the same sequence. Called only on the Serve goroutine.
-func (s *IsisServer) snapshotEvents() []Event {
+// snapshotState copies the current adjacencies and routes for a subscriber's
+// initial snapshot. Called only on the Serve goroutine; it only copies, and
+// leaves ordering to initialEvents.
+func (s *IsisServer) snapshotState() ([]AdjacencyInfo, []RouteInfo) {
 	// Resolve hostnames once for the whole snapshot, so Initial really carries
 	// the same content as ListAdjacencies. Live events do not: the index is
 	// O(LSDB) and an adjacency change is not worth rebuilding it (see the
@@ -104,6 +111,17 @@ func (s *IsisServer) snapshotEvents() []Event {
 	for i := range adjs {
 		adjs[i].Hostname = hostnames[adjs[i].SystemID]
 	}
+	routes := make([]RouteInfo, 0, len(s.rib))
+	for _, r := range s.rib {
+		routes = append(routes, r)
+	}
+	return adjs, routes
+}
+
+// initialEvents renders a snapshot as the events that would have reported it,
+// adjacencies first and each group ordered so two subscribers see the same
+// sequence. It works on the caller's own copies, off the Serve loop.
+func initialEvents(adjs []AdjacencyInfo, routes []RouteInfo) []Event {
 	sort.Slice(adjs, func(i, j int) bool {
 		if adjs[i].Interface != adjs[j].Interface {
 			return adjs[i].Interface < adjs[j].Interface
@@ -113,12 +131,11 @@ func (s *IsisServer) snapshotEvents() []Event {
 		}
 		return bytes.Compare(adjs[i].SystemID[:], adjs[j].SystemID[:]) < 0
 	})
-	routes := make([]RouteInfo, 0, len(s.rib))
-	for _, r := range s.rib {
-		routes = append(routes, r)
-	}
 	sort.Slice(routes, func(i, j int) bool {
-		return routes[i].Prefix.String() < routes[j].Prefix.String()
+		// Compare the prefixes, not their text: Prefix.String formats both
+		// operands afresh on every one of the O(n log n) comparisons, which is
+		// most of what sorting a large RIB costs.
+		return routes[i].Prefix.Compare(routes[j].Prefix) < 0
 	})
 
 	out := make([]Event, 0, len(adjs)+len(routes))

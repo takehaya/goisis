@@ -177,7 +177,13 @@ message ListAdjacenciesResponse {
   repeated Adjacency adjacencies = 1;
 }
 
-message GetLsdbRequest {}
+message GetLsdbRequest {
+  // detail asks for Lsp.tlvs to be rendered. Rendering a large database costs
+  // more than everything else in the response put together, so a client that
+  // does not display TLVs leaves this false and pays for neither the rendering
+  // nor the bytes.
+  bool detail = 1;
+}
 message GetLsdbResponse {
   repeated Lsp lsps = 1;
 }

@@ -90,7 +90,9 @@ func FuzzHandleRx(f *testing.F) {
 			// PDU that carried it.
 			hostnames := s.hostnameIndex(now)
 			for _, l := range []packet.Level{packet.Level1, packet.Level2} {
-				for _, info := range s.dbs[l].snapshot(now, hostnames) {
+				infos := s.dbs[l].snapshot(now, hostnames)
+				renderTLVs(infos)
+				for _, info := range infos {
 					if !utf8.ValidString(info.Hostname) {
 						t.Fatalf("LSP %s hostname %q is not valid UTF-8", info.LSPID, info.Hostname)
 					}

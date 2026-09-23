@@ -36,6 +36,9 @@ don't inherit the toolchain graph). Codegen is reproducible offline.
   public read method and protocol event is serialized onto it via `mgmtOperation`
   / `eventCh`. Per-circuit reader goroutines only receive raw frames and forward
   them; decoding and authentication also run on the loop (`handleRx`).
+- **Read-path budget**: a management operation copies state and returns;
+  rendering, sorting and formatting belong in the caller, after `mgmtOperation`
+  (see `ListLSDBDetail` and `Subscribe`) — `BenchmarkListLSDB` sizes it.
 - **Event-driven SPF**: mutations call `markDirty()`; the loop runs `updateRIB`
   after any change rather than on a fixed timer.
 - **Pluggable sinks** (same pattern, keep core dependency-free):
