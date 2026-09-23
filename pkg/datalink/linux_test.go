@@ -3,6 +3,7 @@
 package datalink
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -68,10 +69,13 @@ func TestLinuxTransportLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Read until our own frame turns up rather than trusting the first one:
-	// the socket delivers everything the interface sees, and a freshly created
-	// veth is not quiet (IPv6 autoconfiguration alone puts multicast listener
-	// reports on it the moment it comes up).
+	// Read until the hello we sent turns up rather than trusting the first
+	// frame: the socket delivers everything the interface sees, and a freshly
+	// created veth is not quiet (IPv6 autoconfiguration alone puts multicast
+	// listener reports on it the moment it comes up). Match on the PDU, not on
+	// the source address: what this test guarantees is that a frame written to
+	// one end of the link is read at the other, and some environments hand the
+	// veth a different MAC after the transport has already read it.
 	recvd := make(chan Frame, 1)
 	go func() {
 		for {
@@ -79,7 +83,7 @@ func TestLinuxTransportLoopback(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if f.Src == ta.LocalSNPA() {
+			if bytes.Equal(f.PDU, wire) {
 				recvd <- f
 				return
 			}
