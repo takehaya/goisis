@@ -218,13 +218,16 @@ func (x *Global) GetOverload() bool {
 
 // Circuit is one configured IS-IS circuit.
 type Circuit struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Interface     string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
-	PointToPoint  bool                   `protobuf:"varint,2,opt,name=point_to_point,json=pointToPoint,proto3" json:"point_to_point,omitempty"`
-	Level1        bool                   `protobuf:"varint,3,opt,name=level1,proto3" json:"level1,omitempty"`
-	Level2        bool                   `protobuf:"varint,4,opt,name=level2,proto3" json:"level2,omitempty"`
-	Priority      uint32                 `protobuf:"varint,5,opt,name=priority,proto3" json:"priority,omitempty"`
-	Metric        uint32                 `protobuf:"varint,6,opt,name=metric,proto3" json:"metric,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Interface    string                 `protobuf:"bytes,1,opt,name=interface,proto3" json:"interface,omitempty"`
+	PointToPoint bool                   `protobuf:"varint,2,opt,name=point_to_point,json=pointToPoint,proto3" json:"point_to_point,omitempty"`
+	Level1       bool                   `protobuf:"varint,3,opt,name=level1,proto3" json:"level1,omitempty"`
+	Level2       bool                   `protobuf:"varint,4,opt,name=level2,proto3" json:"level2,omitempty"`
+	Priority     uint32                 `protobuf:"varint,5,opt,name=priority,proto3" json:"priority,omitempty"`
+	Metric       uint32                 `protobuf:"varint,6,opt,name=metric,proto3" json:"metric,omitempty"`
+	// Whether the underlying link is up. A circuit whose link is down keeps its
+	// configuration and its flooding flags but carries nothing.
+	LinkUp        bool `protobuf:"varint,7,opt,name=link_up,json=linkUp,proto3" json:"link_up,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -299,6 +302,13 @@ func (x *Circuit) GetMetric() uint32 {
 		return x.Metric
 	}
 	return 0
+}
+
+func (x *Circuit) GetLinkUp() bool {
+	if x != nil {
+		return x.LinkUp
+	}
+	return false
 }
 
 // Adjacency is one IS-IS adjacency.
@@ -2366,14 +2376,15 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x06Global\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x1b\n" +
 	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\x12\x1a\n" +
-	"\boverload\x18\x03 \x01(\bR\boverload\"\xb1\x01\n" +
+	"\boverload\x18\x03 \x01(\bR\boverload\"\xca\x01\n" +
 	"\aCircuit\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12$\n" +
 	"\x0epoint_to_point\x18\x02 \x01(\bR\fpointToPoint\x12\x16\n" +
 	"\x06level1\x18\x03 \x01(\bR\x06level1\x12\x16\n" +
 	"\x06level2\x18\x04 \x01(\bR\x06level2\x12\x1a\n" +
 	"\bpriority\x18\x05 \x01(\rR\bpriority\x12\x16\n" +
-	"\x06metric\x18\x06 \x01(\rR\x06metric\"\xf3\x01\n" +
+	"\x06metric\x18\x06 \x01(\rR\x06metric\x12\x17\n" +
+	"\alink_up\x18\a \x01(\bR\x06linkUp\"\xf3\x01\n" +
 	"\tAdjacency\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12&\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x1b\n" +

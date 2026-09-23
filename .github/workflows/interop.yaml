@@ -38,5 +38,9 @@ jobs:
           sudo /tmp/datalink.test -test.v
       - name: Build interop tests
         run: go test -c -o /tmp/interop.test ./test/interop
+      # 20m, not the suite's nominal runtime: the LAN route test alone waits
+      # 2x150s on its failure path, and nine other tests hold 90s waitUps, so a
+      # single genuine failure must still be reported as a failure rather than
+      # as a timeout panic that buries it.
       - name: Run interop (needs root for AF_PACKET + veth; PATH kept for `go`)
-        run: sudo env "PATH=$PATH" /tmp/interop.test -test.v -test.timeout 12m
+        run: sudo env "PATH=$PATH" /tmp/interop.test -test.v -test.timeout 20m

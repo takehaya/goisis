@@ -543,3 +543,63 @@ func TestSPFReroutesWhenLANAdjacencyIsLostInsideRegenerationHold(t *testing.T) {
 		t.Errorf("next hops = %+v, want one on c2", r.NextHops)
 	}
 }
+
+// TestRouteIsDownWhenAnyContributingAdvertisementWas pins addRoute's merge
+// policy, which the L1→L2 export depends on: the up/down bit is sticky across
+// every advertisement of a prefix, including one whose path lost on metric.
+// RFC 5305 §4.1 forbids re-advertising a down-marked prefix upward, and the
+// LSDB cannot tell an independently reachable copy from the same leaked prefix
+// re-originated without the bit, so the conservative answer is the safe one.
+func TestRouteIsDownWhenAnyContributingAdvertisementWas(t *testing.T) {
+	p := netip.MustParsePrefix("10.1.0.0/24")
+	up := packet.SystemID{0, 0, 0, 0, 0, 2}
+	dn := packet.SystemID{0, 0, 0, 0, 0, 3}
+
+	for _, tc := range []struct {
+		name       string
+		first      route
+		second     route
+		wantMetric uint32
+		wantHops   int
+	}{
+		{
+			name:       "the down copy wins on metric",
+			first:      route{metric: 20, nextHops: []packet.SystemID{up}},
+			second:     route{metric: 10, down: true, nextHops: []packet.SystemID{dn}},
+			wantMetric: 10, wantHops: 1,
+		},
+		{
+			name:       "the down copy loses on metric and still marks the route",
+			first:      route{metric: 10, nextHops: []packet.SystemID{up}},
+			second:     route{metric: 20, down: true, nextHops: []packet.SystemID{dn}},
+			wantMetric: 10, wantHops: 1,
+		},
+		{
+			name:       "equal metrics merge first hops and the bit",
+			first:      route{metric: 10, nextHops: []packet.SystemID{up}},
+			second:     route{metric: 10, down: true, nextHops: []packet.SystemID{dn}},
+			wantMetric: 10, wantHops: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Both insertion orders: the policy is a property of the set, not
+			// of the order the LSDB happened to be walked in.
+			for _, rs := range [][]route{{tc.first, tc.second}, {tc.second, tc.first}} {
+				routes := map[netip.Prefix]route{}
+				for _, r := range rs {
+					addRoute(routes, p, r)
+				}
+				got := routes[p]
+				if !got.down {
+					t.Errorf("down = false, want true")
+				}
+				if got.metric != tc.wantMetric {
+					t.Errorf("metric = %d, want %d", got.metric, tc.wantMetric)
+				}
+				if len(got.nextHops) != tc.wantHops {
+					t.Errorf("nextHops = %v, want %d of them", got.nextHops, tc.wantHops)
+				}
+			}
+		})
+	}
+}

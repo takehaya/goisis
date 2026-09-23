@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 	"testing"
 	"time"
 
@@ -367,7 +368,7 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 	trB := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
 	trC := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xc3}, 1500)
 	sink := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
-	datalink.Link(trA, trB, trC, sink)
+	datalink.Link(trA, trB, trC)
 
 	a := lanNode(t, 1, trA, 64, steadyHello)
 	b := lanNode(t, 2, trB, 64, steadyHello)
@@ -381,20 +382,33 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 
 	idC := packet.SystemID{0, 0, 0, 0, 0, 3}
 	cLAN := lanID(t, c)
-	waitForLong(t, "C is DIS", func() bool {
-		pns := lanPseudonodes(lanLiveLSPs(t, a))
-		return len(pns) == 1 && pns[cLAN]
-	}, 10*time.Second)
+	// Every node, not just A: the election has a real transient in which a
+	// node elects itself before the winner's hello arrives (a losing candidate
+	// originates its own pseudonode LSP and, for that window, is DIS as far as
+	// its own circuit is concerned). Observing from t=0 would buffer that
+	// node's CSNP and fail the test on behaviour the protocol allows.
+	for _, s := range []*IsisServer{a, b, c} {
+		waitForLong(t, "every node agrees C is DIS", func() bool {
+			pns := lanPseudonodes(lanLiveLSPs(t, s))
+			return len(pns) == 1 && pns[cLAN] && maps.Equal(lanISNeighbors(t, s), map[packet.NodeID]bool{cLAN: true})
+		}, 10*time.Second)
+	}
 
 	// Drain continuously: the mock inbox drops once it is full, and hellos
 	// alone outrun its 256-frame buffer over this window.
-	done := make(chan []*packet.CSNP, 1)
+	var (
+		mu    sync.Mutex
+		csnps []*packet.CSNP
+	)
+	seen := func() int { mu.Lock(); defer mu.Unlock(); return len(csnps) }
+	done := make(chan struct{})
 	go func() {
-		var out []*packet.CSNP
+		defer close(done)
 		for {
+			// Buffered frames still drain from a closed inbox, so this returns
+			// only once everything sent before the Close below is accounted for.
 			f, err := sink.Recv()
 			if err != nil {
-				done <- out
 				return
 			}
 			pdu, err := packet.DecodePDU(f.PDU)
@@ -402,19 +416,31 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 				continue
 			}
 			if csnp, ok := pdu.(*packet.CSNP); ok {
-				out = append(out, csnp)
+				mu.Lock()
+				csnps = append(csnps, csnp)
+				mu.Unlock()
 			}
 		}
 	}()
-
-	// Long enough to span a full csnpInterval wherever the window opens.
-	time.Sleep(csnpInterval + 2*time.Second)
-	_ = sink.Close()
-	csnps := <-done
-
-	if len(csnps) == 0 {
-		t.Fatalf("no CSNP seen in %s; the check would be vacuous", csnpInterval+2*time.Second)
+	// Only now does the listener join the segment, so nothing it reports
+	// predates the settled election. Linking pairwise leaves the three nodes'
+	// existing peer lists alone.
+	for _, tr := range []*datalink.MockTransport{trA, trB, trC} {
+		datalink.Link(tr, sink)
 	}
+
+	// Observe a whole csnpInterval, which is every sender's period, and require
+	// at least one CSNP in it: without one the check below would be vacuous,
+	// and the DIS's own periodic emission is what guarantees there is one.
+	start := time.Now()
+	waitForLong(t, "a full CSNP cycle on a settled segment",
+		func() bool { return time.Since(start) >= csnpInterval && seen() > 0 },
+		3*csnpInterval)
+	_ = sink.Close()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
 	for _, csnp := range csnps {
 		if src := csnp.SourceID.SystemID(); src != idC {
 			t.Errorf("CSNP from %s, want only the DIS %s", src, idC)

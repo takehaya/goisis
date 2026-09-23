@@ -640,3 +640,44 @@ func TestHousekeepingRetriesPendingFIBWritesWithoutSPF(t *testing.T) {
 		t.Error("the retry marked SPF dirty; nothing in the topology changed")
 	}
 }
+
+// TestATTDefaultIsInstalledOnlyForFamiliesTheNeighborAddresses: computeSPF
+// produces both default routes for an attached IS, but the RIB installs one
+// per family that actually resolves. A neighbor that announced no IPv6 address
+// leaves ::/0 without a gateway, which is the behaviour resolveNextHops
+// promises and the only place the ATT default meets next-hop resolution.
+func TestATTDefaultIsInstalledOnlyForFamiliesTheNeighborAddresses(t *testing.T) {
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	gw := netip.MustParseAddr("10.0.0.2")
+
+	// Level 1 only: an L1L2 IS reaches other areas through its own L2 SPF and
+	// must not follow someone else's ATT bit.
+	s := mustServer(t,
+		WithSystemID(self),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level1: true, Padding: ptrFalse()}),
+	)
+	s.circuits[0].adjs[packet.Level1][peer] = &adjacency{
+		systemID: peer, state: AdjUp, neighborIPv4: []netip.Addr{gw},
+	}
+	injectL1(s, self, false, false, []packet.TLV{isReach(peer)}, now)
+	injectL1(s, peer, true, false, []packet.TLV{isReach(self)}, now)
+
+	s.updateRIB(now)
+
+	r, ok := s.rib[defaultV4]
+	if !ok {
+		t.Fatalf("no IPv4 default route; rib=%v", s.rib)
+	}
+	if len(r.NextHops) != 1 || r.NextHops[0].Gateway != gw || r.NextHops[0].Interface != "c" {
+		t.Errorf("IPv4 default next hops = %v, want one via %s on c", r.NextHops, gw)
+	}
+	if r.Metric != DefaultMetric || r.Level != packet.Level1 {
+		t.Errorf("IPv4 default = (metric %d, level %v), want (%d, Level1)", r.Metric, r.Level, DefaultMetric)
+	}
+	if r6, ok := s.rib[defaultV6]; ok {
+		t.Errorf("installed an IPv6 default %v, but the neighbor announced no IPv6 address", r6)
+	}
+}
