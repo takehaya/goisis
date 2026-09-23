@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -81,7 +82,7 @@ func sortedSystemIDs[V any](m map[packet.SystemID]V) []packet.SystemID {
 // one per (locator, adjacency) that is new, and reprograms the FIB. It runs
 // from the LSP regeneration path — every adjacency change already converges
 // there — so the adjacency state machine needs no hook of its own.
-func (s *IsisServer) syncEndXSIDs() {
+func (s *IsisServer) syncEndXSIDs(now time.Time) {
 	if len(s.locators) == 0 && len(s.endXSIDs) == 0 {
 		clear(s.endXNoNexthop) // nothing to warn about without a locator
 		return
@@ -98,7 +99,7 @@ func (s *IsisServer) syncEndXSIDs() {
 	for _, ea := range eas {
 		ak := endXAdjKey{circuit: ea.circuit.cfg.Name, neighbor: ea.adj.systemID}
 		adjs[ak] = true
-		nh := s.endXNexthop(ea.circuit, ea.adj)
+		nh := s.endXNexthop(ea.circuit, ea.adj, now)
 		if !nh.IsValid() {
 			// Nothing to allocate, advertise or program: an End.X SID with no
 			// routable next hop is a black hole that pulls traffic in (see
@@ -112,6 +113,9 @@ func (s *IsisServer) syncEndXSIDs() {
 		}
 		delete(s.endXNoNexthop, ak)
 		for _, lc := range s.locators {
+			if !s.endXParticipates(lc, ea.adj, now) {
+				continue
+			}
 			k := endXKey{locator: lc.Prefix.Masked(), circuit: ak.circuit, neighbor: ak.neighbor}
 			live[k] = true
 			wanted = append(wanted, want{key: k, locator: lc, nexthop: nh})
@@ -159,17 +163,13 @@ func (s *IsisServer) syncEndXSIDs() {
 // of a hello carries link-locals (RFC 5308 3 — goisis and FRR both send only
 // those), TLV 232 of an LSP carries the global ones. Hellos are still consulted
 // first, for a peer that does list a global address there.
-func (s *IsisServer) endXNexthop(c *circuit, adj *adjacency) netip.Addr {
+func (s *IsisServer) endXNexthop(c *circuit, adj *adjacency, now time.Time) netip.Addr {
 	if a := s.onLinkAddr(c, adj.neighborIPv6); a.IsValid() {
 		return a
 	}
 	for _, l := range adj.levels.levels() {
-		db := s.dbs[l]
-		if db == nil {
-			continue
-		}
-		e := db.get(lspID(adj.systemID, 0))
-		if e == nil || !e.purgedAt.IsZero() {
+		e := s.neighborLSP(l, adj.systemID, now)
+		if e == nil {
 			continue
 		}
 		for _, tlv := range e.lsp.TLVs {
@@ -183,6 +183,46 @@ func (s *IsisServer) endXNexthop(c *circuit, adj *adjacency) netip.Addr {
 		}
 	}
 	return netip.Addr{}
+}
+
+// neighborLSP returns a neighbor's fragment-0 LSP at a level, but only while
+// it is the entry SPF admits into the topology (buildTopology pass 1: neither
+// purged nor expired). Fragment 0 is where a node publishes the state the
+// End.X path needs — its global interface addresses (TLV 232) and its
+// SR-Algorithm participation (TLV 242) — and reading it under the same
+// liveness test keeps the SIDs we advertise and the SPF that has to use them
+// on one view of the neighbor.
+func (s *IsisServer) neighborLSP(level packet.Level, id packet.SystemID, now time.Time) *lspEntry {
+	db := s.dbs[level]
+	if db == nil {
+		return nil
+	}
+	e := db.get(lspID(id, 0))
+	if e == nil || !e.purgedAt.IsZero() || e.remaining(now) == 0 {
+		return nil
+	}
+	return e
+}
+
+// endXParticipates reports whether an End.X SID from this locator may be
+// handed to an adjacency. RFC 9352 §8.1 binds an End.X SID to the algorithm of
+// the locator it comes from, and a Flexible Algorithm's topology excludes a
+// node that does not advertise the algorithm — exactly the prune buildTopology
+// applies. An algo-N SID towards such a neighbor is therefore one no compliant
+// algo-N computation can use: it spends the locator's function space, and
+// where the algorithm's definition is an isolation constraint it hands a
+// remote node a way to steer algo-N traffic onto the excluded link. Algorithm
+// 0 is every node's, so there is nothing to check for it.
+func (s *IsisServer) endXParticipates(lc SRv6LocatorConfig, adj *adjacency, now time.Time) bool {
+	if lc.Algo == 0 {
+		return true
+	}
+	for _, l := range adj.levels.levels() {
+		if e := s.neighborLSP(l, adj.systemID, now); e != nil && lspParticipatesInAlgo(e, lc.Algo) {
+			return true
+		}
+	}
+	return false
 }
 
 // onLinkAddr returns the first global IPv6 address in addrs that falls inside

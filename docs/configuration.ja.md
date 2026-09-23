@@ -90,7 +90,8 @@ hello に載せてくるピアがいればそちらも使います。Linux の E
 付かないのは、リンクにリンクローカルしか無い場合だけです。
 
 Flexible Algorithm に紐づく locator はここではなく `flex-algo` 配下の `locator` で
-設定します(下記)。`srv6.locators` はアルゴリズム 0 の locator です。
+設定します(下記)。`srv6.locators` はアルゴリズム 0 の locator です。そちらの End.X
+には追加の条件があります(`flex-algo[].locator` 参照)。
 
 ## `flex-algo[]`
 
@@ -113,6 +114,14 @@ flex-algo:
 
 ノードは列挙した各アルゴリズムに参加します(SR-Algorithm sub-TLV 19 で広報)。
 参加していないアルゴリズムに紐づく locator は到達不能になるため、起動時に拒否されます。
+
+End.X SID は取り出し元 locator のアルゴリズムを持ちます(RFC 9352 §8.1)。そのため
+アルゴリズムに紐づく locator が End.X を配るのは、**同じアルゴリズム**を自分の
+SR-Algorithm sub-TLV に載せている隣接に対してだけです。これは SPF がそのアルゴリズムの
+トポロジに隣接を残すかどうかの判定と同じ参加情報です。アルゴリズム外の隣接は
+アルゴリズム 0 の End.X はそのまま持ち、Flex-Algo locator からは 1 つも受け取りません。
+SID は隣接の fragment 0 LSP がそのアルゴリズムを載せ始めた時点で付き、載せなくなれば
+解放されます。
 
 ## `policy`
 

@@ -237,9 +237,12 @@ Two invariants matter beyond the codec:
   circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
   fragment 0 plus spill fragments 1..255; stale fragments are purged when the
   set shrinks. Re-origination is also where End.X SIDs are reconciled: an Up
-  adjacency with a global on-link neighbour address holds one SID per locator,
-  taken from that locator's function space, and a SID whose adjacency (or
-  address) is gone is released and removed from the FIB.
+  adjacency with a global on-link neighbour address holds one SID per locator
+  whose algorithm the neighbour participates in, taken from that locator's
+  function space, and a SID whose adjacency, address or participation is gone
+  is released and removed from the FIB. The neighbour publishes both the
+  address and the participation in its fragment-0 LSP, which arrives after the
+  adjacency does, so installing one asks for a re-origination.
 - **SPF.** Dijkstra per `(level, algorithm)` over a topology built from the
   LSDB, with the ISO two-way connectivity check, pseudonode zero-cost edges,
   overload-bit transit avoidance, 64-bit metric accumulation with an
@@ -268,9 +271,11 @@ Two invariants matter beyond the codec:
   install is retried every housekeeping tick) and counted in
   `goisis_fib_errors_total{op="add_sid"}`; the daemon starts and routes anyway.
 - **Flex-Algo (RFC 9350).** Definition election follows priority / system-ID;
-  participation prunes the topology per algorithm. Only the IGP metric is
-  computed today; constraint sub-sub-TLVs are preserved on the wire for a
-  later ASLA-aware computation.
+  participation prunes the topology per algorithm — and, because an End.X SID
+  carries its locator's algorithm (RFC 9352 §8.1), it also gates which
+  adjacencies a Flex-Algo locator hands an End.X SID to, on the same predicate
+  SPF prunes with. Only the IGP metric is computed today; constraint
+  sub-sub-TLVs are preserved on the wire for a later ASLA-aware computation.
 
 ## Security posture
 
