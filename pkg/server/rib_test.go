@@ -227,11 +227,12 @@ func TestProgramFIBRetryNoDuplicateEmit(t *testing.T) {
 	}
 }
 
-// TestBetterRoute pins the route-preference comparator: level first (L1 over
-// L2, and it dominates the algorithm), then the lower algorithm; the incumbent
-// stays on a full tie.
+// TestBetterRoute pins the route-preference comparator: the RFC 5302 §3.2
+// preference class first (L1 intra-area > L2 > L2-to-L1, and it dominates the
+// algorithm), then the lower algorithm; the incumbent stays on a full tie.
 func TestBetterRoute(t *testing.T) {
 	r := func(l packet.Level, algo uint8) route { return route{level: l, algo: algo} }
+	down := func(l packet.Level, algo uint8) route { return route{level: l, algo: algo, down: true} }
 	for _, tc := range []struct {
 		name                 string
 		candidate, incumbent route
@@ -239,12 +240,22 @@ func TestBetterRoute(t *testing.T) {
 	}{
 		{"L1-algo0 beats L2-algo0", r(packet.Level1, 0), r(packet.Level2, 0), true},
 		{"L2-algo0 loses to L1-algo0", r(packet.Level2, 0), r(packet.Level1, 0), false},
-		{"same level: algo0 beats flex-algo", r(packet.Level2, 0), r(packet.Level2, 128), true},
-		{"same level: flex-algo loses to algo0", r(packet.Level2, 128), r(packet.Level2, 0), false},
-		// Level dominates the algorithm: an L1 Flex-Algo route displaces an
-		// L2 algorithm-0 route (and not vice versa).
+		{"same class: algo0 beats flex-algo", r(packet.Level2, 0), r(packet.Level2, 128), true},
+		{"same class: flex-algo loses to algo0", r(packet.Level2, 128), r(packet.Level2, 0), false},
+		// The class dominates the algorithm: an L1 intra-area Flex-Algo route
+		// displaces an L2 algorithm-0 route (and not vice versa).
 		{"L1-flexalgo beats L2-algo0", r(packet.Level1, 128), r(packet.Level2, 0), true},
 		{"L2-algo0 loses to L1-flexalgo", r(packet.Level2, 0), r(packet.Level1, 128), false},
+		// RFC 5302 §3.2 class 3 (L2-to-L1, the up/down bit) below class 2, so a
+		// leaked copy never displaces our own Level-2 route — at any algorithm.
+		{"L2-algo0 beats L1-down-algo0", r(packet.Level2, 0), down(packet.Level1, 0), true},
+		{"L1-down-algo0 loses to L2-algo0", down(packet.Level1, 0), r(packet.Level2, 0), false},
+		{"L2-flexalgo beats L1-down-algo0", r(packet.Level2, 128), down(packet.Level1, 0), true},
+		{"L1-intra-area beats L1-down", r(packet.Level1, 0), down(packet.Level1, 0), true},
+		{"L1-down loses to L1-intra-area", down(packet.Level1, 0), r(packet.Level1, 0), false},
+		// The bit is only defined for a Level-1 advertisement (RFC 5305 §4.1):
+		// a Level-2 route carrying it is still class 2.
+		{"L2-down is still class 2 against L1-down", down(packet.Level2, 0), down(packet.Level1, 0), true},
 		{"full tie keeps incumbent", r(packet.Level2, 0), r(packet.Level2, 0), false},
 	} {
 		if got := betterRoute(tc.candidate, tc.incumbent); got != tc.want {

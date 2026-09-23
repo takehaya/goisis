@@ -30,13 +30,13 @@ type RouteInfo struct {
 
 // updateRIB recomputes SPF for every level and algorithm, resolves next hops,
 // and programs the difference into the FIB. When the same prefix is computed
-// more than once, betterRoute picks the winner (L1 over L2, then the lower
-// algorithm; see its doc for the rationale).
+// more than once, betterRoute picks the winner (RFC 5302 §3.2 preference class, then
+// the lower algorithm; see its doc for the rationale).
 func (s *IsisServer) updateRIB(now time.Time) {
 	merged := map[netip.Prefix]route{}
 	// The Level-2 algorithm-0 route set, kept aside as the leak candidates:
-	// merged only holds the winner per prefix, and a prefix reachable at both
-	// levels is won by Level 1 (betterRoute), which is exactly the prefix
+	// merged only holds the winner per prefix, and a prefix the area also has
+	// intra-area is won by Level 1 (betterRoute), which is exactly the prefix
 	// l2LeakSet still has to look at to decide it is intra-area.
 	var l2Reach map[netip.Prefix]route
 	algos := s.routingAlgos()
@@ -209,13 +209,14 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 		case own[p]:
 			continue // regenerateNodeLSP already originates this one at both levels
 		}
-		// Reachability the area already has is not leaked. A down-marked
-		// Level-1 route does not count as that: it is another L1L2 IS leaking
-		// the same prefix, and standing down for it would make every border
-		// router in the area stop and start together (RFC 5305 §4.1 expects
-		// several of them to leak the same prefix; the bit, not suppression,
-		// is what stops the loop).
-		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 && !cur.down {
+		// Reachability the area already has is not leaked. Another L1L2 IS
+		// leaking the same prefix is not that, and must not make us stand down:
+		// RFC 5305 §4.1 expects several border routers to leak the same prefix,
+		// and the bit, not suppression, is what stops the loop. That needs no
+		// exception here: p is reachable at Level 2, so a leaked Level-1 copy
+		// of it is preference class 3 against that route's class 2 and never
+		// won merged in the first place.
+		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 {
 			continue
 		}
 		m := min(r.metric, maxPathMetric-1)
@@ -253,21 +254,49 @@ func (s *IsisServer) ownAdvertised() map[netip.Prefix]bool {
 // betterRoute reports whether candidate should replace incumbent as the route
 // for one prefix. The precedence, highest first:
 //
-//  1. Level: a Level 1 route is preferred over a Level 2 route for the same
-//     prefix (ISO 10589 / RFC 1195: intra-area routes take precedence over
-//     inter-area routes). Level dominates the algorithm, so an L1 Flex-Algo
-//     route displaces an L2 algorithm-0 route.
-//  2. Algorithm: within a level, the lower algorithm wins. Algorithm 0 and
+//  1. Preference class (preferenceClass, RFC 5302 §3.2). The class dominates the
+//     algorithm, so a class-1 Flex-Algo route displaces a class-2 algorithm-0
+//     route.
+//  2. Algorithm: within a class, the lower algorithm wins. Algorithm 0 and
 //     each Flex-Algo normally advertise disjoint prefixes, but a shared/anycast
 //     prefix claimed by two algorithms could collide; prefer plain reachability
 //     (algorithm 0) over a Flex-Algo, deterministically.
 //
 // On a full tie the incumbent stays.
 func betterRoute(candidate, incumbent route) bool {
-	if candidate.level != incumbent.level {
-		return candidate.level == packet.Level1
+	if c, i := preferenceClass(candidate), preferenceClass(incumbent); c != i {
+		return c < i
 	}
 	return candidate.algo < incumbent.algo
+}
+
+// preferenceClass returns the RFC 5302 §3.2 route preference class, lowest
+// preferred:
+//
+//  1. Level-1 intra-area.
+//  2. Level-2 intra-area, together with Level-1-to-Level-2 inter-area: a
+//     Level-2 LSP does not distinguish the two, and the RFC ranks them equal.
+//  3. Level-2-to-Level-1 inter-area, which is what the up/down bit marks.
+//
+// Classes 4 to 6 are the external-metric equivalents of 1 to 3. This
+// implementation originates wide metrics only (RFC 5305), which carry no
+// external-metric bit, so nothing lands in them.
+//
+// Class 3 below class 2 is the half of the up/down bit that lives in the
+// forwarding plane: without it, two L1L2 border routers leaking the same prefix
+// into their area each prefer the other's leaked copy over their own Level-2
+// path, and forward to each other until the TTL runs out.
+func preferenceClass(r route) int {
+	switch {
+	case r.level == packet.Level2:
+		// The up/down bit is defined for a Level-1 advertisement (RFC 5305
+		// §4.1); whatever a Level-2 LSP carries in it says nothing about class.
+		return 2
+	case r.down:
+		return 3
+	default:
+		return 1
+	}
 }
 
 // algoKey identifies a (level, Flex-Algo) pair, used to de-dup the

@@ -87,13 +87,13 @@ func ownIPReach(t *testing.T, s *IsisServer, level packet.Level) map[netip.Prefi
 	return out
 }
 
-// ownIPReachTLVs returns the IP reachability TLVs this node originates at a
-// level, so another node's database can be fed exactly what we put on the wire.
-func ownIPReachTLVs(t *testing.T, s *IsisServer, level packet.Level) []packet.TLV {
+// ownIPReachTLVs returns the Level-1 IP reachability TLVs this node originates,
+// so another node's database can be fed exactly what we put on the wire.
+func ownIPReachTLVs(t *testing.T, s *IsisServer) []packet.TLV {
 	t.Helper()
-	db := s.dbs[level]
+	db := s.dbs[packet.Level1]
 	if db == nil {
-		t.Fatalf("no Level-%d LSDB", level)
+		t.Fatal("no Level-1 LSDB")
 	}
 	var out []packet.TLV
 	for id, e := range db.entries {
@@ -432,7 +432,7 @@ func TestAnL1OnlyNodeInstallsALeakedPrefix(t *testing.T) {
 	leakFixture(t, leaker, now)
 
 	receiver := l1l2Server(t, false)
-	injectB(receiver, now, ownIPReachTLVs(t, leaker, packet.Level1)...)
+	injectB(receiver, now, ownIPReachTLVs(t, leaker)...)
 	receiver.regenerateLSPs(false, now)
 	receiver.updateRIB(now)
 
@@ -461,7 +461,7 @@ func TestALeakedPrefixIsNotPropagatedBackIntoLevel2(t *testing.T) {
 	// A sibling L1L2 IS in the same area hears the leak from its Level-1
 	// neighbour, and leaks nothing of its own.
 	sibling := l1l2Server(t, true)
-	injectB(sibling, now, ownIPReachTLVs(t, leaker, packet.Level1)...)
+	injectB(sibling, now, ownIPReachTLVs(t, leaker)...)
 	sibling.regenerateLSPs(false, now)
 	sibling.updateRIB(now)
 	sibling.drainLSPGen(now)
@@ -488,13 +488,45 @@ func TestAnotherISLeakingTheSamePrefixDoesNotSuppressOurs(t *testing.T) {
 	leakFixture(t, s, now)
 	// B now also carries the other IS's leak at Level 1, so s knows leakV4 at
 	// both levels — at Level 1 only because someone else leaked it.
-	injectB(s, now, ownIPReachTLVs(t, other, packet.Level1)...)
+	injectB(s, now, ownIPReachTLVs(t, other)...)
 	s.updateRIB(now)
 	s.drainLSPGen(now.Add(minLSPGenInterval))
 
 	if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(ownIPReach(t, s, packet.Level1)[leakV4], want) {
 		t.Errorf("L1 LSP entries for %s = %v, want %v (a peer's leak must not suppress ours)",
 			leakV4, ownIPReach(t, s, packet.Level1)[leakV4], want)
+	}
+}
+
+// The other half of the same rule, in the forwarding plane: RFC 5302 §3.2 ranks
+// a sibling's leak (preference class 3) below our own Level-2 route (class 2),
+// so not standing down for it must not mean routing through it. Both borders
+// leak, and if each preferred the other's copy they would point at each other.
+func TestOurOwnLevel2RouteOutranksASiblingsLeakedCopy(t *testing.T) {
+	now := time.Now()
+	other := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	leakFixture(t, other, now)
+
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	leakFixture(t, s, now)
+	for _, p := range []netip.Prefix{leakV4, leakV6} {
+		// 10 (the circuit metric to B) + 5 (B's Level-2 metric for the prefix).
+		if r := s.rib[p]; r.Level != packet.Level2 || r.Metric != 15 {
+			t.Fatalf("%s = level %v metric %d before the sibling's leak, want Level 2 metric 15; the topology under test is wrong",
+				p, r.Level, r.Metric)
+		}
+	}
+
+	// B now also carries the other IS's leak at Level 1, so s knows the prefixes
+	// at both levels — at Level 1 only because someone else leaked them.
+	injectB(s, now, ownIPReachTLVs(t, other)...)
+	s.updateRIB(now)
+
+	for _, p := range []netip.Prefix{leakV4, leakV6} {
+		if r := s.rib[p]; r.Level != packet.Level2 || r.Metric != 15 {
+			t.Errorf("%s = level %v metric %d, want Level 2 metric 15 (a down-marked Level-1 route must not win)",
+				p, r.Level, r.Metric)
+		}
 	}
 }
 
