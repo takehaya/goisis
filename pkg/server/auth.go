@@ -1,6 +1,10 @@
 package server
 
-import "github.com/takehaya/goisis/pkg/packet"
+import (
+	"fmt"
+
+	"github.com/takehaya/goisis/pkg/packet"
+)
 
 // authSpec is the resolved HMAC configuration for one authentication scope (a
 // hello circuit, or a level's LSPs/SNPs). A zero spec (nil key) means the scope
@@ -43,6 +47,19 @@ func acceptKeys(passwords []string) [][]byte {
 		keys = append(keys, []byte(pw))
 	}
 	return keys
+}
+
+// requirePrimaryPassword rejects an accept list configured without a signing
+// password. Such a scope signs nothing and, since acceptKeys drops the empty
+// entries the missing password would otherwise produce, verifies nothing
+// either: it silently degrades to unauthenticated. That is the shape a
+// mistyped key rotation (docs/configuration.md) takes, so it is a
+// configuration error rather than a warning.
+func requirePrimaryPassword(scope, primary string, accept []string) error {
+	if primary == "" && len(accept) > 0 {
+		return fmt.Errorf("%s: accept passwords require a primary password", scope)
+	}
+	return nil
 }
 
 // authKey returns the LSP/SNP authentication spec for a level (zero if none).

@@ -263,7 +263,9 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			opts = append(opts, server.WithFIBFilter(pl.FIBFilter()))
 		}
 	}
-	if c.AreaPassword != "" {
+	// The accept list alone reaches the server too, so it can reject a
+	// rotation that left out the primary password instead of running unauthenticated.
+	if c.AreaPassword != "" || len(c.AreaAcceptPasswords) > 0 {
 		algo, err := authAlgorithm(c.AreaAuthAlgorithm)
 		if err != nil {
 			return nil, fmt.Errorf("area-auth-algorithm: %w", err)
@@ -272,7 +274,7 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			Algorithm: algo, KeyID: c.AreaKeyID, Secret: c.AreaPassword, AcceptSecrets: c.AreaAcceptPasswords,
 		}))
 	}
-	if c.DomainPassword != "" {
+	if c.DomainPassword != "" || len(c.DomainAcceptPasswords) > 0 {
 		algo, err := authAlgorithm(c.DomainAuthAlgorithm)
 		if err != nil {
 			return nil, fmt.Errorf("domain-auth-algorithm: %w", err)

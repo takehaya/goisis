@@ -146,6 +146,9 @@ func (c *CircuitConfig) applyDefaults() error {
 	if c.Metric == 0 {
 		c.Metric = DefaultMetric
 	}
+	if err := requirePrimaryPassword(fmt.Sprintf("circuit %q hello authentication", c.Name), c.HelloPassword, c.HelloAcceptPasswords); err != nil {
+		return err
+	}
 	return nil
 }
 
