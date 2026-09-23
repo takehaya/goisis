@@ -174,10 +174,15 @@ of a table, for scripts and `jq`. `goisis database --detail` additionally prints
 each LSP's TLVs under its row, so a peer's advertisement can be read without a
 packet capture.
 
+`goisisd -api-listen` binds `127.0.0.1:50051` by default; anything reachable
+from off the host needs the `-api-allow-remote` opt-in. A bare `:50051` counts
+as such: an empty host binds every interface, exactly as `0.0.0.0` does.
+
 `--addr` also takes `unix:///absolute/path` to reach a daemon started with
 `goisisd -api-listen unix:///run/goisis/goisisd.sock`. The API is
 unauthenticated, so on a shared host a unix socket is the cheapest protection:
-the socket is created mode `0660` and its directory guards who may connect.
+the socket is bound under a umask that makes it mode `0660` from the first
+instant it exists, and its directory guards who may connect.
 
 `prefix`, `overload`, `neighbor clear`, `locator` and `flex-algo` also
 reconfigure the daemon at runtime:
@@ -191,6 +196,12 @@ $ goisis prefix add 10.9.9.0/24 --metric 10   # and: goisis prefix delete 10.9.9
 $ goisis overload on                          # maintenance; "off" clears it
 $ goisis neighbor clear --interface eth0      # add --system-id for one neighbor
 ```
+
+`prefix add` refuses what could never be routed to: multicast, unspecified,
+link-local and IPv4-mapped prefixes, and a metric at or above the RFC 5305
+reachability ceiling (`0xfe000000`), which means "unreachable". A default route
+is not refused — originating one is legitimate, and `policy.advertise` is the
+knob that suppresses it.
 
 `prefix delete` only withdraws what `prefixes` or `prefix add` originates. An
 interface's connected subnet is refused, naming the interface it is connected

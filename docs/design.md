@@ -272,10 +272,15 @@ Two invariants matter beyond the codec:
   authentication is the primary mitigation.
 - **Management plane.** The Connect API is plaintext h2c without
   authentication, bound to loopback by default; binding it further requires
-  the explicit `-api-allow-remote` opt-in. For local access prefer
-  `-api-listen unix:///run/goisis/goisisd.sock`: the socket is created mode
-  `0660`, so filesystem permissions become the access control. Exposing it
-  over the network needs external protection (TLS proxy, network policy).
+  the explicit `-api-allow-remote` opt-in — an empty host (`:50051`) counts as
+  binding every interface. For local access prefer
+  `-api-listen unix:///run/goisis/goisisd.sock`: the socket is bound under a
+  umask that makes it mode `0660` from the instant it exists, so filesystem
+  permissions become the access control. Over TCP loopback there is no identity
+  to authorize, so any local UID can originate area-wide reachability; making
+  the unix socket the default is a breaking change for the daemon and the CLI
+  and is deferred to 0.4.0. Exposing the API over the network needs external
+  protection (TLS proxy, network policy).
 
 ## Limitations
 

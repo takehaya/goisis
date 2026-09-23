@@ -135,16 +135,30 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 }
 
 // AddPrefix originates a new prefix in this node's LSP (TLV 135/236) at
-// runtime. The prefix must be valid and not already named by the configuration
-// or an earlier AddPrefix (matched on its masked form, the key the RIB and FIB
-// agree on). A subnet a circuit already has connected may be named here: the
-// prefix is still advertised once, at the metric given here.
+// runtime. The prefix must be valid, routable, and not already named by the
+// configuration or an earlier AddPrefix (matched on its masked form, the key
+// the RIB and FIB agree on). A subnet a circuit already has connected may be
+// named here: the prefix is still advertised once, at the metric given here.
 func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error {
 	return s.mgmtOperation(ctx, func() error {
 		if !cfg.Prefix.IsValid() {
 			return fmt.Errorf("goisis: prefix %s is not a valid prefix", cfg.Prefix)
 		}
 		want := cfg.Prefix.Masked()
+		// This is the trust boundary the management API sits on: whatever is
+		// accepted here is flooded area-wide and installed by every peer.
+		// Prefixes that no unicast forwarding entry can ever serve are refused
+		// rather than advertised. The default route is not one of them:
+		// default-information origination is legitimate, and suppressing it is
+		// policy.advertise's job.
+		if a := want.Addr(); a.Is4In6() || a.IsMulticast() || a.IsLinkLocalUnicast() || (a.IsUnspecified() && want.Bits() != 0) {
+			return fmt.Errorf("goisis: prefix %s is not routable; multicast, unspecified, link-local and IPv4-mapped prefixes are never originated", want)
+		}
+		// RFC 5305 §4: a metric at or above the ceiling means "not reachable",
+		// so advertising one would be a black hole no SPF would ever use.
+		if cfg.Metric >= maxPathMetric {
+			return fmt.Errorf("goisis: prefix %s metric %d is at or above the reachability ceiling %d", want, cfg.Metric, uint32(maxPathMetric))
+		}
 		if _, ok := s.optionPrefixes[want]; ok {
 			return fmt.Errorf("goisis: prefix %s is already advertised", want)
 		}

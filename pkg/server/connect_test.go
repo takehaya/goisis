@@ -100,6 +100,20 @@ func TestConnectAddPrefixInvalid(t *testing.T) {
 	}
 }
 
+// TestConnectAddPrefixUnroutable asserts a syntactically valid but unroutable
+// prefix is refused by the server and reaches the client as InvalidArgument,
+// not as an internal failure.
+func TestConnectAddPrefixUnroutable(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+
+	h := &connectHandler{s: s}
+	_, err := h.AddPrefix(context.Background(), connect.NewRequest(&goisisv1.AddPrefixRequest{Prefix: "224.0.0.0/4"}))
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("AddPrefix with a multicast prefix: code = %v (%v), want InvalidArgument", got, err)
+	}
+}
+
 // TestConnectClearAdjacencyInvalidSystemID asserts a malformed system ID is
 // rejected as InvalidArgument.
 func TestConnectClearAdjacencyInvalidSystemID(t *testing.T) {
