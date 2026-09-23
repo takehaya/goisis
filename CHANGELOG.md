@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/takehaya/goisis/compare/v0.3.0...v0.4.0) (2026-09-23)
+
+
+### Features
+
+* **metrics:** count the receive, transmit and hello paths that failed silently ([656f63b](https://github.com/takehaya/goisis/commit/656f63b78b8be0d57defe8827b8c95ef3f5b417a))
+* **origination:** advertise our global IPv6 addresses in the node LSP ([345c16b](https://github.com/takehaya/goisis/commit/345c16b3e51bc3277e8c6c4fae9f5be32eab3a6a))
+* **server:** cap adjacencies per circuit and slow the local SID re-assert ([3dbccd7](https://github.com/takehaya/goisis/commit/3dbccd73da8f65480d4faf02d1c652e7104be50d))
+
+
+### Bug Fixes
+
+* **auth:** reject accept-password lists configured without a primary password ([31e2499](https://github.com/takehaya/goisis/commit/31e24990ce51db5d22ad652f4066f6ea190c657c))
+* **config:** stop the interface watcher from panicking or spinning when netlink closes ([b8082c3](https://github.com/takehaya/goisis/commit/b8082c391ccef319b84f9eca681de4479cda5e49))
+* **fib:** give IS-IS routes a non-zero metric so they cannot replace connected routes ([590f4f7](https://github.com/takehaya/goisis/commit/590f4f71fd14e169af31362d5a14b227f1612b4f))
+* **fib:** install local SIDs on a dummy device instead of the loopback ([21c0d3a](https://github.com/takehaya/goisis/commit/21c0d3ac024d6f8fd3bed5272347ac7f1762b45d))
+* **flooding:** count LSPs dropped for exceeding a circuit MTU and re-arm the warning ([32bf592](https://github.com/takehaya/goisis/commit/32bf592c21c1126edeafad158f06d96a078761eb))
+* **flooding:** pace the whole-database sync and hold down a flapping peer ([6dbbdee](https://github.com/takehaya/goisis/commit/6dbbdee7120625151ae7209d0c183725be45aff4))
+* **flooding:** purge forged LSPs naming us and handle sequence-number exhaustion ([a3de360](https://github.com/takehaya/goisis/commit/a3de360b36915f5c195d03663b5bcd24ee17e66f))
+* **goisisd:** close the API listen gate and validate runtime prefixes ([abf6e4e](https://github.com/takehaya/goisis/commit/abf6e4e7b334b12719940acf97e2d9d8deb77b9a))
+* **hello:** split the IS Neighbors TLV so a LAN with 43 stations keeps sending hellos ([70c853d](https://github.com/takehaya/goisis/commit/70c853d0461dccbc670c446c3f86f67b9190a77f))
+* **origination:** apply the advertise policy to Level-1 prefixes exported into Level-2 ([b472d0c](https://github.com/takehaya/goisis/commit/b472d0c7990f7b25d18be1b36840074f48b00631))
+* **server:** compare circuit addresses as sets when deciding a no-op ([4cfe0a1](https://github.com/takehaya/goisis/commit/4cfe0a1bcb29528d89acd6ec45d0c0dd65459bf2))
+* **server:** give originated prefixes a single owner ([c9ed9d7](https://github.com/takehaya/goisis/commit/c9ed9d7850563fcea46ca3cc7c4331b509ee6590))
+* **server:** retry failed FIB writes on the tick and re-read interfaces periodically ([a78c207](https://github.com/takehaya/goisis/commit/a78c207b6fd0e7a582ad5799365780775c4f30f6))
+* **server:** sanitize peer hostnames before they reach the management API ([d24dc7d](https://github.com/takehaya/goisis/commit/d24dc7d8821d4ca8bc98c36b753ec352d8bda27d))
+* **spf:** compute our own paths from live adjacencies, not from the stored LSP ([32a6f42](https://github.com/takehaya/goisis/commit/32a6f42d3c43e4b0ba354bbdc5f886b97558feb7))
+* **srv6:** allocate Flex-Algo End.X SIDs only toward participating neighbors ([6c38263](https://github.com/takehaya/goisis/commit/6c38263003175ce534c996f6b3f690489124b977))
+* **srv6:** count End.X FIB failures and retry the writes that failed ([ee0b93a](https://github.com/takehaya/goisis/commit/ee0b93a676c09a817fc03cd0f0028f8472662816))
+* **srv6:** forward End.X SIDs to an on-link global address, or do not advertise them ([275de6d](https://github.com/takehaya/goisis/commit/275de6dc8d8839360f298996ee2e5a8079cf6b1a))
+* **watch:** resolve hostnames in a subscription's initial snapshot ([d2f7cd0](https://github.com/takehaya/goisis/commit/d2f7cd0bee60090206d4fd412b89f27d79babea8))
+
+
+### Performance Improvements
+
+* **server:** copy state on the management loop and render off it ([80c545b](https://github.com/takehaya/goisis/commit/80c545b3636bfb1ccb7bb928c8f235930ed91d69))
+
 ## [0.3.0](https://github.com/takehaya/goisis/compare/v0.2.0...v0.3.0) (2026-09-22)
 
 
