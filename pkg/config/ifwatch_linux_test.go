@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/vishvananda/netlink"
 )
@@ -77,5 +78,47 @@ func TestLinkUp(t *testing.T) {
 				t.Errorf("linkUp = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// watchLoopError runs watchLoop against the given channels and returns its
+// error. A nil channel stands for a subscription that simply never fires. The
+// deadline is the point: a watcher whose subscription died must return, not
+// block and not spin, so the daemon notices instead of looking healthy.
+func watchLoopError(t *testing.T, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate) error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- watchLoop(t.Context(), &fakeSetter{}, map[string]bool{"isis0": true}, addrCh, linkCh, slog.New(slog.DiscardHandler))
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("watchLoop did not return after the subscription closed")
+		return nil
+	}
+}
+
+// TestWatchLoopReturnsWhenLinkSubscriptionCloses pins the failure path of the
+// link subscription: netlink closes the channel when its reader goroutine dies
+// (ENOBUFS and friends), and the zero LinkUpdate that a plain receive yields
+// has a nil Link, so Attrs() would panic. The watcher must report the loss.
+func TestWatchLoopReturnsWhenLinkSubscriptionCloses(t *testing.T) {
+	linkCh := make(chan netlink.LinkUpdate)
+	close(linkCh)
+	if err := watchLoopError(t, nil, linkCh); err == nil {
+		t.Fatal("watchLoop returned nil, want an error naming the closed link subscription")
+	}
+}
+
+// TestWatchLoopReturnsWhenAddrSubscriptionCloses is the same guarantee for the
+// address subscription, where a plain receive spins on the closed channel at
+// 100% CPU with the watcher already dead.
+func TestWatchLoopReturnsWhenAddrSubscriptionCloses(t *testing.T) {
+	addrCh := make(chan netlink.AddrUpdate)
+	close(addrCh)
+	if err := watchLoopError(t, addrCh, nil); err == nil {
+		t.Fatal("watchLoop returned nil, want an error naming the closed address subscription")
 	}
 }
