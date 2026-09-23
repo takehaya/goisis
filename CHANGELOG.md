@@ -3,6 +3,18 @@
 ## [0.3.0](https://github.com/takehaya/goisis/compare/v0.2.0...v0.3.0) (2026-09-22)
 
 
+### Compatibility notes for Go embedders
+
+* `fib.SIDBehavior` values were renumbered when `BehaviorEndX` was inserted:
+  `BehaviorEndDT4`, `BehaviorEndDT6` and `BehaviorEndDT46` each shifted by one.
+  The named constants are the contract; anything that persisted or logged the
+  numeric value must be re-read against this release.
+* The `server.Metrics` interface gained six methods (`PDURx`, `PDUDrop`,
+  `AdjacencyCount`, `RouteCount`, `FIBError`, `EventQueueDepth`). Embed
+  `server.NoopMetrics` in a custom implementation so later additions stay
+  source-compatible.
+
+
 ### Features
 
 * **api:** add, delete prefixes, set overload and clear adjacencies at runtime ([dc2600f](https://github.com/takehaya/goisis/commit/dc2600f19550ec9298e2c79d886a6cb6168f6b99))
