@@ -84,7 +84,9 @@ message Adjacency {
   uint32 priority = 6;
   uint32 holding_time = 7;
   // hostname is the neighbor's dynamic hostname (TLV 137, RFC 5301), empty
-  // until its LSP arrives or when it advertises no name.
+  // until its LSP arrives or when it advertises no name. ListAdjacencies and
+  // the initial snapshot of a WatchEvent stream resolve it; later streamed
+  // events leave it empty.
   string hostname = 8;
 }
 
