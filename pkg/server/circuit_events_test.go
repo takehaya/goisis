@@ -247,3 +247,83 @@ func TestCircuitConnectedPrefixes(t *testing.T) {
 		t.Errorf("%s is not marked connected", subnet)
 	}
 }
+
+// TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet: the daemon's
+// watcher deliberately does not debounce — it re-reads the interface and pushes
+// on every netlink message, relying on this call to be a no-op when nothing
+// changed. Two addresses in one subnet (a SLAAC and a privacy address in one
+// /64 is the everyday case) yield the same connected prefix twice, and the
+// kernel may hand the addresses back in another order; neither is a change, so
+// neither may cost hellos, a re-origination and an SPF run.
+//
+// One server, no peer: a converging adjacency recomputes on its own schedule,
+// which would drown the runs under test.
+func TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet(t *testing.T) {
+	subnet := netip.MustParsePrefix("2001:db8::/64")
+	stable := netip.MustParseAddr("2001:db8::1")
+	privacy := netip.MustParseAddr("2001:db8::dead")
+
+	spf := &spfCounter{}
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
+			Level2: true, Padding: ptrFalse(),
+			IPv6Addrs:         []netip.Addr{stable, privacy},
+			ConnectedPrefixes: []netip.Prefix{subnet, subnet},
+		}),
+		WithMetrics(spf),
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+	if err := s.mgmtOperation(ctx, func() error { return nil }); err != nil {
+		t.Fatalf("waiting for the loop to start: %v", err)
+	}
+	time.Sleep(2 * spfHold) // let startup origination's own recompute drain
+	before := spf.count()
+
+	for _, addrs := range [][]netip.Addr{
+		{stable, privacy}, // the same read again
+		{privacy, stable}, // the same addresses, the other order
+	} {
+		if err := s.SetCircuitAddresses(ctx, "c", nil, addrs, []netip.Prefix{subnet, subnet}); err != nil {
+			t.Fatalf("SetCircuitAddresses: %v", err)
+		}
+	}
+	if got := circuitIPv6Addrs(t, s, "c"); !slices.Equal(got, []netip.Addr{stable, privacy}) {
+		t.Errorf("stored addresses = %v, want them canonical so a reordered read compares equal", got)
+	}
+	// A change would mark SPF dirty, which the back-off runs within one hold.
+	time.Sleep(2 * spfHold)
+	if got := spf.count() - before; got != 0 {
+		t.Errorf("re-pushing the same addresses ran %d SPF computations, want 0", got)
+	}
+
+	// Control: a real change still does the work, so the check above cannot
+	// pass by making the call inert.
+	if err := s.SetCircuitAddresses(ctx, "c", nil, []netip.Addr{stable}, []netip.Prefix{subnet}); err != nil {
+		t.Fatalf("SetCircuitAddresses: %v", err)
+	}
+	time.Sleep(2 * spfHold)
+	if got := spf.count() - before; got == 0 {
+		t.Error("dropping an address ran no SPF computation: the no-op check is swallowing real changes")
+	}
+}
+
+// circuitIPv6Addrs reads a circuit's stored IPv6 addresses on the Serve
+// goroutine, which owns them.
+func circuitIPv6Addrs(t *testing.T, s *IsisServer, name string) []netip.Addr {
+	t.Helper()
+	var out []netip.Addr
+	if err := s.mgmtOperation(context.Background(), func() error {
+		if c := s.circuitNamed(name); c != nil {
+			out = slices.Clone(c.cfg.IPv6Addrs)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read circuit addresses: %v", err)
+	}
+	return out
+}

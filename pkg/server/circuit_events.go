@@ -25,7 +25,13 @@ func (s *IsisServer) SetCircuitAddresses(ctx context.Context, name string, v4, v
 		if c == nil {
 			return fmt.Errorf("goisis: unknown circuit %q", name)
 		}
-		masked := maskedSet(connected)
+		// Compare as sets, not as slices: the kernel is free to hand the same
+		// addresses back in another order, and an interface carrying two
+		// addresses in one subnet (a SLAAC and a privacy address in one /64 is
+		// the everyday case) yields the same prefix twice where the stored
+		// list holds it once. Either made the no-op check fail forever, so
+		// every netlink message re-sent hellos and re-originated.
+		v4, v6, masked := sortedSet(v4), sortedSet(v6), maskedSet(connected)
 		if slices.Equal(c.cfg.IPv4Addrs, v4) && slices.Equal(c.cfg.IPv6Addrs, v6) &&
 			slices.Equal(s.circuitPrefixes[name], masked) {
 			return nil
@@ -80,6 +86,14 @@ func (s *IsisServer) circuitNamed(name string) *circuit {
 	return nil
 }
 
+// sortedSet returns addresses in a canonical order without repeats, so two
+// reads of the same interface compare equal however the kernel ordered them.
+func sortedSet(addrs []netip.Addr) []netip.Addr {
+	out := slices.Clone(addrs)
+	slices.SortFunc(out, func(a, b netip.Addr) int { return a.Compare(b) })
+	return slices.Compact(out)
+}
+
 // maskedSet returns prefixes in masked form — the key the RIB, the FIB and the
 // sweep agree on — keeping the given order and dropping repeats (the same
 // subnet listed twice on one circuit).
@@ -90,6 +104,7 @@ func maskedSet(prefixes []netip.Prefix) []netip.Prefix {
 			out = append(out, p)
 		}
 	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int { return a.Masked().Addr().Compare(b.Masked().Addr()) })
 	return out
 }
 
