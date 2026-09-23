@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/binary"
+	"math"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -16,6 +17,21 @@ const (
 	refreshSeconds = 900  // maximumLSPGenerationInterval
 	zeroAgeSeconds = 60   // ZeroAgeLifetime: hold a purge this long
 )
+
+// maxLSPSeq is the highest sequence number an LSP can carry. Reaching it
+// exhausts the ID's sequence number space (ISO 10589 7.3.16.1); see exhaustSeq.
+const maxLSPSeq = uint32(math.MaxUint32)
+
+// seqWrapHold is how long an exhausted LSP ID stays un-originated before it
+// restarts at sequence number 1: ZeroAgeLifetime, after which every node has
+// dropped the purge, plus a margin for the purge to reach them.
+const seqWrapHold = (zeroAgeSeconds + 5) * time.Second
+
+// lspKey identifies one LSP across the per-level databases.
+type lspKey struct {
+	level packet.Level
+	id    packet.LSPID
+}
 
 // lspEntry is one LSP in the database, owned by the Serve loop.
 type lspEntry struct {
@@ -67,11 +83,12 @@ func (db *lsdb) get(id packet.LSPID) *lspEntry { return db.entries[id] }
 // (ISO 10589 7.3.16.2): higher sequence number wins; on a tie a purge
 // (remaining lifetime 0) supersedes a live copy.
 //
-// Sequence numbers are assumed monotonic. The 7.3.16.1 exhaustion procedure
-// (purge, then wait MaxAge before re-originating at 1) is deliberately not
-// implemented: at the 900s refresh rate, exhausting 2^32 increments takes
-// ~120k years. Consequently a peer that crash-restarts at seq 1 is ignored
-// until its stale LSP ages out (ties into the deferred RFC 5306).
+// Sequence numbers are assumed monotonic. Natural refreshes never wrap — at
+// the 900s refresh rate, exhausting 2^32 increments takes ~120k years — but a
+// single hostile LSP can jump one of ours to maxLSPSeq, so exhaustion is
+// handled by the 7.3.16.1 procedure in exhaustSeq rather than ignored.
+// Consequently a peer that crash-restarts at seq 1 is ignored until its stale
+// LSP ages out (ties into the deferred RFC 5306).
 func newer(candSeq uint32, candRemaining uint16, ex *lspEntry, now time.Time) bool {
 	if ex == nil {
 		return true
