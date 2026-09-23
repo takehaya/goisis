@@ -100,9 +100,12 @@ func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHe
 	for _, adj := range c.adjs[level] {
 		snpas = append(snpas, adj.snpa)
 	}
-	if len(snpas) > 0 {
-		tlvs = append(tlvs, &packet.ISNeighborsTLV{Neighbors: snpas})
-	}
+	// Split across several TLVs: one holds 42 SNPAs before its value passes
+	// 255 octets, and a hello that fails to serialize is never sent at all,
+	// silencing the circuit. ISO 10589 8.4.5 permits repeated TLV 6.
+	tlvs = append(tlvs, tlvChunks(snpas, func(chunk []packet.SNPA) packet.TLV {
+		return &packet.ISNeighborsTLV{Neighbors: chunk}
+	})...)
 	tlvs = append(tlvs, addrTLVs(c)...)
 
 	h := &packet.LANHello{
