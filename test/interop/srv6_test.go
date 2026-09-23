@@ -96,8 +96,8 @@ router isis 1
 	run(t, "docker", "exec", "-d", "gi", "sh", "-c", "/usr/local/bin/goisisd -f /etc/goisis.yaml > /var/log/goisisd.log 2>&1")
 
 	// goisis instantiates its own End SID (the locator base) as a seg6local
-	// route on the loopback — only checkable where the kernel supports
-	// seg6local encapsulation.
+	// route on the dummy device it makes for local SIDs — only checkable where
+	// the kernel supports seg6local encapsulation.
 	if seg6localSupported(t) {
 		waitUp(t, "goisis installs its End SID seg6local route", func() bool {
 			out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show").CombinedOutput()
@@ -112,20 +112,32 @@ router isis 1
 		t.Log("kernel lacks seg6local (CONFIG_IPV6_SEG6_LWTUNNEL); skipping End SID dataplane assertion")
 	}
 
-	// FRR lists only link-locals in its hellos (RFC 5308 3) and its global
-	// addresses in TLV 232 of its LSP, so goisis's End.X SID towards it must
-	// come out with the on-link global 2001:db8::2 as its next hop — a
-	// link-local one would black-hole every transit packet.
+	// No End.X SID towards FRR. An End.X next hop has to be a global address
+	// on the circuit's own subnet, because Linux resolves a link-local one
+	// against the ingress interface and drops every transit packet. FRR
+	// publishes none we can use: its hellos carry link-locals (RFC 5308 3) and
+	// its LSP carries no IPv6 Interface Address TLV at all (TLV 232 is absent
+	// from every captured FRR LSP in pkg/packet/testdata). Advertising the SID
+	// anyway would tell the area to steer traffic into a hole, so goisis
+	// withholds it — see the End.X limitation in docs/design.md. This asserts
+	// that deliberate gap, so the day FRR starts publishing one, it fails and
+	// the limitation gets revisited.
 	if seg6localSupported(t) {
-		waitUp(t, "goisis programs an End.X SID via FRR's global on-link address", func() bool {
+		endX := func() string {
 			out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show").CombinedOutput()
 			for _, line := range strings.Split(string(out), "\n") {
-				if strings.Contains(line, "End.X") && strings.Contains(line, "nh6 2001:db8::2") {
-					return true
+				if strings.Contains(line, "End.X") {
+					return line
 				}
 			}
-			return false
-		})
+			return ""
+		}
+		// The End SID above already proves the locator converged and the FIB is
+		// being programmed, so anything End.X would be there by now.
+		if line := endX(); line != "" {
+			t.Errorf("goisis programmed an End.X SID towards FRR: %q\n"+
+				"FRR advertises no on-link global address, so this SID cannot forward transit traffic", line)
+		}
 	} else {
 		t.Log("kernel lacks seg6local (CONFIG_IPV6_SEG6_LWTUNNEL); skipping End.X SID dataplane assertion")
 	}

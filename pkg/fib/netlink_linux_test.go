@@ -245,14 +245,10 @@ func requireSeg6Local(t *testing.T, f *Netlink) {
 }
 
 // TestNetlinkLocalSIDEndAndEndX: an End SID becomes a seg6local route on the
-// loopback and an End.X SID a seg6local End.X route carrying the next hop as
-// NH6 and the circuit as its device; removing them leaves nothing behind.
-//
-// Only the End.X route's encapsulation is checked attribute by attribute: a
-// route whose device is the loopback loses its lwtunnel state on this kernel
-// (6.12 reports no RTA_ENCAP for it, and a packet steered at such a SID is
-// dropped), which is a defect in localSIDRoute's device choice for End rather
-// than an expectation worth freezing here.
+// SRv6 dummy device the FIB creates for it and an End.X SID a seg6local End.X
+// route carrying the next hop as NH6 and the circuit as its device. Both read
+// back with their encapsulation — the loopback would lose it (see
+// srv6DummyDev) — and removing them leaves neither a route nor the device.
 func TestNetlinkLocalSIDEndAndEndX(t *testing.T) {
 	withNetns(t, func(t *testing.T) {
 		f := NewNetlink(unix.RT_TABLE_MAIN)
@@ -268,9 +264,9 @@ func TestNetlinkLocalSIDEndAndEndX(t *testing.T) {
 			t.Fatalf("add End.X SID: %v", err)
 		}
 
-		lo, err := netlink.LinkByName("lo")
+		srv6, err := netlink.LinkByName(srv6DummyDev)
 		if err != nil {
-			t.Fatalf("lo by name: %v", err)
+			t.Fatalf("%s by name: %v", srv6DummyDev, err)
 		}
 		dum, err := netlink.LinkByName("dum0")
 		if err != nil {
@@ -283,10 +279,21 @@ func TestNetlinkLocalSIDEndAndEndX(t *testing.T) {
 		if len(routes) != 2 {
 			t.Fatalf("installed %d proto-isis routes, want 2: %+v", len(routes), routes)
 		}
-		if r, ok := routes[end.String()+"/128"]; !ok || r.LinkIndex != lo.Attrs().Index {
-			t.Errorf("End SID route = %+v (present %v), want one on lo (index %d)", r, ok, lo.Attrs().Index)
+		r, ok := routes[end.String()+"/128"]
+		if !ok {
+			t.Fatalf("no route for End SID %s", end)
 		}
-		r, ok := routes[endX.String()+"/128"]
+		if r.LinkIndex != srv6.Attrs().Index {
+			t.Errorf("End SID route device index = %d, want %d (%s)", r.LinkIndex, srv6.Attrs().Index, srv6DummyDev)
+		}
+		endEnc, ok := r.Encap.(*netlink.SEG6LocalEncap)
+		if !ok {
+			t.Fatalf("End SID route encap = %T, want a seg6local encap", r.Encap)
+		}
+		if endEnc.Action != nl.SEG6_LOCAL_ACTION_END {
+			t.Errorf("End SID route action = %d, want %d", endEnc.Action, nl.SEG6_LOCAL_ACTION_END)
+		}
+		r, ok = routes[endX.String()+"/128"]
 		if !ok {
 			t.Fatalf("no route for End.X SID %s", endX)
 		}
@@ -312,19 +319,61 @@ func TestNetlinkLocalSIDEndAndEndX(t *testing.T) {
 		if routes := protoISISRoutes(t, netlink.FAMILY_V6); len(routes) != 0 {
 			t.Errorf("local SID routes survived removal: %+v", routes)
 		}
+		if _, err := netlink.LinkByName(srv6DummyDev); err == nil {
+			t.Errorf("%s survived the removal of the last local SID", srv6DummyDev)
+		}
 	})
 }
 
-// The three-namespace topology of the End.X forwarding test:
+// TestNetlinkSweepTakesTheSRv6DeviceWithTheLastSweptSID: the startup sweep
+// decides what a previous run left behind. A restart that still advertises the
+// locator keeps the SID route and the device it sits on; one that no longer
+// advertises it must be left with neither, or the device outlives every SID on
+// it.
+func TestNetlinkSweepTakesTheSRv6DeviceWithTheLastSweptSID(t *testing.T) {
+	withNetns(t, func(t *testing.T) {
+		f := NewNetlink(unix.RT_TABLE_MAIN)
+		requireSeg6Local(t, f)
+		sid := netip.MustParseAddr("fc00:0:1::")
+		if err := f.AddLocalSID(LocalSID{SID: sid, Behavior: BehaviorEnd}); err != nil {
+			t.Fatalf("add End SID: %v", err)
+		}
+
+		if err := f.Sweep(func(p netip.Prefix) bool { return p == netip.PrefixFrom(sid, 128) }); err != nil {
+			t.Fatalf("sweep keeping the SID: %v", err)
+		}
+		if routes := protoISISRoutes(t, netlink.FAMILY_V6); len(routes) != 1 {
+			t.Fatalf("sweep dropped the SID it was told to keep: %+v", routes)
+		}
+		if _, err := netlink.LinkByName(srv6DummyDev); err != nil {
+			t.Fatalf("sweep removed %s while a SID still sits on it: %v", srv6DummyDev, err)
+		}
+
+		if err := f.Sweep(func(netip.Prefix) bool { return false }); err != nil {
+			t.Fatalf("sweep keeping nothing: %v", err)
+		}
+		if routes := protoISISRoutes(t, netlink.FAMILY_V6); len(routes) != 0 {
+			t.Errorf("SID route survived the sweep: %+v", routes)
+		}
+		if _, err := netlink.LinkByName(srv6DummyDev); err == nil {
+			t.Errorf("%s survived the sweep of the last SID on it", srv6DummyDev)
+		}
+	})
+}
+
+// The three-namespace topology both SRv6 forwarding tests run on:
 //
 //	U --(uA|aU)-- A --(aN|nA)-- N
 //
-// A holds an End.X SID whose link is aN, and the traffic reaches A on aU: the
-// transit case, as opposed to the hairpin a link-local next hop happens to
-// survive.
-const endXProbePort = 9909
+// A is the SRv6 endpoint. Traffic reaches it on aU and has to leave on aN —
+// the transit case, as opposed to the hairpin a link-local next hop happens to
+// survive — steered at a SID of A's by an SRH that U pushes.
+const (
+	srv6ProbePort = 9909
+	srv6ProbeSID  = "fc00:a:1::"
+)
 
-var endXProbePayload = []byte("goisis-r09-end-x-probe")
+var srv6ProbePayload = []byte("goisis-srv6-transit-probe")
 
 func mustNetns(t *testing.T) netns.NsHandle {
 	t.Helper()
@@ -422,36 +471,53 @@ func waitResolved(t *testing.T, dev, addr string, poke func()) {
 	t.Fatalf("neighbor %s on %s never resolved", addr, dev)
 }
 
-// TestNetlinkEndXForwardsFromAnotherIngressInterface: an End.X SID has to
-// forward a packet that arrived on some other interface out of its own link.
-// Linux resolves the SID's next hop with seg6_lookup_any_nexthop, which pins a
-// link-local next hop to the ingress interface, so only a global next hop on
-// the adjacency's subnet forwards anything — the control case here, and the
-// reason server.endXNexthop never advertises a link-local one.
-//
-// Everything runs on one locked thread: the namespace is a thread attribute,
-// and a subtest or goroutine would run somewhere else.
-func TestNetlinkEndXForwardsFromAnotherIngressInterface(t *testing.T) {
+// lockNetns pins the test to one OS thread — a network namespace is a thread
+// attribute, so a subtest or goroutine would run somewhere else — and returns
+// the teardown that puts the thread back in the caller's namespace. It has to
+// be deferred rather than registered with t.Cleanup: cleanups run after the
+// test's own defers, by which point the thread would already be unlocked.
+func lockNetns(t *testing.T) func() {
+	t.Helper()
 	if os.Geteuid() != 0 {
 		t.Skip("netlink FIB test needs root; run: go test -exec sudo ./pkg/fib")
 	}
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	orig, err := netns.Get()
 	if err != nil {
+		runtime.UnlockOSThread()
 		t.Fatalf("get netns: %v", err)
 	}
-	defer func() { _ = netns.Set(orig); _ = orig.Close() }()
+	return func() {
+		_ = netns.Set(orig)
+		_ = orig.Close()
+		runtime.UnlockOSThread()
+	}
+}
 
-	nsU, nsN, nsA := mustNetns(t), mustNetns(t), mustNetns(t)
+// srv6Transit is the built topology: a receiver in N, a sender in U whose
+// packets carry an SRH ending at srv6ProbeSID, and the namespaces themselves.
+type srv6Transit struct {
+	nsU, nsN, nsA netns.NsHandle
+	far           net.PacketConn // bound in N to the global address probes end at
+	conn          net.Conn       // bound in U, every write steered through the SID
+}
+
+// newSRv6Transit builds the topology above and leaves the calling thread in A,
+// with the neighbor towards N already resolved so that a later measurement is
+// not credited packets the kernel queued during discovery. It installs no SID:
+// that is what each test puts in place.
+func newSRv6Transit(t *testing.T) *srv6Transit {
+	t.Helper()
+	tr := &srv6Transit{}
+	tr.nsU, tr.nsN, tr.nsA = mustNetns(t), mustNetns(t), mustNetns(t)
 
 	// Both veth pairs are made in A, which then hands one end of each away.
 	for _, v := range []struct {
 		local, peer string
 		ns          netns.NsHandle
 	}{
-		{"aU", "uA", nsU},
-		{"aN", "nA", nsN},
+		{"aU", "uA", tr.nsU},
+		{"aN", "nA", tr.nsN},
 	} {
 		la := netlink.NewLinkAttrs()
 		la.Name = v.local
@@ -471,70 +537,152 @@ func TestNetlinkEndXForwardsFromAnotherIngressInterface(t *testing.T) {
 	upAddr(t, "aN", "2001:db8:2::1/64")
 	sysctlOn(t, "net/ipv6/conf/all/forwarding", "net/ipv6/conf/all/seg6_enabled",
 		"net/ipv6/conf/aU/seg6_enabled", "net/ipv6/conf/aN/seg6_enabled")
-	f := NewNetlink(unix.RT_TABLE_MAIN)
-	requireSeg6Local(t, f)
 
 	// N answers on both a global address and the link-local an IS-IS hello
-	// would carry, so the two next hops differ only in which one is used.
-	enterNetns(t, nsN)
+	// would carry, so an End.X next hop can be either of the two.
+	enterNetns(t, tr.nsN)
 	upAddr(t, "lo")
 	upAddr(t, "nA", "2001:db8:2::2/64", "fe80::2/64")
 	sysctlOn(t, "net/ipv6/conf/all/seg6_enabled", "net/ipv6/conf/nA/seg6_enabled")
-	far, err := net.ListenPacket("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", endXProbePort))
+	far, err := net.ListenPacket("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", srv6ProbePort))
 	if err != nil {
 		t.Fatalf("listen at the far end: %v", err)
 	}
-	defer far.Close() //nolint:errcheck // test teardown
+	t.Cleanup(func() { _ = far.Close() })
+	tr.far = far
 
 	// Resolve A's neighbor towards N before measuring anything: while NDP is
 	// pending the kernel queues the packets it cannot send yet and releases
 	// them once it completes, which would credit them to whichever case is
 	// running by then.
-	enterNetns(t, nsA)
-	warm, err := net.Dial("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", endXProbePort))
+	enterNetns(t, tr.nsA)
+	warm, err := net.Dial("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", srv6ProbePort))
 	if err != nil {
 		t.Fatalf("dial the far end from the transit node: %v", err)
 	}
-	defer warm.Close() //nolint:errcheck // test teardown
-	waitResolved(t, "aN", "2001:db8:2::2", func() { _, _ = warm.Write(endXProbePayload) })
+	t.Cleanup(func() { _ = warm.Close() })
+	waitResolved(t, "aN", "2001:db8:2::2", func() { _, _ = warm.Write(srv6ProbePayload) })
 
-	enterNetns(t, nsU)
+	enterNetns(t, tr.nsU)
 	upAddr(t, "lo")
 	upAddr(t, "uA", "2001:db8:1::1/64")
-	addRoute6(t, "uA", "fc00:a:1::/128", "2001:db8:1::2", nil)
+	addRoute6(t, "uA", srv6ProbeSID+"/128", "2001:db8:1::2", nil)
 	addRoute6(t, "uA", "2001:db8:2::/64", "2001:db8:1::2", nil)
-	// Steer traffic for N through A's End.X SID. The SRH segment list is
-	// stored last hop first, so fc00:a:1:: is the destination A sees.
+	// Steer traffic for N through A's SID. The SRH segment list is stored last
+	// hop first, so srv6ProbeSID is the destination A sees.
 	addRoute6(t, "uA", "2001:db8:2::2/128", "2001:db8:1::2", &netlink.SEG6Encap{
 		Mode:     nl.SEG6_IPTUN_MODE_ENCAP,
-		Segments: []net.IP{net.ParseIP("2001:db8:2::2"), net.ParseIP("fc00:a:1::")},
+		Segments: []net.IP{net.ParseIP("2001:db8:2::2"), net.ParseIP(srv6ProbeSID)},
 	})
-	conn, err := net.Dial("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", endXProbePort))
+	conn, err := net.Dial("udp6", fmt.Sprintf("[2001:db8:2::2]:%d", srv6ProbePort))
 	if err != nil {
 		t.Fatalf("dial the far end: %v", err)
 	}
-	defer conn.Close() //nolint:errcheck // test teardown
+	t.Cleanup(func() { _ = conn.Close() })
+	tr.conn = conn
 
-	// received drains the far end for d and returns how many probes arrived.
-	received := func(d time.Duration) int {
-		buf := make([]byte, 128)
-		n := 0
-		if err := far.SetReadDeadline(time.Now().Add(d)); err != nil {
-			t.Fatalf("set read deadline: %v", err)
+	enterNetns(t, tr.nsA)
+	return tr
+}
+
+// probe sends n packets from U and returns how many reached N. The calling
+// thread is left in A.
+func (tr *srv6Transit) probe(t *testing.T, n int) int {
+	t.Helper()
+	enterNetns(t, tr.nsU)
+	tr.drain(t, 200*time.Millisecond) // whatever the previous case left
+	for range n {
+		// Loss is what the count measures, so a write error is not itself a
+		// failure; the first packet or two pay for neighbor discovery on the
+		// egress link.
+		_, _ = tr.conn.Write(srv6ProbePayload)
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := tr.drain(t, time.Second)
+	enterNetns(t, tr.nsA)
+	return got
+}
+
+// drain reads the far end for d and returns how many probes arrived.
+func (tr *srv6Transit) drain(t *testing.T, d time.Duration) int {
+	t.Helper()
+	buf := make([]byte, 128)
+	n := 0
+	if err := tr.far.SetReadDeadline(time.Now().Add(d)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	for {
+		c, _, err := tr.far.ReadFrom(buf)
+		if err != nil {
+			return n // deadline
 		}
-		for {
-			c, _, err := far.ReadFrom(buf)
-			if err != nil {
-				return n // deadline
-			}
-			if bytes.Equal(buf[:c], endXProbePayload) {
-				n++
-			}
+		if bytes.Equal(buf[:c], srv6ProbePayload) {
+			n++
 		}
 	}
+}
 
-	const probes = 10
-	sid := LocalSID{SID: netip.MustParseAddr("fc00:a:1::"), Behavior: BehaviorEndX, Interface: "aN"}
+const srv6Probes = 10
+
+// TestNetlinkEndSIDForwardsTransitTraffic: an End SID installed by the FIB
+// forwards a packet steered at it, and reads back carrying its seg6local
+// encapsulation. Both fail if the SID is installed on the loopback — Linux
+// 6.12 drops the lwtunnel state of such a route, leaving a plain route to the
+// SID that swallows every packet (see srv6DummyDev) — which is why this is a
+// traffic test and not another attribute comparison.
+func TestNetlinkEndSIDForwardsTransitTraffic(t *testing.T) {
+	defer lockNetns(t)()
+	tr := newSRv6Transit(t)
+	f := NewNetlink(unix.RT_TABLE_MAIN)
+	requireSeg6Local(t, f)
+
+	sid := netip.MustParseAddr(srv6ProbeSID)
+	if err := f.AddLocalSID(LocalSID{SID: sid, Behavior: BehaviorEnd}); err != nil {
+		t.Fatalf("install End SID: %v", err)
+	}
+	routes := protoISISRoutes(t, netlink.FAMILY_V6)
+	if len(routes) != 1 {
+		t.Fatalf("installed %d proto-isis routes, want 1: %+v", len(routes), routes)
+	}
+	// Not fatal: the traffic below is the other half of the guarantee, and a
+	// route that lost its encapsulation should be reported as both.
+	switch enc, ok := routes[0].Encap.(*netlink.SEG6LocalEncap); {
+	case !ok:
+		t.Errorf("End SID route encap = %T, want a seg6local encap", routes[0].Encap)
+	case enc.Action != nl.SEG6_LOCAL_ACTION_END:
+		t.Errorf("End SID route action = %d, want %d", enc.Action, nl.SEG6_LOCAL_ACTION_END)
+	}
+	if got := tr.probe(t, srv6Probes); got == 0 {
+		t.Errorf("End SID forwarded none of %d packets", srv6Probes)
+	}
+
+	if err := f.RemoveLocalSID(sid); err != nil {
+		t.Fatalf("remove End SID: %v", err)
+	}
+	if routes := protoISISRoutes(t, netlink.FAMILY_V6); len(routes) != 0 {
+		t.Errorf("End SID route survived removal: %+v", routes)
+	}
+	if _, err := netlink.LinkByName(srv6DummyDev); err == nil {
+		t.Errorf("%s survived the removal of the last local SID", srv6DummyDev)
+	}
+	if got := tr.probe(t, srv6Probes); got != 0 {
+		t.Errorf("removed End SID still forwarded %d packets", got)
+	}
+}
+
+// TestNetlinkEndXForwardsFromAnotherIngressInterface: an End.X SID has to
+// forward a packet that arrived on some other interface out of its own link.
+// Linux resolves the SID's next hop with seg6_lookup_any_nexthop, which pins a
+// link-local next hop to the ingress interface, so only a global next hop on
+// the adjacency's subnet forwards anything — the control case here, and the
+// reason server.endXNexthop never advertises a link-local one.
+func TestNetlinkEndXForwardsFromAnotherIngressInterface(t *testing.T) {
+	defer lockNetns(t)()
+	tr := newSRv6Transit(t)
+	f := NewNetlink(unix.RT_TABLE_MAIN)
+	requireSeg6Local(t, f)
+
+	sid := LocalSID{SID: netip.MustParseAddr(srv6ProbeSID), Behavior: BehaviorEndX, Interface: "aN"}
 	for _, tc := range []struct {
 		what    string
 		nexthop string
@@ -543,23 +691,13 @@ func TestNetlinkEndXForwardsFromAnotherIngressInterface(t *testing.T) {
 		{what: "a global next hop on the adjacency's subnet", nexthop: "2001:db8:2::2", forward: true},
 		{what: "the neighbor's link-local next hop", nexthop: "fe80::2"},
 	} {
-		enterNetns(t, nsA)
 		sid.Nexthop = netip.MustParseAddr(tc.nexthop)
 		if err := f.AddLocalSID(sid); err != nil {
 			t.Fatalf("install End.X SID with %s: %v", tc.what, err)
 		}
-		enterNetns(t, nsU)
-		received(200 * time.Millisecond) // whatever the previous case left
-		for range probes {
-			// Loss is what the counts below measure, so a write error is not
-			// itself a failure; the first packet or two pay for neighbor
-			// discovery on the egress link.
-			_, _ = conn.Write(endXProbePayload)
-			time.Sleep(50 * time.Millisecond)
-		}
-		switch got := received(time.Second); {
+		switch got := tr.probe(t, srv6Probes); {
 		case tc.forward && got == 0:
-			t.Errorf("End.X with %s forwarded none of %d packets", tc.what, probes)
+			t.Errorf("End.X with %s forwarded none of %d packets", tc.what, srv6Probes)
 		case !tc.forward && got != 0:
 			t.Errorf("End.X with %s forwarded %d packets, want none", tc.what, got)
 		}

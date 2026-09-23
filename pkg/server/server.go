@@ -55,6 +55,7 @@ type IsisServer struct {
 	endXSIDs      map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 	seqWrapUntil  map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
 	endXNoNexthop map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
+	endSIDFailed  map[netip.Addr]bool     // End SIDs whose failed install was already logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
@@ -120,6 +121,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		endXSIDs:          map[endXKey]endXSID{},
 		seqWrapUntil:      map[lspKey]time.Time{},
 		endXNoNexthop:     map[endXAdjKey]bool{},
+		endSIDFailed:      map[netip.Addr]bool{},
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,
@@ -345,9 +347,20 @@ func (s *IsisServer) localSIDs() []netip.Addr {
 func (s *IsisServer) installLocalSIDs() {
 	for _, lc := range s.locators {
 		sid := lc.endSID()
-		if err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd}); err != nil {
+		err := s.fib.AddLocalSID(fib.LocalSID{SID: sid, Behavior: fib.BehaviorEnd})
+		if err == nil {
+			delete(s.endSIDFailed, sid)
+			continue
+		}
+		s.metrics.FIBError(fibOpAddSID)
+		// A failure that persists — no seg6local support in the kernel, no
+		// dummy device to install the SID on — would otherwise be logged once
+		// per housekeeping tick, so the log is edge-triggered and the counter
+		// carries the rate. The daemon keeps running either way: an End SID
+		// that cannot be programmed does not stop us from routing.
+		if !s.endSIDFailed[sid] {
+			s.endSIDFailed[sid] = true
 			s.logger.Error("install local End SID", "sid", sid, "error", err)
-			s.metrics.FIBError(fibOpAddSID)
 		}
 	}
 	s.installEndXSIDs()

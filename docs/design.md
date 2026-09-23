@@ -251,6 +251,19 @@ Two invariants matter beyond the codec:
   administrative distance), so they never share the kernel's
   `[prefix, tos, priority]` key with a connected route and cannot replace one.
   On startup the FIB is swept of routes a previous incarnation left behind.
+- **Local SIDs.** End and End.DT SIDs are `seg6local` routes on `isis-srv6`, a
+  dummy device the netlink FIB creates on demand and deletes again with the
+  last SID on it — the startup sweep prunes it too, so a run that no longer
+  advertises a locator leaves neither routes nor a device behind. The loopback
+  cannot carry them: Linux (6.12 observed) drops the lwtunnel state of a
+  `seg6local` route whose output device is `lo`, leaving a plain route to the
+  SID that reads back with no encapsulation and swallows every packet steered
+  at it. One shared device rather than one per locator — the device is only
+  somewhere to hang the route — under a fixed name, so a restart finds and
+  reuses the one it made. End.X SIDs are the exception and stay on the circuit
+  their adjacency is on. A device that cannot be created is logged once (the
+  install is retried every housekeeping tick) and counted in
+  `goisis_fib_errors_total{op="add_sid"}`; the daemon starts and routes anyway.
 - **Flex-Algo (RFC 9350).** Definition election follows priority / system-ID;
   participation prunes the topology per algorithm. Only the IGP metric is
   computed today; constraint sub-sub-TLVs are preserved on the wire for a
@@ -300,9 +313,10 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No RFC 8405 LONG_WAIT | SPF back-off is two-state (recompute immediately, then coalesce for 200 ms). The escalation to a long wait under sustained churn is deliberately omitted: a second threshold would only delay convergence further at MVP scale. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. Fine for MVP-scale areas. |
 | No RFC 7987 lifetime floor | Received-LSP aging follows the advertised remaining lifetime as-is. |
+| Local SIDs need a device of their own | End/End.DT SIDs go on the `isis-srv6` dummy device the netlink FIB creates, never the loopback — see **Local SIDs** above for the kernel behaviour that forces it. The device is shared by every locator and is removed with the last SID on it. |
 | End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.X/End.DT4/End.DT6 work. |
 | End.X SIDs are unprotected | One End.X SID per (locator, adjacency), advertised with flags and weight zero: no backup (B) flag, no SID sets (S), and no persistence across restarts (P), so a restart reallocates function values. TI-LFA, which is what the B flag would feed, is out of scope. |
-| End.X needs a global on-link neighbour address | An End.X SID is allocated, advertised and programmed only where the neighbour has a global IPv6 address inside one of the circuit's connected prefixes — taken from its hellos, or from TLV 232 of its fragment-0 LSP. Linux resolves an End.X next hop against the *ingress* interface, so a link-local next hop (all RFC 5308 gives) forwards only a hairpin and drops transit traffic. Against FRR, which advertises link-locals in hellos and globals in its LSP, an End.X SID appears wherever the link carries a global subnet. Between two `goisisd` nodes none appears at all: the daemon puts only link-locals in hellos (RFC 5308 3) and originates no TLV 232 of its own, so a goisis peer publishes no address to forward to. Where no address is known, nothing is allocated, advertised or programmed and the adjacency is warned about once. |
+| End.X needs a global on-link neighbour address | An End.X SID is allocated, advertised and programmed only where the neighbour has a global IPv6 address inside one of the circuit's connected prefixes — taken from its hellos, or from TLV 232 of its fragment-0 LSP. Linux resolves an End.X next hop against the *ingress* interface, so a link-local next hop (all RFC 5308 gives) forwards only a hairpin and drops transit traffic. No peer publishes one today: FRR advertises link-locals in its hellos and no IPv6 Interface Address TLV at all in its LSP (TLV 232 is absent from every captured FRR LSP under `pkg/packet/testdata`), so no End.X SID is advertised towards it. Between two `goisisd` nodes none appears either: the daemon puts only link-locals in hellos (RFC 5308 3) and originates no TLV 232 of its own, so a goisis peer publishes no address to forward to. Where no address is known, nothing is allocated, advertised or programmed and the adjacency is warned about once. |
 
 ## Testing strategy
 
