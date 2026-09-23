@@ -23,6 +23,19 @@ jobs:
         run: |
           docker pull quay.io/frrouting/frr:10.6.1
           docker pull alpine:3.22
+      - name: Build root-gated netlink and data-link tests
+        run: |
+          go test -c -race -o /tmp/fib.test ./pkg/fib
+          go test -c -race -o /tmp/datalink.test ./pkg/datalink
+      - name: Run root-gated netlink and data-link tests
+        # These skip without root, so no other job ever executes them: the FIB's
+        # seg6local programming and AF_PACKET transport are only covered here.
+        # Built as the runner user and only executed under sudo, like the
+        # interop binary below: running `go` itself as root leaves root-owned
+        # entries in the build cache that break every later step.
+        run: |
+          sudo /tmp/fib.test -test.v
+          sudo /tmp/datalink.test -test.v
       - name: Build interop tests
         run: go test -c -o /tmp/interop.test ./test/interop
       - name: Run interop (needs root for AF_PACKET + veth; PATH kept for `go`)

@@ -296,8 +296,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.lastHeard = time.Now()
 	adj.state = newState
 	adj.levels.add(level)
-	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
-	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
+	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 
 	if prev != newState {
@@ -316,6 +315,9 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	upChanged := (prev == AdjUp) != (newState == AdjUp)
 	if upChanged || (newState == AdjUp && electionChanged) {
 		s.electDIS(c, level)
+		s.requestLSPRegen()
+	}
+	if newState == AdjUp && addrsChanged {
 		s.requestLSPRegen()
 	}
 }
@@ -383,8 +385,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	adj.lastHeard = time.Now()
 	adj.levels = common
 	adj.state = newState
-	adj.neighborIPv4 = ipv4AddrsOf(h.TLVs)
-	adj.neighborIPv6 = ipv6AddrsOf(h.TLVs)
+	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 	if three != nil && three.HasLocal {
 		adj.neighborExtCircID = three.ExtLocalCircuitID
@@ -423,6 +424,9 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 				}
 			}
 		}
+	}
+	if newState == AdjUp && addrsChanged {
+		s.requestLSPRegen()
 	}
 }
 

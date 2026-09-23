@@ -72,9 +72,20 @@ Router Capability TLV(242)に SRv6 Capabilities sub-TLV を載せます。TLV 27
 ピア向けに IPv6 到達性(TLV 236)へもミラーされます。`fib: true` のとき End SID は
 `seg6local` End ルートとして設置されます。
 
-各隣接には locator ごとに End.X SID も割り当てます。値は locator の function 空間の 1 番から取り、
+隣接には locator ごとに End.X SID も割り当てます。値は locator の function 空間の 1 番から取り、
 隣接の IS reachability エントリに載せます(RFC 9352 §8)。`fib: true` なら各 End.X SID は
 その隣接向けの `seg6local` End.X 経路になります。設定項目はありません。
+
+ただし**隣接がその回線の connected subnet 内にグローバル IPv6 アドレスを持つこと**が条件です。
+アドレスは隣接の hello から取り、無ければ fragment 0 LSP の TLV 232 から取ります
+(FRR は hello に link-local しか載せません)。Linux の End.X は次ホップをパケットの入力
+インタフェース側で解決するため、link-local を次ホップにすると hairpin 以外は落ちます。
+該当アドレスが分からない間は割り当ても広報も FIB 投入もせず、その隣接について
+`no on-link global IPv6 address for neighbor` を 1 回だけ記録します。
+
+現状このアドレスを公開するのは相手側の実装次第です。FRR は LSP に載せますが、
+`goisisd` 自身は公開しません(hello は RFC 5308 3 どおり link-local のみ、LSP に
+TLV 232 を載せない)。そのため goisis 同士のリンクには End.X SID は付きません。
 
 Flexible Algorithm に紐づく locator はここではなく `flex-algo` 配下の `locator` で
 設定します(下記)。`srv6.locators` はアルゴリズム 0 の locator です。

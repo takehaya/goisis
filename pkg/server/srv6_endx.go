@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"cmp"
+	"maps"
 	"net/netip"
 	"slices"
 
@@ -24,7 +25,14 @@ type endXKey struct {
 type endXSID struct {
 	sid      netip.Addr
 	function uint32     // position in the locator's function space (0 is the End SID)
-	nexthop  netip.Addr // the neighbor's IPv6 address from its hellos
+	nexthop  netip.Addr // the neighbor's global on-link address (see endXNexthop)
+}
+
+// endXAdjKey names one adjacency, without the locator: the granularity at
+// which the "no usable next hop" warning is edge-triggered.
+type endXAdjKey struct {
+	circuit  string
+	neighbor packet.SystemID
 }
 
 // endXAdj pairs an adjacency with the circuit it is on.
@@ -75,6 +83,7 @@ func sortedSystemIDs[V any](m map[packet.SystemID]V) []packet.SystemID {
 // there — so the adjacency state machine needs no hook of its own.
 func (s *IsisServer) syncEndXSIDs() {
 	if len(s.locators) == 0 && len(s.endXSIDs) == 0 {
+		clear(s.endXNoNexthop) // nothing to warn about without a locator
 		return
 	}
 	type want struct {
@@ -84,16 +93,31 @@ func (s *IsisServer) syncEndXSIDs() {
 	}
 	wanted := make([]want, 0, len(s.endXSIDs))
 	live := make(map[endXKey]bool, len(s.endXSIDs))
-	for _, ea := range s.endXAdjs() {
-		// The FIB needs an IPv6 next hop to forward the SID to; pickGateway
-		// prefers the neighbor's link-local, as RFC 5308 next hops are.
-		nh := pickGateway(ea.adj.neighborIPv6, false, nil)
+	eas := s.endXAdjs()
+	adjs := make(map[endXAdjKey]bool, len(eas))
+	for _, ea := range eas {
+		ak := endXAdjKey{circuit: ea.circuit.cfg.Name, neighbor: ea.adj.systemID}
+		adjs[ak] = true
+		nh := s.endXNexthop(ea.circuit, ea.adj)
+		if !nh.IsValid() {
+			// Nothing to allocate, advertise or program: an End.X SID with no
+			// routable next hop is a black hole that pulls traffic in (see
+			// endXNexthop). Warn once, re-armed when the address appears.
+			if !s.endXNoNexthop[ak] {
+				s.endXNoNexthop[ak] = true
+				s.logger.Warn("no on-link global IPv6 address for neighbor; no End.X SID advertised",
+					"circuit", ak.circuit, "neighbor", ak.neighbor)
+			}
+			continue
+		}
+		delete(s.endXNoNexthop, ak)
 		for _, lc := range s.locators {
-			k := endXKey{locator: lc.Prefix.Masked(), circuit: ea.circuit.cfg.Name, neighbor: ea.adj.systemID}
+			k := endXKey{locator: lc.Prefix.Masked(), circuit: ak.circuit, neighbor: ak.neighbor}
 			live[k] = true
 			wanted = append(wanted, want{key: k, locator: lc, nexthop: nh})
 		}
 	}
+	maps.DeleteFunc(s.endXNoNexthop, func(k endXAdjKey, _ bool) bool { return !adjs[k] })
 	// Release first, so a function freed by an adjacency that just went down
 	// is available to one that just came up.
 	for k, e := range s.endXSIDs {
@@ -112,18 +136,79 @@ func (s *IsisServer) syncEndXSIDs() {
 				continue
 			}
 			s.logger.Info("allocate End.X SID", "sid", e.sid, "circuit", w.key.circuit, "neighbor", w.key.neighbor)
-			if !w.nexthop.IsValid() {
-				// Still advertised: the sub-TLV is the control-plane binding,
-				// and the neighbor may announce an address in a later hello.
-				// Only the dataplane entry waits for one.
-				s.logger.Debug("no IPv6 next hop for End.X SID; not programmed",
-					"sid", e.sid, "circuit", w.key.circuit, "neighbor", w.key.neighbor)
-			}
 		}
 		e.nexthop = w.nexthop
 		s.endXSIDs[w.key] = e
 	}
 	s.installEndXSIDs()
+}
+
+// endXNexthop returns the address an End.X SID towards this adjacency must
+// forward to: a global neighbor address that lies inside one of the circuit's
+// directly-connected IPv6 prefixes. An invalid Addr means there is none.
+//
+// Why not the link-local next hop RFC 5308 3 reserves for IS-IS, and that the
+// RIB uses: Linux resolves an End.X next hop with seg6_lookup_any_nexthop,
+// which sets flowi6_iif and, for a link-local destination, RT6_LOOKUP_F_IFACE
+// — so the lookup is confined to the interface the packet arrived on and the
+// seg6local route's own device plays no part. A link-local next hop therefore
+// only forwards a packet that entered on the egress link (a hairpin) and drops
+// every transit packet, which is the case the SID exists for. A global address
+// on the circuit's own subnet resolves through that connected route from any
+// ingress interface.
+//
+// Hellos come first: goisis lists every interface address in TLV 232. A peer
+// that sends only link-locals there (FRR does) is looked up in its fragment-0
+// LSP, whose TLV 232 carries the global ones.
+func (s *IsisServer) endXNexthop(c *circuit, adj *adjacency) netip.Addr {
+	if a := s.onLinkAddr(c, adj.neighborIPv6); a.IsValid() {
+		return a
+	}
+	for _, l := range adj.levels.levels() {
+		db := s.dbs[l]
+		if db == nil {
+			continue
+		}
+		e := db.get(lspID(adj.systemID, 0))
+		if e == nil || !e.purgedAt.IsZero() {
+			continue
+		}
+		for _, tlv := range e.lsp.TLVs {
+			t, ok := tlv.(*packet.IPv6InterfaceAddressesTLV)
+			if !ok {
+				continue
+			}
+			if a := s.onLinkAddr(c, t.Addresses); a.IsValid() {
+				return a
+			}
+		}
+	}
+	return netip.Addr{}
+}
+
+// onLinkAddr returns the first global IPv6 address in addrs that falls inside
+// one of the circuit's directly-connected prefixes, or an invalid Addr.
+func (s *IsisServer) onLinkAddr(c *circuit, addrs []netip.Addr) netip.Addr {
+	for _, a := range addrs {
+		if !a.Is6() || a.Is4In6() || !a.IsGlobalUnicast() {
+			continue
+		}
+		for _, p := range s.circuitPrefixes[c.cfg.Name] {
+			if p.Contains(a) {
+				return a
+			}
+		}
+		// A prefix from WithConnectedPrefix says a subnet is connected without
+		// saying on which circuit (unlike CircuitConfig.ConnectedPrefixes);
+		// accept it anywhere rather than withhold a SID the addressing
+		// supports.
+		for p := range s.optionConnected {
+			if p.Contains(a) {
+				return a
+			}
+		}
+	}
+	return netip.Addr{}
 }
 
 // allocEndXSID picks the smallest unused function value in a locator's
@@ -173,9 +258,6 @@ func locatorSID(loc netip.Prefix, fnBits int, fn uint32) netip.Addr {
 // was removed out-of-band is repaired without a restart.
 func (s *IsisServer) installEndXSIDs() {
 	for k, e := range s.endXSIDs {
-		if !e.nexthop.IsValid() {
-			continue // logged once at allocation
-		}
 		sid := fib.LocalSID{SID: e.sid, Behavior: fib.BehaviorEndX, Nexthop: e.nexthop, Interface: k.circuit}
 		if err := s.fib.AddLocalSID(sid); err != nil {
 			s.logger.Error("install End.X SID", "sid", e.sid, "neighbor", k.neighbor, "error", err)

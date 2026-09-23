@@ -175,10 +175,14 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 		enc.Action = nl.SEG6_LOCAL_ACTION_END_X
 		enc.Flags[nl.SEG6_LOCAL_NH6] = true
 		enc.In6Addr = sid.Nexthop.AsSlice()
-		// Not SEG6_LOCAL_OIF: the kernel's End.X action accepts only NH6, and
-		// rejects the route outright if any other attribute is set. The egress
-		// link is expressed as the route's device instead, which is also what
-		// gives a link-local next hop its scope.
+		// Not SEG6_LOCAL_OIF: the kernel accepts it next to NH6 and then
+		// ignores it. End.X resolves NH6 with seg6_lookup_any_nexthop, which
+		// consults neither that attribute nor the route's own device; it sets
+		// flowi6_iif and, for a link-local next hop, RT6_LOOKUP_F_IFACE, so a
+		// link-local one resolves only on the ingress interface and drops every
+		// transit packet. The next hop must therefore be a global address on
+		// the circuit's subnet (server.endXNexthop picks it); the device below
+		// is what makes `ip -6 route` name the link the SID belongs to.
 		if sid.Interface != "" {
 			dev = sid.Interface
 		}
