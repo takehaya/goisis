@@ -16,6 +16,26 @@ const minLSPTransmissionInterval = 5 * time.Second
 // csnpInterval is how often a DIS multicasts CSNPs on a LAN.
 const csnpInterval = 10 * time.Second
 
+// maxLSPSendPerTick bounds how many LSPs one circuit sends at one level in a
+// single housekeeping pass. The whole database is flagged at once when a p2p
+// adjacency comes Up (syncCircuitLevel) and when a CSNP omits what we hold,
+// so in a domain of thousands of LSPs an unpaced pass hands the transport
+// thousands of frames in a row: the send buffer overflows, every frame past it
+// is lost and logged, and the next Up repeats the burst. ISO 10589 leaves the
+// pacing to the implementation (FRR paces through its own transmit queue).
+// What is left unsent keeps its flag and goes out on the following ticks; a
+// p2p send schedules its own retransmission minLSPTransmissionInterval ahead,
+// so each tick works through LSPs not yet sent rather than re-sending.
+const maxLSPSendPerTick = 100
+
+// syncHoldDown is the shortest interval between two whole-database
+// synchronizations of one circuit and level. A neighbor flapping its handshake
+// at one hertz would otherwise make us walk the database and emit a CSNP burst
+// every second, for a peer that is not there long enough to receive any of it.
+// A sync asked for inside the hold-down is deferred to its end, never dropped
+// (see syncCircuitLevel).
+const syncHoldDown = 5 * time.Second
+
 // dest returns the multicast destination for control PDUs at a level.
 func (c *circuit) dest(level packet.Level) packet.SNPA {
 	if c.cfg.P2P {
@@ -263,6 +283,13 @@ func (s *IsisServer) floodTransmit(now time.Time) {
 			continue
 		}
 		for _, level := range c.cfg.levels() {
+			// A synchronization deferred by the hold-down runs as soon as that
+			// lapses, but only while the neighbor that asked for it is still
+			// there; one deferred by a neighbor now gone is picked up by the
+			// Up transition of whoever replaces it.
+			if c.syncDeferred[level] && !now.Before(c.syncHold[level]) && c.floodReady(level) {
+				s.syncCircuitLevel(c, level, now)
+			}
 			s.transmitSRM(c, level, now)
 			s.transmitPSNP(c, level, now)
 			if c.isDIS(level, s.systemID) && !now.Before(c.nextCSNP[level]) {
@@ -290,7 +317,11 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 		return // p2p with no Up adjacency: the flags are re-armed when one comes Up
 	}
 	db := s.dbs[level]
+	sent := 0
 	for id, when := range c.srm[level] {
+		if sent >= maxLSPSendPerTick {
+			break // the rest keeps its flag; the next tick carries on (see the constant)
+		}
 		if now.Before(when) {
 			continue
 		}
@@ -319,7 +350,11 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 		}
 		// A write that fails is transient, not the permanent undeliverability
 		// FloodDrop reports above: the SRM flag stays set, so the next tick
-		// retries this LSP on this circuit.
+		// retries this LSP on this circuit. It spends a slot of the budget
+		// either way — the failure a burst provokes is the full send buffer,
+		// and retrying the rest of the database behind it only lengthens the
+		// error log.
+		sent++
 		if err := c.cfg.Transport.Send(c.dest(level), wire); err != nil {
 			s.txFailed(c, txErrSend, err, "pdu", "lsp", "lsp", id)
 			continue
@@ -438,7 +473,21 @@ func (s *IsisServer) sendCSNP(c *circuit, level packet.Level, now time.Time) {
 // has no periodic CSNP — only the DIS of a LAN sends one, see floodTransmit —
 // so without this an LSP already in the database when the link came up would
 // never reach that neighbor.
+//
+// Repeats are held down per circuit and level (syncHoldDown): a neighbor that
+// flaps its handshake at one hertz would otherwise buy a database walk and a
+// CSNP burst per second. A sync asked for inside the hold-down is deferred to
+// its end rather than dropped — the Down that preceded the Up took every
+// flooding flag with it (clearFlags), so a dropped sync would leave the
+// neighbor that finally stays Up without the database. Our own LSPs are not
+// held back: their re-origination floods them on its own.
 func (s *IsisServer) syncCircuitLevel(c *circuit, level packet.Level, now time.Time) {
+	if now.Before(c.syncHold[level]) {
+		c.syncDeferred[level] = true
+		return
+	}
+	c.syncHold[level] = now.Add(syncHoldDown)
+	c.syncDeferred[level] = false
 	for id := range s.dbs[level].entries {
 		// Purged entries included: a neighbor that missed the purge would
 		// otherwise keep the dead LSP until it aged out.

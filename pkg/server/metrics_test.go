@@ -570,3 +570,9 @@ func TestMetricsCountsFIBWriteErrors(t *testing.T) {
 		t.Error("a route the FIB rejected left the RIB; the error count would then be unreachable on retry")
 	}
 }
+
+func (m *countingMetrics) FloodTx(circuit string) { m.inc("flood_tx", circuit) }
+
+func (m *countingMetrics) AdjacencyTransition(circuit, level, state string) {
+	m.inc("adj_transition", circuit, level, state)
+}

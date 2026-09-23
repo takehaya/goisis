@@ -149,3 +149,132 @@ func TestP2PAdjacencyUpSendsCSNP(t *testing.T) {
 		}
 	}
 }
+
+// countCSNPs reports how many of the captured frames are CSNPs.
+func countCSNPs(t *testing.T, frames []datalink.Frame) int {
+	t.Helper()
+	n := 0
+	for _, f := range frames {
+		pdu, err := packet.DecodePDU(f.PDU)
+		if err != nil {
+			t.Fatalf("decode emitted PDU: %v", err)
+		}
+		if _, ok := pdu.(*packet.CSNP); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// TestWholeDatabaseSyncIsPacedAcrossTicks guarantees that the ISO 10589 7.3.17
+// synchronization does not hand one circuit its whole database in a single
+// pass: a housekeeping pass sends at most maxLSPSendPerTick LSPs at a level,
+// the flags left behind carry the rest, and the sync still finishes in the
+// ceil(database / maxLSPSendPerTick) ticks that leaves — with every LSP sent
+// exactly once, because a p2p send schedules its retransmission
+// minLSPTransmissionInterval ahead.
+func TestWholeDatabaseSyncIsPacedAcrossTicks(t *testing.T) {
+	now := time.Now()
+	s, c, m := metricsServer(t, true)
+	upP2PAdj(c, metricsPeerID, now)
+
+	const lsps = 250 // more than one tick's worth, and short of five ticks'
+	for i := 0; i < lsps; i++ {
+		putEntry(s, lspIDFrag(metricsPeerID, 0, uint8(i)), 1, 1000, now)
+	}
+
+	s.syncCircuitLevel(c, packet.Level2, now)
+	if n := len(c.srm[packet.Level2]); n != lsps {
+		t.Fatalf("the Up transition flagged %d LSPs, want the whole database of %d", n, lsps)
+	}
+
+	sent, ticks := 0, 0
+	for sent < lsps {
+		if ticks == 10 {
+			t.Fatalf("only %d of %d LSPs were sent in %d ticks", sent, lsps, ticks)
+		}
+		s.transmitSRM(c, packet.Level2, now.Add(time.Duration(ticks)*housekeepInterval))
+		ticks++
+		n := m.count("flood_tx", "c")
+		if n-sent > maxLSPSendPerTick {
+			t.Fatalf("tick %d sent %d LSPs, want at most %d", ticks, n-sent, maxLSPSendPerTick)
+		}
+		sent = n
+	}
+	if sent != lsps {
+		t.Errorf("%d LSPs sent for a database of %d: some went out more than once", sent, lsps)
+	}
+	if want := (lsps + maxLSPSendPerTick - 1) / maxLSPSendPerTick; ticks != want {
+		t.Errorf("the paced sync took %d ticks, want %d", ticks, want)
+	}
+}
+
+// TestFlappingP2PPeerResyncsAtMostOncePerHoldDown guarantees that a neighbor
+// flapping its handshake cannot make us re-mark the whole database and emit
+// its CSNP on every Up, and that the damping loses nothing: the sync the last
+// flap asked for runs as soon as the hold-down lapses, which it must, since
+// the Down before it dropped every flag (clearFlags).
+func TestFlappingP2PPeerResyncsAtMostOncePerHoldDown(t *testing.T) {
+	now := time.Now()
+	s, c := snpServer(t, true)
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	upP2PAdj(c, peer, now)
+
+	const lsps = 8
+	for i := 0; i < lsps; i++ {
+		putEntry(s, lspIDFrag(peer, 0, uint8(i)), 1, 1000, now)
+	}
+
+	stop := captureFrames(t, c)
+	s.syncCircuitLevel(c, packet.Level2, now)
+	if n := countCSNPs(t, stop()); n == 0 {
+		t.Fatal("the first Up described no database: no CSNP was sent")
+	}
+	if n := len(c.srm[packet.Level2]); n != lsps {
+		t.Fatalf("the first Up flagged %d LSPs, want %d", n, lsps)
+	}
+
+	// The peer flaps at one hertz: each Down drops the flooding flags and each
+	// Up asks for the whole database again.
+	stop = captureFrames(t, c)
+	for i := 1; i <= 4; i++ {
+		c.clearFlags()
+		s.syncCircuitLevel(c, packet.Level2, now.Add(time.Duration(i)*time.Second))
+		if n := len(c.srm[packet.Level2]); n != 0 {
+			t.Fatalf("flap %d re-marked %d LSPs inside the hold-down", i, n)
+		}
+	}
+	if n := countCSNPs(t, stop()); n != 0 {
+		t.Errorf("%d CSNPs sent for flaps inside the hold-down, want none", n)
+	}
+
+	s.floodTransmit(now.Add(syncHoldDown))
+	if n := len(c.srm[packet.Level2]); n != lsps {
+		t.Errorf("%d LSPs flagged once the hold-down lapsed, want the whole database of %d", n, lsps)
+	}
+}
+
+// TestFlappingP2PAdjacencyIsCountedPerCircuitAndLevel guarantees that damping
+// the resync does not hide the flap: every Up and every Down is still counted
+// on its circuit and level, which is what shows an operator that a circuit is
+// flapping at all.
+func TestFlappingP2PAdjacencyIsCountedPerCircuitAndLevel(t *testing.T) {
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	s, c, m := metricsServer(t, true)
+
+	const flaps = 3
+	for i := 0; i < flaps; i++ {
+		s.processP2PHello(c, metricsPeerSNPA, p2pHelloEchoing(metricsPeerID, area, s.systemID, c.extCircID))
+		if c.p2pAdj == nil || c.p2pAdj.state != AdjUp {
+			t.Fatalf("flap %d: the adjacency did not reach Up", i)
+		}
+		// Past the holding time the neighbor is gone, flags and all.
+		s.expireAdjacencies(c, time.Now().Add(time.Hour))
+	}
+	if n := m.count("adj_transition", "c", "L2", AdjUp.String()); n != flaps {
+		t.Errorf("%d Up transitions counted on the circuit, want %d", n, flaps)
+	}
+	if n := m.count("adj_transition", "c", "L2", AdjDown.String()); n != flaps {
+		t.Errorf("%d Down transitions counted on the circuit, want %d", n, flaps)
+	}
+}

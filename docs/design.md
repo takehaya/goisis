@@ -222,7 +222,12 @@ Two invariants matter beyond the codec:
   adjacency and drops its flags when the adjacency goes down; when one comes Up
   the whole database at that level is re-flagged and a CSNP sent
   (`syncCircuitLevel`, ISO 10589 7.3.17) — p2p has no periodic CSNP to repair a
-  gap later. An LSP too large for a circuit is dropped on that circuit once
+  gap later. Both are paced: one housekeeping pass sends at most
+  `maxLSPSendPerTick` LSPs per circuit and level, the rest keeping their flags
+  for the following ticks, and a synchronization asked for within
+  `syncHoldDown` of the last one is deferred to the end of it rather than run,
+  so a neighbor flapping its handshake cannot buy a database walk per second.
+  An LSP too large for a circuit is dropped on that circuit once
   with a warning instead of retried forever. Purges are flooded header-only
   (POI + authentication when keyed), for both our own LSPs and expired foreign
   ones; a purge for an LSP ID the database does not hold is acknowledged but
