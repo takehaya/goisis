@@ -564,3 +564,57 @@ func TestConfigPrefixThatBecomesConnectedIsNeverInstalledFromPeer(t *testing.T) 
 		t.Fatalf("setup: the peer's %s was not installed, so the assertion above proves nothing", remote)
 	}
 }
+
+// TestHousekeepingRetriesPendingFIBWritesWithoutSPF: a route whose netlink
+// write failed transiently is rewritten on the next housekeeping tick. Without
+// it the retry waits for whatever marks SPF dirty next, which in a quiet
+// network is the LSP refresh — up to ~15 minutes of a prefix the RIB believes
+// is programmed and the kernel does not have. The retry must touch only the
+// pending prefixes: nothing is withdrawn and no recompute is requested.
+func TestHousekeepingRetriesPendingFIBWritesWithoutSPF(t *testing.T) {
+	sf := newFailFIB()
+	s := ribServer(t, false, WithFIB(sf))
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	good := netip.MustParsePrefix("10.1.0.0/24")
+	bad := netip.MustParsePrefix("10.2.0.0/24")
+
+	injectLSP(s, self, []packet.TLV{isReach(peer)}, now)
+	injectLSP(s, peer, []packet.TLV{isReach(self),
+		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{v4("10.1.0.0/24", 5), v4("10.2.0.0/24", 5)}},
+	}, now)
+
+	// Keep the fixture's adjacency alive across the tick: an expiry would
+	// re-originate and mark SPF dirty, hiding what this test asserts.
+	for _, adj := range s.circuits[0].adjs[packet.Level2] {
+		adj.holding, adj.lastHeard = 30, now
+	}
+
+	sf.failUpdate[bad] = true
+	s.updateRIB(now)
+	if !s.fibPending[bad] {
+		t.Fatal("setup: the failed prefix is not pending, so the retry below proves nothing")
+	}
+
+	// The topology is quiet from here on: only the tick may repair the route.
+	sf.failUpdate[bad] = false
+	s.spfDirty = false
+	s.housekeeping(now.Add(housekeepInterval))
+
+	if !sf.installed[bad] {
+		t.Errorf("pending route %s was not retried on the housekeeping tick", bad)
+	}
+	if s.fibPending[bad] {
+		t.Error("pending flag not cleared after a successful retry")
+	}
+	if sf.updates[good] != 1 {
+		t.Errorf("updates[%s] = %d, want 1: the retry must rewrite only the pending routes", good, sf.updates[good])
+	}
+	if n := sf.withdraws[good] + sf.withdraws[bad]; n != 0 {
+		t.Errorf("the retry issued %d withdraws; the desired route set did not change", n)
+	}
+	if s.spfDirty {
+		t.Error("the retry marked SPF dirty; nothing in the topology changed")
+	}
+}

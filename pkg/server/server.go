@@ -491,6 +491,16 @@ func (s *IsisServer) housekeeping(now time.Time) {
 			s.metrics.AdjacencyCount(c.cfg.Name, levelLabel(l), c.upAdjacencyCount(l))
 		}
 	}
+	// Retry the writes the FIB rejected. Nothing else drives them: the pending
+	// set is only revisited by a recompute, and in a quiet network the next one
+	// is the LSP refresh, up to fifteen minutes away. programFIB against the
+	// current RIB is the whole retry — the desired set is unchanged, so every
+	// other route short-circuits as installed and nothing is withdrawn or
+	// re-emitted. The tick is the back-off: one attempt per second, which for a
+	// netlink socket that is either there or not beats a schedule to maintain.
+	if len(s.fibPending) > 0 {
+		s.programFIB(s.rib)
+	}
 	s.metrics.FIBPending(len(s.fibPending))
 	s.metrics.EventQueueDepth(len(s.eventCh))
 }
