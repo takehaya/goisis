@@ -31,3 +31,14 @@ func (e *edgeLog[K]) warn(key K, fn func()) {
 
 // clear re-arms a key: the condition went away, so its return is worth logging.
 func (e *edgeLog[K]) clear(key K) { delete(e.fired, key) }
+
+// recovered re-arms a key and runs fn if that key had fired, so the end of a
+// condition is logged exactly once per occurrence of it — and not at all for a
+// key that never failed.
+func (e *edgeLog[K]) recovered(key K, fn func()) {
+	if !e.fired[key] {
+		return
+	}
+	delete(e.fired, key)
+	fn()
+}
