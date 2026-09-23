@@ -45,8 +45,11 @@ options. ([日本語](configuration.ja.md))
 | `hello-accept-passwords` | list of string | Extra keys accepted on received hellos; never used to sign. See [Key rotation](#key-rotation). |
 | `hello-key-id` | uint16 | RFC 5310 key ID (SHA only). |
 
-IPv4 and link-local IPv6 addresses configured on the interface are advertised in
-hellos (TLV 132/232) and used as next hops; their connected subnets are
+The IPv4 and link-local IPv6 addresses configured on the interface are
+advertised in hellos (TLV 132/232) and used as next hops. Its global IPv6
+addresses stay out of the hello — RFC 5308 3 keeps the IIH link-local — and are
+advertised in TLV 232 of the node's own LSP instead, which is where a peer looks
+for an on-link address to point an End.X SID at. Connected subnets are
 originated automatically (and never installed over the kernel's connected route).
 
 ## Key rotation
@@ -82,18 +85,14 @@ entry (RFC 9352 §8). With `fib: true` each one becomes a `seg6local` End.X
 route towards that neighbour; there is nothing to configure.
 
 That needs the neighbour to have a **global IPv6 address on one of the
-circuit's connected subnets**: goisis takes it from the neighbour's hellos and
-otherwise from TLV 232 of its fragment-0 LSP (FRR sends only link-locals in
-hellos). Linux resolves an End.X next hop against the interface the packet
-arrived on, so a link-local next hop would drop everything that is not a
-hairpin. Where no such address is known, nothing is allocated, advertised or
-programmed, and the circuit logs `no on-link global IPv6 address for neighbor`
-once for that adjacency.
-
-Today that address only ever comes from a peer that publishes one: FRR does, in
-its LSP. `goisisd` itself publishes none — its hellos carry link-locals as RFC
-5308 3 requires and its LSPs carry no TLV 232 — so a link between two goisis
-nodes gets no End.X SIDs.
+circuit's connected subnets**. It comes from TLV 232 of the neighbour's
+fragment-0 LSP — where goisis and FRR both publish theirs — or from its hellos
+where a peer lists one there. Linux resolves an End.X next hop against the
+interface the packet arrived on, so a link-local next hop would drop everything
+that is not a hairpin. Where no such address is known, nothing is allocated,
+advertised or programmed, and the circuit logs `no on-link global IPv6 address
+for neighbor` once for that adjacency. An interface with only link-locals on it
+is therefore the one case where a link carries no End.X SIDs.
 
 A locator bound to a Flexible Algorithm is configured under `flex-algo` instead
 (see `locator` below), not here — `srv6.locators` are algorithm-0 locators.

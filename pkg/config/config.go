@@ -471,8 +471,10 @@ func levels(s string) (l1, l2 bool, err error) {
 	}
 }
 
-// interfaceAddrs returns an interface's non-link-local IPv4 and link-local
-// IPv6 addresses (advertised in hellos via TLV 132 / 232).
+// interfaceAddrs returns an interface's IPv4 and IPv6 addresses. The server
+// splits them by destination: the link-local IPv6 ones go in hellos (TLV 232,
+// RFC 5308 3), the rest in the node's own LSP, where a peer needs a global
+// address of ours to resolve an End.X next hop (see server.CircuitConfig).
 func interfaceAddrs(name string) (v4, v6 []netip.Addr) {
 	ifi, err := net.InterfaceByName(name)
 	if err != nil {
@@ -495,7 +497,7 @@ func interfaceAddrs(name string) (v4, v6 []netip.Addr) {
 		switch {
 		case ad.Is4():
 			v4 = append(v4, ad)
-		case ad.Is6() && ad.IsLinkLocalUnicast():
+		case ad.Is6():
 			v6 = append(v6, ad)
 		}
 	}

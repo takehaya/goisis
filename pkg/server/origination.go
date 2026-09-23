@@ -179,6 +179,14 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	if caps := s.routerCapabilitySubTLVs(); len(caps) > 0 {
 		fixed = append(fixed, &packet.RouterCapabilityTLV{RouterID: s.routerID(), SubTLVs: caps})
 	}
+	// Our non-link-local IPv6 addresses (TLV 232). They belong in fragment 0
+	// because that is the one fragment a peer looks in for them (endXNexthop):
+	// an End.X SID towards us has to forward to a global address of ours that
+	// is on its link, and the hello cannot publish one (RFC 5308 3 keeps the
+	// IIH link-local).
+	fixed = append(fixed, tlvChunks(s.lspIPv6Addrs(), func(a []netip.Addr) packet.TLV {
+		return &packet.IPv6InterfaceAddressesTLV{Addresses: a}
+	})...)
 
 	// Variable TLVs may spill into fragments 1..255.
 	var variable []packet.TLV
@@ -518,6 +526,25 @@ func (s *IsisServer) routerID() netip.Addr {
 		}
 	}
 	return netip.Addr{}
+}
+
+// lspIPv6Addrs returns the node's non-link-local IPv6 interface addresses, in
+// circuit order and without repeats (an address may sit on two circuits).
+// Sorting is unnecessary and unwanted: the circuit order is already stable, and
+// originate compares the marshalled body, so any reshuffle would re-flood.
+func (s *IsisServer) lspIPv6Addrs() []netip.Addr {
+	var out []netip.Addr
+	for _, c := range s.circuits {
+		for _, a := range c.cfg.IPv6Addrs {
+			// IsGlobalUnicast is the same test onLinkAddr applies to a peer's
+			// addresses: whatever we advertise here must be usable there.
+			if !a.Is6() || a.Is4In6() || !a.IsGlobalUnicast() || slices.Contains(out, a) {
+				continue
+			}
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // lspID builds a fragment-0 LSP ID from a system ID and pseudonode octet.
