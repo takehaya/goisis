@@ -524,3 +524,43 @@ func TestUpdateRIBFIBFailureRetries(t *testing.T) {
 		t.Errorf("failed Withdraw was retried (%d calls); the contract is log-and-forget", sf.withdraws[bad])
 	}
 }
+
+// TestConfigPrefixThatBecomesConnectedIsNeverInstalledFromPeer: a subnet the
+// configuration also originates is still directly connected when a circuit has
+// it, so a peer advertising the same prefix must not be programmed over the
+// kernel's own connected route. Who advertises a prefix says nothing about
+// whether it is connected.
+func TestConfigPrefixThatBecomesConnectedIsNeverInstalledFromPeer(t *testing.T) {
+	local := netip.MustParsePrefix("10.55.0.0/24")
+	remote := netip.MustParsePrefix("10.56.0.0/24")
+	rf := newRecordFIB()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
+			Level2: true, Padding: ptrFalse(), ConnectedPrefixes: []netip.Prefix{local},
+		}),
+		WithAdvertisedPrefix(local, 10), WithFIB(rf),
+	)
+	self, peer := s.systemID, packet.SystemID{0, 0, 0, 0, 0, 2}
+	s.circuits[0].adjs[packet.Level2][peer] = &adjacency{
+		systemID: peer, state: AdjUp,
+		neighborIPv4: []netip.Addr{netip.MustParseAddr("10.55.0.2")},
+	}
+
+	now := time.Now()
+	injectLSP(s, self, []packet.TLV{isReach(peer)}, now)
+	injectLSP(s, peer, []packet.TLV{isReach(self),
+		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+			v4(local.String(), 5), v4(remote.String(), 5),
+		}}}, now)
+	s.updateRIB(now)
+
+	if nh, ok := rf.get(local); ok {
+		t.Errorf("connected subnet %s was programmed from the peer's LSP (next hops %v)", local, nh)
+	}
+	if _, ok := rf.get(remote); !ok {
+		t.Fatalf("setup: the peer's %s was not installed, so the assertion above proves nothing", remote)
+	}
+}

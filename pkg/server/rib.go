@@ -150,8 +150,11 @@ func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix
 		return nil
 	}
 	own := map[netip.Prefix]bool{}
-	for _, p := range s.prefixes {
-		own[p.Prefix.Masked()] = true
+	// The two owners of "we originate this ourselves": every circuit subnet
+	// originatedPrefixes derives is connected by definition, so these two sets
+	// cover it without rebuilding the sorted advertisement list here.
+	for p := range s.optionPrefixes {
+		own[p] = true
 	}
 	for p := range s.connected {
 		own[p] = true

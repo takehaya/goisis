@@ -98,11 +98,10 @@ the algorithm — delete the locator first.
 
 Advertised prefixes, the overload bit and adjacencies are equally mutable:
 `AddPrefix`/`DeletePrefix` originate or withdraw a prefix (matched on its
-masked form; deleting one that came from a connected subnet keeps its
-directly-connected marker), `SetOverload` sets or clears the overload bit by
-hand for maintenance (independently of the startup window), and
-`ClearAdjacency` tears down a circuit's adjacencies — all of them, or one
-neighbor's — so hellos re-form them:
+masked form), `SetOverload` sets or clears the overload bit by hand for
+maintenance (independently of the startup window), and `ClearAdjacency` tears
+down a circuit's adjacencies — all of them, or one neighbor's — so hellos
+re-form them:
 
 ```go
 s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("10.9.9.0/24"), Metric: 10})
@@ -110,6 +109,16 @@ s.DeletePrefix(ctx, netip.MustParsePrefix("10.9.9.0/24"))
 s.SetOverload(ctx, true)
 s.ClearAdjacency(ctx, "eth0", nil) // nil: every adjacency on the circuit
 ```
+
+A prefix belongs either to the configuration and these two calls or to the
+circuit that has the subnet connected, never to both. `AddPrefix` on a subnet a
+circuit already has connected is accepted and sets the metric it is advertised
+at — it is still advertised once — and `DeletePrefix` hands it back to the
+circuit's metric. Deleting a subnet only a circuit contributes is refused: it
+would come back at that circuit's next address event, so remove the address or
+suppress the advertisement with `WithAdvertiseFilter`. A connected subnet keeps
+its directly-connected marker whoever advertises it, so a peer advertising the
+same prefix is never programmed over the kernel's own route.
 
 A circuit's addresses can change too. `SetCircuitAddresses` replaces the hello
 source addresses (TLV 132 / 232) and the circuit's connected subnets — the ones

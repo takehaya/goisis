@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -368,5 +369,109 @@ func TestClearAdjacency(t *testing.T) {
 	// An unknown circuit is an error.
 	if err := a.ClearAdjacency(ctx, "nope", nil); err == nil {
 		t.Error("expected error clearing adjacencies on an unknown circuit")
+	}
+}
+
+// v4ReachMetrics returns the metric of every TLV 135 entry for p — one element
+// per entry, so a prefix advertised twice is visible as two.
+func v4ReachMetrics(tlvs []packet.TLV, p netip.Prefix) []uint32 {
+	var out []uint32
+	for _, tlv := range tlvs {
+		r, ok := tlv.(*packet.ExtendedIPReachabilityTLV)
+		if !ok {
+			continue
+		}
+		for _, e := range r.Prefixes {
+			if e.Prefix.Masked() == p.Masked() {
+				out = append(out, e.Metric)
+			}
+		}
+	}
+	return out
+}
+
+// TestRuntimePrefixSurvivesConnectedSubnetWithdrawal: a prefix added through
+// the management API is the operator's, and stays advertised at the metric the
+// operator gave it even while a circuit has the same subnet connected — once,
+// not twice — and after that circuit withdraws its address.
+func TestRuntimePrefixSurvivesConnectedSubnetWithdrawal(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+	p := netip.MustParsePrefix("10.9.9.0/24")
+
+	// 77, not the circuit's DefaultMetric, so "the operator's metric wins" is
+	// visible in the assertions below.
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: p, Metric: 77}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	waitFor(t, "prefix advertised", func() bool { return len(v4ReachMetrics(ownLSPTLVs(t, s), p)) == 1 })
+
+	if err := s.SetCircuitAddresses(ctx, "c", []netip.Addr{netip.MustParseAddr("10.9.9.1")}, nil, []netip.Prefix{p}); err != nil {
+		t.Fatalf("SetCircuitAddresses(connected): %v", err)
+	}
+	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 || got[0] != 77 {
+		t.Errorf("with %s also connected: TLV 135 metrics = %v, want exactly [77]", p, got)
+	}
+
+	if err := s.SetCircuitAddresses(ctx, "c", nil, nil, nil); err != nil {
+		t.Fatalf("SetCircuitAddresses(withdraw): %v", err)
+	}
+	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 || got[0] != 77 {
+		t.Errorf("after the circuit withdrew its address: TLV 135 metrics = %v, want exactly [77]", got)
+	}
+}
+
+// TestDeletePrefixOfConnectedOnlyPrefixIsRejected: a subnet that only a circuit
+// contributes is not the management API's to withdraw — the next address event
+// would bring it straight back — so DeletePrefix refuses it and says what to do
+// instead, and the prefix stays advertised.
+func TestDeletePrefixOfConnectedOnlyPrefixIsRejected(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+	p := netip.MustParsePrefix("10.9.9.0/24")
+
+	if err := s.SetCircuitAddresses(ctx, "c", []netip.Addr{netip.MustParseAddr("10.9.9.1")}, nil, []netip.Prefix{p}); err != nil {
+		t.Fatalf("SetCircuitAddresses: %v", err)
+	}
+	err := s.DeletePrefix(ctx, p)
+	if err == nil {
+		t.Fatalf("DeletePrefix accepted the connected subnet %s", p)
+	}
+	if !strings.Contains(err.Error(), "connected on c") {
+		t.Errorf("DeletePrefix error = %q, want it to name the circuit the subnet is connected on", err)
+	}
+	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 {
+		t.Errorf("after the refused delete: TLV 135 metrics = %v, want the circuit's single entry", got)
+	}
+}
+
+// TestConfigPrefixDeletedThenConnectedIsAdvertisedOnce: deleting a configured
+// prefix really forgets it, so a circuit that later has the same subnet
+// connected advertises it once, at the circuit's metric.
+func TestConfigPrefixDeletedThenConnectedIsAdvertisedOnce(t *testing.T) {
+	p := netip.MustParsePrefix("10.9.9.0/24")
+	cfg := CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse(), Metric: 33}
+	fastHello(&cfg)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(cfg), WithAdvertisedPrefix(p, 77),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	if err := s.DeletePrefix(ctx, p); err != nil {
+		t.Fatalf("DeletePrefix: %v", err)
+	}
+	waitFor(t, "configured prefix withdrawn", func() bool { return len(v4ReachMetrics(ownLSPTLVs(t, s), p)) == 0 })
+
+	if err := s.SetCircuitAddresses(ctx, "c", []netip.Addr{netip.MustParseAddr("10.9.9.1")}, nil, []netip.Prefix{p}); err != nil {
+		t.Fatalf("SetCircuitAddresses: %v", err)
+	}
+	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 || got[0] != 33 {
+		t.Errorf("once %s is connected: TLV 135 metrics = %v, want exactly [33] (the circuit's metric)", p, got)
 	}
 }

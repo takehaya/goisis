@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/fib"
@@ -134,44 +135,46 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 }
 
 // AddPrefix originates a new prefix in this node's LSP (TLV 135/236) at
-// runtime. The prefix must be valid and not already advertised (matched on its
-// masked form, the key the RIB and FIB agree on).
+// runtime. The prefix must be valid and not already named by the configuration
+// or an earlier AddPrefix (matched on its masked form, the key the RIB and FIB
+// agree on). A subnet a circuit already has connected may be named here: the
+// prefix is still advertised once, at the metric given here.
 func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error {
 	return s.mgmtOperation(ctx, func() error {
 		if !cfg.Prefix.IsValid() {
 			return fmt.Errorf("goisis: prefix %s is not a valid prefix", cfg.Prefix)
 		}
 		want := cfg.Prefix.Masked()
-		for _, p := range s.prefixes {
-			if p.Prefix.Masked() == want {
-				return fmt.Errorf("goisis: prefix %s is already advertised", want)
-			}
+		if _, ok := s.optionPrefixes[want]; ok {
+			return fmt.Errorf("goisis: prefix %s is already advertised", want)
 		}
-		s.prefixes = append(s.prefixes, cfg)
+		s.optionPrefixes[want] = AdvertisedPrefix{Prefix: want, Metric: cfg.Metric}
 		s.regenerateLSPs(false, time.Now())
 		s.markDirty()
 		return nil
 	})
 }
 
-// DeletePrefix withdraws a prefix this node originates (matched on its masked
-// prefix). A prefix that came from a connected subnet keeps its
-// directly-connected marker: the operator asked to stop advertising it, not to
-// have goisis start programming the kernel's own connected route.
+// DeletePrefix withdraws a prefix the configuration or AddPrefix named (matched
+// on its masked prefix). A circuit that has the same subnet connected keeps
+// originating it at the circuit's metric, and a subnet only a circuit
+// contributes is refused: withdrawing it here would last until that circuit's
+// next address event, and suppressing an advertisement is the export policy's
+// job (WithAdvertiseFilter / policy.advertise). Either way the subnet stays
+// marked directly connected, so goisis never programs over the kernel's own
+// connected route.
 func (s *IsisServer) DeletePrefix(ctx context.Context, prefix netip.Prefix) error {
 	return s.mgmtOperation(ctx, func() error {
 		want := prefix.Masked()
-		idx := -1
-		for i, p := range s.prefixes {
-			if p.Prefix.Masked() == want {
-				idx = i
-				break
+		if _, ok := s.optionPrefixes[want]; !ok {
+			for _, c := range s.circuits {
+				if slices.Contains(s.circuitPrefixes[c.cfg.Name], want) {
+					return fmt.Errorf("goisis: %s is connected on %s; remove the address or use policy.advertise", want, c.cfg.Name)
+				}
 			}
-		}
-		if idx < 0 {
 			return fmt.Errorf("goisis: prefix %s is not advertised", want)
 		}
-		s.prefixes = append(s.prefixes[:idx], s.prefixes[idx+1:]...)
+		delete(s.optionPrefixes, want)
 		s.regenerateLSPs(false, time.Now())
 		s.markDirty()
 		return nil

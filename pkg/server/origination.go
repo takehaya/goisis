@@ -137,6 +137,33 @@ func tlvChunks[E any](entries []E, mk func([]E) packet.TLV) []packet.TLV {
 	return out
 }
 
+// originatedPrefixes derives the prefixes this node advertises from the two
+// owners of that fact: the prefixes an option or AddPrefix named (with their
+// metric) and the connected subnets each circuit contributes (at that circuit's
+// metric). One entry per masked prefix — an operator naming a prefix outranks
+// the circuit that happens to have it connected, and a subnet connected on two
+// circuits takes the better of their metrics — and sorted, so a regeneration
+// that changed nothing marshals identically and does not re-flood.
+func (s *IsisServer) originatedPrefixes() []AdvertisedPrefix {
+	metrics := make(map[netip.Prefix]uint32, len(s.optionPrefixes)+len(s.circuitPrefixes))
+	for _, c := range s.circuits {
+		for _, p := range s.circuitPrefixes[c.cfg.Name] {
+			if m, ok := metrics[p]; !ok || c.cfg.Metric < m {
+				metrics[p] = c.cfg.Metric
+			}
+		}
+	}
+	for p, ap := range s.optionPrefixes {
+		metrics[p] = ap.Metric
+	}
+	out := make([]AdvertisedPrefix, 0, len(metrics))
+	for p, m := range metrics {
+		out = append(out, AdvertisedPrefix{Prefix: p, Metric: m})
+	}
+	slices.SortFunc(out, func(a, b AdvertisedPrefix) int { return a.Prefix.Compare(b.Prefix) })
+	return out
+}
+
 // regenerateNodeLSP builds this node's own LSP at a level, fragmenting it
 // across fragment numbers 1..255 when the TLVs exceed one LSP.
 func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, now time.Time) {
@@ -184,7 +211,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	// for IPv6).
 	var v4 []packet.ExtendedIPReachEntry
 	var v6 []packet.IPv6ReachEntry
-	for _, p := range s.prefixes {
+	for _, p := range s.originatedPrefixes() {
 		// Export policy: suppress prefixes the filter rejects. Flooding and the
 		// LSDB are untouched — we simply originate fewer reachability entries.
 		if s.advertiseFilter != nil && !s.advertiseFilter(p) {

@@ -29,7 +29,6 @@ type IsisServer struct {
 	systemID  packet.SystemID
 	areaAddrs []packet.AreaAddress
 	hostname  string
-	prefixes  []AdvertisedPrefix
 	locators  []SRv6LocatorConfig
 	flexAlgos []FlexAlgoConfig
 
@@ -45,7 +44,7 @@ type IsisServer struct {
 	metrics       Metrics
 	rib           map[netip.Prefix]RouteInfo
 	l1Export      map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
-	connected     map[netip.Prefix]bool   // directly-connected prefixes (never installed)
+	connected     map[netip.Prefix]bool   // directly-connected prefixes, derived (never installed)
 	fibPending    map[netip.Prefix]bool   // routes whose last FIB write failed; retried
 	fibInstalled  map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
 	spfDirty      bool                    // a topology change needs an SPF recompute
@@ -66,12 +65,17 @@ type IsisServer struct {
 	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 
-	// circuitPrefixes records which connected prefixes each circuit
-	// contributed (keyed by circuit name) and optionPrefixes those that came
-	// from options; together they say who still needs a prefix when a circuit's
-	// addresses change. See SetCircuitAddresses.
+	// What this node originates has exactly two owners: optionPrefixes, the
+	// prefixes the configuration and AddPrefix name (with their metric), and
+	// circuitPrefixes, the connected subnets each circuit contributes (keyed by
+	// circuit name, originated at that circuit's metric). The advertised set is
+	// derived from both at every origination (originatedPrefixes) and the
+	// directly-connected set from circuitPrefixes plus optionConnected
+	// (setCircuitPrefixes), so neither depends on who advertised a prefix
+	// first. See SetCircuitAddresses.
 	circuitPrefixes map[string][]netip.Prefix
-	optionPrefixes  map[netip.Prefix]bool
+	optionPrefixes  map[netip.Prefix]AdvertisedPrefix
+	optionConnected map[netip.Prefix]bool
 }
 
 // spfHold is the SPF back-off interval (RFC 8405): after a recompute, further
@@ -98,7 +102,6 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		systemID:          o.systemID,
 		areaAddrs:         o.areaAddrs,
 		hostname:          o.hostname,
-		prefixes:          o.prefixes,
 		locators:          o.locators,
 		flexAlgos:         o.flexAlgos,
 		mgmtCh:            make(chan *mgmtOp, 1),
@@ -122,7 +125,8 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		lsdbEntryLimit:    o.lsdbEntryLimit,
 		lsdbLimitWarned:   map[packet.Level]bool{},
 		circuitPrefixes:   map[string][]netip.Prefix{},
-		optionPrefixes:    map[netip.Prefix]bool{},
+		optionPrefixes:    map[netip.Prefix]AdvertisedPrefix{},
+		optionConnected:   map[netip.Prefix]bool{},
 	}
 	if err := requirePrimaryPassword("goisis: area authentication", o.areaAuth.Secret, o.areaAuth.AcceptSecrets); err != nil {
 		return nil, err
@@ -142,16 +146,18 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	if s.metrics == nil {
 		s.metrics = NoopMetrics{}
 	}
-	for _, p := range o.connected {
-		s.connected[p] = true
-	}
 	// Prefixes named by an option belong to the configuration, not to a
 	// circuit: a circuit whose addresses later change must leave them alone.
 	for _, p := range o.prefixes {
-		s.optionPrefixes[p.Prefix.Masked()] = true
+		masked := p.Prefix.Masked()
+		s.optionPrefixes[masked] = AdvertisedPrefix{Prefix: masked, Metric: p.Metric}
 	}
+	// The connected set is derived; setCircuitPrefixes rebuilds it from the
+	// circuits plus this option set, so seed it here for the server whose
+	// circuits contribute nothing.
 	for _, p := range o.connected {
-		s.optionPrefixes[p] = true
+		s.optionConnected[p] = true
+		s.connected[p] = true
 	}
 	participated := map[uint8]bool{}
 	for _, fa := range o.flexAlgos {
@@ -189,7 +195,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		// per box; the 1-based circuit index serves both.
 		c := newCircuit(cfg, uint8(i+1), uint32(i+1)) //nolint:gosec // bounded by the 255 check above
 		s.circuits = append(s.circuits, c)
-		s.addCircuitPrefixes(cfg.Name, cfg.Metric, cfg.ConnectedPrefixes)
+		s.setCircuitPrefixes(cfg.Name, maskedSet(cfg.ConnectedPrefixes))
 		for _, l := range cfg.levels() {
 			s.levelCap.add(l)
 			if s.dbs[l] == nil {
