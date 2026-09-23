@@ -56,6 +56,10 @@ day: 1. add the new key to `*-accept-passwords` on every node; 2. switch
 `*-password` to the new key, node by node; 3. remove the old key from the accept
 lists once every node signs with the new one.
 
+An accept list without the matching `*-password` is a configuration error: the
+scope would sign nothing and accept nothing, so goisisd refuses to start rather
+than run unauthenticated.
+
 ## `srv6`
 
 ```yaml

@@ -482,3 +482,26 @@ circuits:
 		t.Errorf("default fib table = %d, want %d (main)", got, unix.RT_TABLE_MAIN)
 	}
 }
+
+// TestAcceptPasswordsWithoutPrimaryIsRejected: the YAML path rejects an accept
+// list configured without the matching primary password, in each of the three
+// scopes, instead of silently building an unauthenticated server.
+func TestAcceptPasswordsWithoutPrimaryIsRejected(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 0xa}, 1500)
+	open := mockCircuits(map[string]mockCircuit{"ifa": {tr: tr}})
+	for name, yaml := range map[string]string{
+		"area":   "net: 49.0001.0000.0000.000a.00\narea-accept-passwords:\n  - oldkey\ncircuits:\n  - interface: ifa\n",
+		"domain": "net: 49.0001.0000.0000.000a.00\ndomain-accept-passwords:\n  - oldkey\ncircuits:\n  - interface: ifa\n",
+		"hello":  "net: 49.0001.0000.0000.000a.00\ncircuits:\n  - interface: ifa\n    hello-accept-passwords:\n      - oldkey\n",
+	} {
+		c := loadConfig(t, yaml)
+		c.OpenCircuit = open
+		opts, err := c.Options()
+		if err != nil {
+			continue // rejected before the server was built
+		}
+		if _, err := server.NewIsisServer(opts...); err == nil {
+			t.Errorf("%s: YAML with an accept list but no primary password built a server", name)
+		}
+	}
+}

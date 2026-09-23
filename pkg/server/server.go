@@ -122,6 +122,12 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		circuitPrefixes:   map[string][]netip.Prefix{},
 		optionPrefixes:    map[netip.Prefix]bool{},
 	}
+	if err := requirePrimaryPassword("goisis: area authentication", o.areaAuth.Secret, o.areaAuth.AcceptSecrets); err != nil {
+		return nil, err
+	}
+	if err := requirePrimaryPassword("goisis: domain authentication", o.domainAuth.Secret, o.domainAuth.AcceptSecrets); err != nil {
+		return nil, err
+	}
 	if spec := o.areaAuth.spec(); spec.on() {
 		s.authKeys[packet.Level1] = spec
 	}

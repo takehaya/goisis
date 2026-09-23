@@ -81,3 +81,50 @@ func TestUnknownKeyStillRejected(t *testing.T) {
 		t.Errorf("adjacency reached %v with a password on neither list", st)
 	}
 }
+
+// TestAcceptPasswordsWithoutPrimaryIsRejected: an accept list with no signing
+// password is a configuration error in all three scopes. Such a scope would
+// sign nothing and verify nothing — a rotation that moves the old key to the
+// accept list and forgets the new primary must fail loudly, not fail open.
+func TestAcceptPasswordsWithoutPrimaryIsRejected(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	for name, opt := range map[string]ServerOption{
+		"area":   WithAreaAuth(AuthConfig{AcceptSecrets: []string{"old"}}),
+		"domain": WithDomainAuth(AuthConfig{AcceptSecrets: []string{"old"}}),
+		"hello": WithCircuit(CircuitConfig{Name: "a", Transport: tr, P2P: true, Level2: true,
+			HelloAcceptPasswords: []string{"old"}}),
+	} {
+		if _, err := NewIsisServer(WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), opt); err == nil {
+			t.Errorf("%s: NewIsisServer accepted an accept list without a primary password", name)
+		}
+	}
+}
+
+// TestAcceptKeysDropsEmptyEntries: an empty accept entry is dropped rather than
+// becoming an empty HMAC key, which anyone could sign with.
+func TestAcceptKeysDropsEmptyEntries(t *testing.T) {
+	if keys := acceptKeys([]string{"", "old"}); len(keys) != 1 || string(keys[0]) != "old" {
+		t.Errorf("acceptKeys([\"\", \"old\"]) = %q, want [\"old\"]", keys)
+	}
+}
+
+// TestVerifyRejectsEmptyKeySignature: a PDU signed with the empty key does not
+// verify against a spec whose accept list contains an empty password.
+func TestVerifyRejectsEmptyKeySignature(t *testing.T) {
+	h := &packet.LANHello{
+		Level: packet.Level1, SourceID: packet.SystemID{0, 0, 0, 0, 0, 1}, HoldingTime: 30,
+		TLVs: []packet.TLV{packet.AuthTLV(packet.AuthMD5, 0)},
+	}
+	raw, err := h.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	off := packet.HeaderLen(h.PDUType())
+	if err := packet.PatchAuth(raw, off, packet.AuthMD5, 0, nil, false); err != nil {
+		t.Fatalf("PatchAuth: %v", err)
+	}
+	spec := AuthConfig{Secret: "primary", AcceptSecrets: []string{""}}.spec()
+	if spec.verify(raw, off, false) {
+		t.Error("a PDU signed with the empty key verified against an accept list containing \"\"")
+	}
+}
