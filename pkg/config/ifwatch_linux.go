@@ -4,6 +4,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,6 +15,13 @@ import (
 
 	"github.com/takehaya/goisis/pkg/server"
 )
+
+// netlinkReceiveBufferSize sizes the subscription sockets' SO_RCVBUF. A burst
+// (an address flush, a flapping link) that overruns the default buffer ends the
+// subscription with ENOBUFS, and the watcher with it. The size is not forced:
+// SO_RCVBUFFORCE needs CAP_NET_ADMIN, and refusing to start over a buffer hint
+// would be worse than running with the kernel's rmem_max cap.
+const netlinkReceiveBufferSize = 1 << 20
 
 // circuitSetter is the part of *server.IsisServer the watcher drives. It exists
 // so the event mapping can be exercised without opening a netlink socket.
@@ -47,28 +55,49 @@ func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, log
 
 	addrCh := make(chan netlink.AddrUpdate, 64)
 	if err := netlink.AddrSubscribeWithOptions(addrCh, done, netlink.AddrSubscribeOptions{
-		ErrorCallback: func(err error) { logger.Warn("interface address subscription", "error", err) },
+		ErrorCallback:     func(err error) { logger.Warn("interface address subscription", "error", err) },
+		ReceiveBufferSize: netlinkReceiveBufferSize,
 	}); err != nil {
 		return fmt.Errorf("subscribe to interface addresses: %w", err)
 	}
 	linkCh := make(chan netlink.LinkUpdate, 64)
 	if err := netlink.LinkSubscribeWithOptions(linkCh, done, netlink.LinkSubscribeOptions{
-		ErrorCallback: func(err error) { logger.Warn("interface link subscription", "error", err) },
+		ErrorCallback:     func(err error) { logger.Warn("interface link subscription", "error", err) },
+		ReceiveBufferSize: netlinkReceiveBufferSize,
 	}); err != nil {
 		return fmt.Errorf("subscribe to link changes: %w", err)
 	}
 
+	return watchLoop(ctx, s, watched, addrCh, linkCh, logger)
+}
+
+// watchLoop maps subscription events onto the server until ctx is done.
+//
+// A closed channel is how the library reports that its reader goroutine gave
+// up (a Receive error such as ENOBUFS): the watcher is dead and no further
+// event will ever arrive, so it is returned as an error for the same reason a
+// failed subscribe is — a daemon that silently stops following link events
+// looks healthy until the next cable pull. Ignoring the close is not an option
+// either: the zero LinkUpdate has a nil Link and would panic in Attrs(), and
+// the address case would spin on the closed channel.
+func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate, logger *slog.Logger) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case u := <-addrCh:
+		case u, ok := <-addrCh:
+			if !ok {
+				return errors.New("interface address subscription closed")
+			}
 			ifi, err := net.InterfaceByIndex(u.LinkIndex)
 			if err != nil {
 				continue // the interface is already gone; the link event covers it
 			}
 			applyAddrEvent(ctx, s, watched, ifi.Name, logger)
-		case u := <-linkCh:
+		case u, ok := <-linkCh:
+			if !ok {
+				return errors.New("link subscription closed")
+			}
 			attrs := u.Attrs()
 			// A deleted link carries its last flags, which usually still say
 			// up; the message type is the only signal that it is gone.
