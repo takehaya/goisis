@@ -556,3 +556,57 @@ func TestIntraAreaReachabilityIsNotLeakedBackIntoTheArea(t *testing.T) {
 		t.Errorf("the intra-area %s was leaked into Level 1 as %v", leakV4, e)
 	}
 }
+
+// intraV4 is reachable inside the Level-1 area, and visible at Level 2 as well
+// because a border router has already exported it upward.
+var intraV4 = netip.MustParsePrefix("10.7.0.0/24")
+
+// A border must keep exporting a prefix its area genuinely owns even when a
+// sibling border leaks a copy of it down (RFC 5302 §3.2: the route's preference
+// class is the winning advertisement's, not the worst one seen). Otherwise the
+// two borders latch: X stops exporting because Y leaked, Y keeps leaking
+// because nobody exports, and the prefix is black-holed for the whole domain.
+func TestBothBordersKeepExportingAnIntraAreaPrefixASiblingLeaks(t *testing.T) {
+	now := time.Now()
+	// The sibling has intraV4 at Level 2 only — its Level-1 LSDB has not caught
+	// up, or it is a foreign IS that leaks unconditionally — so it leaks it.
+	other := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	injectB(other, now)
+	injectBL2(other, now, &packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{{Prefix: intraV4, Metric: 5}},
+	})
+	other.regenerateLSPs(false, now)
+	other.updateRIB(now)
+	other.drainLSPGen(now)
+	if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(ownIPReach(t, other, packet.Level1)[intraV4], want) {
+		t.Fatalf("the sibling did not leak %s; the topology under test is wrong", intraV4)
+	}
+
+	// This border's area genuinely owns intraV4 (metric 5, bit clear) and its
+	// Level-1 LSDB also carries the sibling's leaked copy of it.
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	injectB(s, now, append([]packet.TLV{&packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{{Prefix: intraV4, Metric: 5}},
+	}}, ownIPReachTLVs(t, other)...)...)
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{{Prefix: intraV4, Metric: 5}},
+	})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	// 10 (the circuit metric to B) + 5 (B's metric for the prefix): the
+	// intra-area path, not the sibling's leaked copy at 25.
+	if want := []uint32{15}; !slices.Equal(l2OwnReach(t, s)[intraV4], want) {
+		t.Errorf("L2 LSP metrics for the intra-area %s = %v, want %v (a sibling's leak must not stop the upward export)",
+			intraV4, l2OwnReach(t, s)[intraV4], want)
+	}
+	if r := s.rib[intraV4]; r.Level != packet.Level1 || r.Metric != 15 {
+		t.Errorf("%s = level %v metric %d, want Level 1 metric 15 (the area's own path)", intraV4, r.Level, r.Metric)
+	}
+	// The other end of the latch: having an intra-area route, this border has
+	// nothing to leak, so it does not start leaking back at the sibling.
+	if e, ok := ownIPReach(t, s, packet.Level1)[intraV4]; ok {
+		t.Errorf("the intra-area %s was leaked back into its own area as %v", intraV4, e)
+	}
+}

@@ -365,28 +365,36 @@ func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*
 	}
 }
 
-// addRoute merges one computed route for a prefix into the route set: a lower
-// total metric wins outright, an equal one merges the first-hop sets (ECMP).
+// addRoute merges one computed route for a prefix into the route set: the
+// better preference class wins at any metric (RFC 5302 §3.2, which ranks class
+// before metric), within a class a lower total metric wins outright, and an
+// equal one merges the first-hop sets (ECMP).
 //
-// The up/down bit is merged conservatively: the route is down when ANY
-// contributing advertisement was, even one whose path lost. RFC 5305 §4.1
-// forbids re-advertising a down-marked prefix upward, and the LSDB alone cannot
-// tell an independently reachable copy from the same leaked prefix
-// re-originated without the bit — so the safe answer is the sticky one.
+// So the route's up/down bit is the WINNING advertisement's own, and every
+// reader of it — l1ExportSet, l2LeakSet, preferenceClass — wants exactly that.
+// Merging it stickily ("down when any contributing advertisement was") would be
+// the conservative answer to "a leaked copy re-originated without the bit is
+// indistinguishable from independent reachability", but it costs far more than
+// it buys: a prefix the area genuinely owns that any border also leaks would
+// stop being exported upward, black-holing it for the rest of the domain, and
+// since a border only leaks what it cannot see inside the area, two borders
+// latch each other into that state with no way out.
 func addRoute(routes map[netip.Prefix]route, p netip.Prefix, r route) {
 	cur, ok := routes[p]
 	if !ok {
 		routes[p] = r
 		return
 	}
-	down := cur.down || r.down
-	switch {
+	switch rc, cc := preferenceClass(r), preferenceClass(cur); {
+	case rc != cc:
+		if rc < cc {
+			cur = r
+		}
 	case r.metric < cur.metric:
 		cur = r
 	case r.metric == cur.metric:
 		cur.nextHops = mergeHops(cur.nextHops, r.nextHops)
 	}
-	cur.down = down
 	routes[p] = cur
 }
 

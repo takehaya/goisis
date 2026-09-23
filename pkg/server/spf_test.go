@@ -544,41 +544,48 @@ func TestSPFReroutesWhenLANAdjacencyIsLostInsideRegenerationHold(t *testing.T) {
 	}
 }
 
-// TestRouteIsDownWhenAnyContributingAdvertisementWas pins addRoute's merge
-// policy, which the L1→L2 export depends on: the up/down bit is sticky across
-// every advertisement of a prefix, including one whose path lost on metric.
-// RFC 5305 §4.1 forbids re-advertising a down-marked prefix upward, and the
-// LSDB cannot tell an independently reachable copy from the same leaked prefix
-// re-originated without the bit, so the conservative answer is the safe one.
-func TestRouteIsDownWhenAnyContributingAdvertisementWas(t *testing.T) {
+// TestTheRouteCarriesTheWinningAdvertisementsUpDownBit pins addRoute's merge
+// policy, which both the L1->L2 export (l1ExportSet) and route preference
+// (preferenceClass) read: RFC 5302 3.2 ranks the preference class before the
+// metric, so an advertisement with the bit clear wins over a leaked copy at any
+// metric, and the route carries the winner's bit rather than the worst one seen.
+func TestTheRouteCarriesTheWinningAdvertisementsUpDownBit(t *testing.T) {
 	p := netip.MustParsePrefix("10.1.0.0/24")
 	up := packet.SystemID{0, 0, 0, 0, 0, 2}
 	dn := packet.SystemID{0, 0, 0, 0, 0, 3}
+	l1 := func(metric uint32, down bool, hop packet.SystemID) route {
+		return route{metric: metric, level: packet.Level1, down: down, nextHops: []packet.SystemID{hop}}
+	}
 
 	for _, tc := range []struct {
 		name       string
 		first      route
 		second     route
+		wantDown   bool
 		wantMetric uint32
 		wantHops   int
 	}{
 		{
-			name:       "the down copy wins on metric",
-			first:      route{metric: 20, nextHops: []packet.SystemID{up}},
-			second:     route{metric: 10, down: true, nextHops: []packet.SystemID{dn}},
-			wantMetric: 10, wantHops: 1,
+			name:  "the leaked copy is shorter and still loses",
+			first: l1(20, false, up), second: l1(10, true, dn),
+			wantDown: false, wantMetric: 20, wantHops: 1,
 		},
 		{
-			name:       "the down copy loses on metric and still marks the route",
-			first:      route{metric: 10, nextHops: []packet.SystemID{up}},
-			second:     route{metric: 20, down: true, nextHops: []packet.SystemID{dn}},
-			wantMetric: 10, wantHops: 1,
+			name:  "the leaked copy is longer and loses",
+			first: l1(10, false, up), second: l1(20, true, dn),
+			wantDown: false, wantMetric: 10, wantHops: 1,
 		},
 		{
-			name:       "equal metrics merge first hops and the bit",
-			first:      route{metric: 10, nextHops: []packet.SystemID{up}},
-			second:     route{metric: 10, down: true, nextHops: []packet.SystemID{dn}},
-			wantMetric: 10, wantHops: 2,
+			// No ECMP across preference classes: forwarding half the traffic
+			// back toward Level 2 is exactly what the bit exists to prevent.
+			name:  "equal metrics do not merge first hops across classes",
+			first: l1(10, false, up), second: l1(10, true, dn),
+			wantDown: false, wantMetric: 10, wantHops: 1,
+		},
+		{
+			name:  "with no intra-area copy the route is down, and merges normally",
+			first: l1(10, true, up), second: l1(10, true, dn),
+			wantDown: true, wantMetric: 10, wantHops: 2,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -590,8 +597,8 @@ func TestRouteIsDownWhenAnyContributingAdvertisementWas(t *testing.T) {
 					addRoute(routes, p, r)
 				}
 				got := routes[p]
-				if !got.down {
-					t.Errorf("down = false, want true")
+				if got.down != tc.wantDown {
+					t.Errorf("down = %v, want %v", got.down, tc.wantDown)
 				}
 				if got.metric != tc.wantMetric {
 					t.Errorf("metric = %d, want %d", got.metric, tc.wantMetric)
