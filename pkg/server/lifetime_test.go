@@ -124,8 +124,9 @@ func TestExpirePurgeHeaderOnly(t *testing.T) {
 		t.Fatal("foreign LSP not installed")
 	}
 
-	// Age it past its 1000s lifetime, then run the aging pass.
-	e.inserted = now.Add(-1001 * time.Second)
+	// Age it past the lifetime it is stored with — the advertised 1000s is
+	// raised to MaxAge on receipt (RFC 7987) — then run the aging pass.
+	e.inserted = now.Add(-time.Duration(e.lifetime+1) * time.Second)
 	s.ageLSPs(now)
 
 	if e.purgedAt.IsZero() {
@@ -197,4 +198,152 @@ func TestProcessLSPEqualSeqDifferentChecksumPurges(t *testing.T) {
 	// originator's sequence number: the true originator, not us, re-originates
 	// above it.
 	assertHeaderOnlyPurge(t, e, foreign, 5, now)
+}
+
+// TestReceivedLSPBelowMaxAgeAgesFromMaxAge: the Remaining Lifetime field lies
+// outside the Fletcher checksum, so a value corrupted downward in flight is
+// undetectable. A received LSP carrying less than MaxAge is stored as MaxAge
+// and is not purged before MaxAge has passed here (RFC 7987 section 2, vi).
+func TestReceivedLSPBelowMaxAgeAgesFromMaxAge(t *testing.T) {
+	s, c := lifetimeServer(t)
+	now := time.Now()
+	foreign := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+	lsp := &packet.LSP{
+		Level: packet.Level2, RemainingTime: 30, LSPID: foreign, SequenceNumber: 7, ISType: 2,
+		TLVs: []packet.TLV{&packet.DynamicHostnameTLV{Hostname: "alpha"}},
+	}
+	raw, err := lsp.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, raw, lsp, now)
+
+	e := s.dbs[packet.Level2].get(foreign)
+	if e == nil {
+		t.Fatal("foreign LSP not installed")
+	}
+	if e.lifetime != maxAgeSeconds {
+		t.Errorf("stored lifetime = %d, want %d (the advertised 30s is floored)", e.lifetime, maxAgeSeconds)
+	}
+
+	// Long past the corrupted 30 seconds, far short of MaxAge: still live, so
+	// neither the purge nor the originator's re-origination storm happens.
+	later := now.Add(120 * time.Second)
+	s.ageLSPs(later)
+	if !e.purgedAt.IsZero() {
+		t.Error("LSP purged before it had been held for MaxAge")
+	}
+	if got := e.remaining(later); got != maxAgeSeconds-120 {
+		t.Errorf("remaining after 120s = %d, want %d", got, maxAgeSeconds-120)
+	}
+}
+
+// TestDuplicateLSPWithSmallerLifetimeKeepsStoredLifetime: a re-flooded copy of
+// an LSP we already hold differs only in its remaining lifetime, so it is
+// neither newer nor older (ISO 10589 7.3.16.2) and must not be installed —
+// otherwise a corrupt lifetime arriving on the second copy would undo the
+// RFC 7987 floor applied to the first.
+func TestDuplicateLSPWithSmallerLifetimeKeepsStoredLifetime(t *testing.T) {
+	s, c := lifetimeServer(t)
+	now := time.Now()
+	foreign := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+	tlvs := []packet.TLV{&packet.DynamicHostnameTLV{Hostname: "alpha"}}
+
+	first := &packet.LSP{Level: packet.Level2, RemainingTime: 1000, LSPID: foreign, SequenceNumber: 7, ISType: 2, TLVs: tlvs}
+	firstRaw, err := first.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, firstRaw, first, now)
+
+	// Same sequence number and same body — the checksum does not cover the
+	// remaining lifetime, so this is exactly what a corrupted duplicate looks
+	// like on the wire.
+	dup := &packet.LSP{Level: packet.Level2, RemainingTime: 5, LSPID: foreign, SequenceNumber: 7, ISType: 2, TLVs: tlvs}
+	dupRaw, err := dup.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(600 * time.Second)
+	s.processLSP(c, dupRaw, dup, later)
+
+	e := s.dbs[packet.Level2].get(foreign)
+	if e == nil {
+		t.Fatal("LSP no longer held")
+	}
+	if e.lifetime != maxAgeSeconds {
+		t.Errorf("stored lifetime = %d, want %d", e.lifetime, maxAgeSeconds)
+	}
+	if got := e.remaining(later); got != maxAgeSeconds-600 {
+		t.Errorf("remaining = %d, want %d (the duplicate must not restart aging either)", got, maxAgeSeconds-600)
+	}
+	s.ageLSPs(later)
+	if !e.purgedAt.IsZero() {
+		t.Error("LSP purged on a duplicate carrying a corrupt lifetime")
+	}
+}
+
+// TestReceivedLSPAboveMaxAgeKeepsAdvertisedLifetime: RFC 7987 raises a short
+// lifetime and never lowers a long one. The originator may run a larger MaxAge
+// than we do (RFC 7987 section 3.1) and a lifetime longer than intended is
+// harmless (section 1), so clamping down is what would purge that originator's
+// LSPs prematurely.
+func TestReceivedLSPAboveMaxAgeKeepsAdvertisedLifetime(t *testing.T) {
+	s, c := lifetimeServer(t)
+	now := time.Now()
+	foreign := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+	lsp := &packet.LSP{
+		Level: packet.Level2, RemainingTime: 2000, LSPID: foreign, SequenceNumber: 7, ISType: 2,
+		TLVs: []packet.TLV{&packet.DynamicHostnameTLV{Hostname: "alpha"}},
+	}
+	raw, err := lsp.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, raw, lsp, now)
+
+	e := s.dbs[packet.Level2].get(foreign)
+	if e == nil {
+		t.Fatal("foreign LSP not installed")
+	}
+	if e.lifetime != 2000 {
+		t.Errorf("stored lifetime = %d, want 2000 (a lifetime above MaxAge is kept as advertised)", e.lifetime)
+	}
+}
+
+// TestReceivedPurgeKeepsZeroLifetime: RFC 7987 changes nothing about purges —
+// an LSP received with a zero remaining lifetime is still newer than a live
+// copy at the same sequence number (ISO 10589 7.3.15.1 b), and the floor must
+// not turn it back into a live LSP for MaxAge.
+func TestReceivedPurgeKeepsZeroLifetime(t *testing.T) {
+	s, c := lifetimeServer(t)
+	now := time.Now()
+	foreign := lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0)
+	live := &packet.LSP{
+		Level: packet.Level2, RemainingTime: 1000, LSPID: foreign, SequenceNumber: 7, ISType: 2,
+		TLVs: []packet.TLV{&packet.DynamicHostnameTLV{Hostname: "alpha"}},
+	}
+	liveRaw, err := live.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, liveRaw, live, now)
+
+	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: foreign, SequenceNumber: 7, ISType: 2}
+	purgeRaw, err := purge.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.processLSP(c, purgeRaw, purge, now)
+
+	e := s.dbs[packet.Level2].get(foreign)
+	if e == nil {
+		t.Fatal("purge not installed")
+	}
+	if e.lifetime != 0 || e.remaining(now) != 0 {
+		t.Errorf("purge stored with lifetime %d (remaining %d), want 0", e.lifetime, e.remaining(now))
+	}
+	if e.purgedAt.IsZero() {
+		t.Error("purge not recorded as purged")
+	}
 }

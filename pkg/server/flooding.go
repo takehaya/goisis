@@ -173,7 +173,7 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		lsp:      lsp,
 		raw:      stored,
 		inserted: now,
-		lifetime: lsp.RemainingTime,
+		lifetime: receivedLifetime(lsp.RemainingTime),
 		purgedAt: purgedAt,
 	}
 	s.markDirty()
