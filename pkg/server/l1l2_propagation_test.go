@@ -225,3 +225,51 @@ func TestL1OnlyNodeDoesNotExport(t *testing.T) {
 		t.Errorf("l1Export = %v, want empty on a Level-1-only IS", s.l1Export)
 	}
 }
+
+// The export policy (WithAdvertiseFilter / policy.advertise) governs everything
+// this node originates into its LSP, the Level-1 prefixes it propagates upward
+// included: with the documented deny-by-default and an allowlist, only the
+// permitted Level-1 prefixes reach the Level-2 LSP.
+func TestAdvertiseFilterAppliesToTheL1ExportIntoTheL2LSP(t *testing.T) {
+	permitted := netip.MustParsePrefix("10.1.0.0/24")
+	denied := netip.MustParsePrefix("10.2.0.0/24")
+	deniedV6 := netip.MustParsePrefix("2001:db8:1::/64")
+	converge := func(s *IsisServer, now time.Time) {
+		injectB(s, now,
+			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+				{Prefix: permitted, Metric: 5},
+				{Prefix: denied, Metric: 5},
+			}},
+			&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{
+				{Prefix: deniedV6, Metric: 5},
+			}},
+		)
+		s.regenerateLSPs(false, now)
+		s.updateRIB(now)
+		s.drainLSPGen(now)
+	}
+	now := time.Now()
+
+	unfiltered := l1l2Server(t, true)
+	converge(unfiltered, now)
+	for _, p := range []netip.Prefix{permitted, denied, deniedV6} {
+		if _, ok := l2OwnReach(t, unfiltered)[p]; !ok {
+			t.Fatalf("a node without an export policy did not export %s; the topology under test is wrong", p)
+		}
+	}
+
+	filtered := l1l2Server(t, true, WithAdvertiseFilter(func(ap AdvertisedPrefix) bool {
+		return ap.Prefix == permitted // deny by default, one allowlist entry
+	}))
+	converge(filtered, now)
+	got := l2OwnReach(t, filtered)
+	// 10 (the circuit metric to B) + 5 (B's metric for the prefix).
+	if want := []uint32{15}; !slices.Equal(got[permitted], want) {
+		t.Errorf("L2 LSP metrics for the permitted %s = %v, want %v", permitted, got[permitted], want)
+	}
+	for _, p := range []netip.Prefix{denied, deniedV6} {
+		if m, ok := got[p]; ok {
+			t.Errorf("%s exported into the L2 LSP at metric %v despite the deny-by-default export policy", p, m)
+		}
+	}
+}

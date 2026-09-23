@@ -136,7 +136,7 @@ policy:
 
 | キー | 型 | 説明 |
 |-----|------|-------------|
-| `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。 |
+| `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。自身の prefix に加え、L1L2 ノードが Level-2 LSP へ伝搬する Level-1 prefix にも適用される。 |
 | `fib` | prefix-list | FIB ポリシー:フォワーディングプレーンに入れる経路。拒否分も RIB には残り `ListRoutes`/`WatchEvent` で見える。 |
 | `<list>.default` | string | `deny`(デフォルト)/ `permit`。どのルールにもマッチしないときに適用。 |
 | `<list>.rules[]` | list | 順序付き。最初のマッチが勝つ。各ルールは `permit:`/`deny:` の CIDR + 任意の `ge`/`le` 長範囲。 |
