@@ -214,7 +214,9 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisisd` serves Prometheus metrics at `/metrics`:
 `goisis_adjacency_transitions_total{circuit,level,state}`,
 `goisis_spf_duration_seconds{level}`, `goisis_lsdb_lsps{level}`,
-`goisis_flooding_lsp_tx_total{circuit}`, `goisis_fib_pending`,
+`goisis_flooding_lsp_tx_total{circuit}`,
+`goisis_flooding_lsp_drops_total{circuit,reason}` (reasons: `oversize`),
+`goisis_fib_pending`,
 `goisis_pdu_rx_total{circuit,type}`, `goisis_pdu_drops_total{circuit,reason}`
 (reasons: `decode`, `auth`, `no_adjacency`, `checksum`, `lsdb_limit`,
 `unknown_purge`, `own_sysid_purge`, `own_fragment_purge`, `own_lsp_reclaimed`,
@@ -232,4 +234,14 @@ steady rate means another node is originating LSPs in this node's name:
 ```
 rate(goisis_pdu_drops_total{reason!~"own_.*"}[5m]) > 0
 rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
+```
+
+An `oversize` flood drop is a neighbor whose database can never catch up: the
+LSP is larger than the circuit MTU and a transit node may not re-fragment a
+foreign LSP (ISO 10589 7.3.3), so it is requested by PSNP and dropped again on
+every retransmission. Any sustained rate means the originator must be told to
+use a smaller LSP MTU:
+
+```
+rate(goisis_flooding_lsp_drops_total[5m]) > 0
 ```

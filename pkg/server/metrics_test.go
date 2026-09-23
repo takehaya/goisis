@@ -30,6 +30,8 @@ func (m *countingMetrics) PDURx(circuit, pduType string)  { m.inc("pdu_rx", circ
 func (m *countingMetrics) PDUDrop(circuit, reason string) { m.inc("pdu_drop", circuit, reason) }
 func (m *countingMetrics) FIBError(op string)             { m.inc("fib_error", op) }
 
+func (m *countingMetrics) FloodDrop(circuit, reason string) { m.inc("flood_drop", circuit, reason) }
+
 func (m *countingMetrics) AdjacencyCount(circuit, level string, n int) {
 	m.set(n, "adjacencies", circuit, level)
 }

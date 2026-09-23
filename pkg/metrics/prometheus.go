@@ -17,6 +17,7 @@ type Prometheus struct {
 	spfDuration    *prometheus.HistogramVec
 	lsdbSize       *prometheus.GaugeVec
 	floodTx        *prometheus.CounterVec
+	floodDrops     *prometheus.CounterVec
 	fibPending     prometheus.Gauge
 	pduRx          *prometheus.CounterVec
 	pduDrops       *prometheus.CounterVec
@@ -48,6 +49,10 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_flooding_lsp_tx_total",
 			Help: "Count of LSPs transmitted during flooding.",
 		}, []string{"circuit"}),
+		floodDrops: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_flooding_lsp_drops_total",
+			Help: "Count of LSPs that could not be flooded on a circuit, by reason.",
+		}, []string{"circuit", "reason"}),
 		fibPending: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "goisis_fib_pending",
 			Help: "Number of routes whose last FIB write failed and are awaiting retry.",
@@ -77,8 +82,8 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Help: "Number of received frames waiting to be handled by the management loop.",
 		}),
 	}
-	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.fibPending,
-		p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue)
+	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
+		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue)
 	return p
 }
 
@@ -100,6 +105,11 @@ func (p *Prometheus) LSDBSize(level string, n int) {
 // FloodTx implements server.Metrics.
 func (p *Prometheus) FloodTx(circuit string) {
 	p.floodTx.WithLabelValues(circuit).Inc()
+}
+
+// FloodDrop implements server.Metrics.
+func (p *Prometheus) FloodDrop(circuit, reason string) {
+	p.floodDrops.WithLabelValues(circuit, reason).Inc()
 }
 
 // FIBPending implements server.Metrics.

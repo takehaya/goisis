@@ -51,7 +51,7 @@ type IsisServer struct {
 	lspGenPending bool                    // a protocol event asked for an own-LSP regeneration
 	nextLSPGen    time.Time               // earliest time drainLSPGen may honor that request
 	watchers      map[*watcher]struct{}   // WatchEvent subscribers
-	algoWarned    map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
+	algoWarned    edgeLog[algoKey]        // (level,algo) whose unsupported metric-type was logged
 	endXSIDs      map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 	seqWrapUntil  map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
 	endXNoNexthop map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
@@ -64,7 +64,9 @@ type IsisServer struct {
 	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
 	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
-	lsdbLimitWarned   map[packet.Level]bool     // levels whose entry-limit drop was already logged
+	lsdbLimitWarned   edgeLog[packet.Level]     // levels whose entry-limit drop was already logged
+	oversizeWarned    edgeLog[oversizeKey]      // (circuit,LSP) that does not fit the circuit MTU
+	dupSystemIDWarned edgeLog[string]           // circuits that heard a hello carrying our own System ID
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 
 	// What this node originates has exactly two owners: optionPrefixes, the
@@ -117,7 +119,6 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		fibPending:        map[netip.Prefix]bool{},
 		fibInstalled:      map[netip.Prefix]bool{},
 		watchers:          map[*watcher]struct{}{},
-		algoWarned:        map[algoKey]bool{},
 		endXSIDs:          map[endXKey]endXSID{},
 		seqWrapUntil:      map[lspKey]time.Time{},
 		endXNoNexthop:     map[endXAdjKey]bool{},
@@ -127,7 +128,6 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		advertiseFilter:   o.advertiseFilter,
 		fibFilter:         o.fibFilter,
 		lsdbEntryLimit:    o.lsdbEntryLimit,
-		lsdbLimitWarned:   map[packet.Level]bool{},
 		circuitPrefixes:   map[string][]netip.Prefix{},
 		optionPrefixes:    map[netip.Prefix]AdvertisedPrefix{},
 		optionConnected:   map[netip.Prefix]bool{},
@@ -429,7 +429,7 @@ const readerRetryDelay = time.Second
 // error is treated as transient and retried: returning would leave the
 // circuit sending hellos it can never hear an answer to until a restart.
 func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
-	warned := false
+	var warned edgeLog[string]
 	for {
 		frame, err := c.cfg.Transport.Recv()
 		if err != nil {
@@ -438,10 +438,9 @@ func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
 			}
 			// Warn once per outage, not once per retry: a link that stays
 			// down would otherwise fill the log for as long as it is down.
-			if !warned {
+			warned.warn(c.cfg.Name, func() {
 				s.logger.Warn("circuit receive error, retrying", "circuit", c.cfg.Name, "error", err)
-				warned = true
-			}
+			})
 			select {
 			case <-time.After(readerRetryDelay):
 			case <-ctx.Done():
@@ -449,7 +448,7 @@ func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
 			}
 			continue
 		}
-		warned = false
+		warned.clear(c.cfg.Name)
 		select {
 		case s.eventCh <- &rxEvent{circuit: c, frame: frame}:
 		case <-ctx.Done():

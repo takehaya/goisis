@@ -24,6 +24,11 @@ type Metrics interface {
 	LSDBSize(level string, n int)
 	// FloodTx records one LSP transmitted (flooded) on a circuit.
 	FloodTx(circuit string)
+	// FloodDrop records one LSP that could not be flooded on a circuit, with
+	// the reason: "oversize". Unlike a transient send error this is permanent
+	// for that LSP on that circuit — the neighbor keeps requesting it and its
+	// database stays short of it — so it is counted rather than only logged.
+	FloodDrop(circuit, reason string)
 	// FIBPending reports the number of routes whose last FIB write failed and
 	// are awaiting retry.
 	FIBPending(n int)
@@ -75,6 +80,11 @@ const (
 	dropOwnSeqWrap       = "own_seq_wrap"       // a copy of one of ours at the maximum sequence number (ISO 10589 7.3.16.1)
 )
 
+// Reasons reported through Metrics.FloodDrop.
+const (
+	floodDropOversize = "oversize" // larger than this circuit's MTU (ISO 10589 7.3.3)
+)
+
 // Operations reported through Metrics.FIBError.
 const (
 	fibOpUpdate    = "update"
@@ -98,6 +108,9 @@ func (NoopMetrics) LSDBSize(string, int) {}
 
 // FloodTx implements Metrics.
 func (NoopMetrics) FloodTx(string) {}
+
+// FloodDrop implements Metrics.
+func (NoopMetrics) FloodDrop(string, string) {}
 
 // FIBPending implements Metrics.
 func (NoopMetrics) FIBPending(int) {}

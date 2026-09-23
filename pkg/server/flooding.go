@@ -124,16 +124,15 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	// per attack PDU would turn the memory defense into log amplification on
 	// the management loop.
 	if ex == nil && s.lsdbEntryLimit > 0 && len(db.entries) >= s.lsdbEntryLimit {
-		if !s.lsdbLimitWarned[level] {
-			s.lsdbLimitWarned[level] = true
+		s.lsdbLimitWarned.warn(level, func() {
 			s.logger.Warn("drop LSP: database at entry limit; suppressing repeats",
 				"circuit", c.cfg.Name, "level", level, "lsp", id, "limit", s.lsdbEntryLimit)
-		}
+		})
 		s.metrics.PDUDrop(c.cfg.Name, dropLSDBLimit)
 		return
 	}
 	if ex == nil {
-		delete(s.lsdbLimitWarned, level) // headroom again: re-arm the warning
+		s.lsdbLimitWarned.clear(level) // headroom again: re-arm the warning
 	}
 
 	// An LSP carrying our own System ID is handled apart from foreign ones.
@@ -271,6 +270,15 @@ func (s *IsisServer) floodTransmit(now time.Time) {
 	}
 }
 
+// oversizeKey identifies one LSP that does not fit one circuit, used to warn
+// per (circuit, LSP ID): the same LSP may be oversize on a narrow circuit and
+// floodable on a wider one, and a second LSP must not inherit the first one's
+// suppression.
+type oversizeKey struct {
+	circuit string
+	id      packet.LSPID
+}
+
 // transmitSRM sends every LSP flagged for this circuit whose send time has
 // arrived. On a LAN the flag is cleared after one send (the DIS CSNP provides
 // reliability); on p2p it is rescheduled until a PSNP acknowledges it.
@@ -293,14 +301,16 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 		// foreign one is re-flooded from the octets we received and a transit
 		// node may not re-fragment it (ISO 10589 7.3.3). One that overruns this
 		// circuit can therefore never be sent here: drop the flag instead of
-		// retrying it every second forever, and log once per circuit so the
-		// repeat does not amplify into the management loop.
+		// retrying it every second forever. The neighbor goes on requesting it
+		// by PSNP and its database stays permanently short of it, so count every
+		// attempt; the log is keyed per (circuit, LSP ID) so a later, different
+		// oversize LSP is still reported.
 		if maxSize := c.cfg.Transport.MTU() - 3; len(wire) > maxSize { // 3 = LLC header
-			if !c.oversizeWarned {
-				c.oversizeWarned = true
+			s.oversizeWarned.warn(oversizeKey{circuit: c.cfg.Name, id: id}, func() {
 				s.logger.Warn("LSP exceeds the circuit MTU; not flooded here; suppressing repeats",
 					"circuit", c.cfg.Name, "lsp", id, "size", len(wire), "max", maxSize)
-			}
+			})
+			s.metrics.FloodDrop(c.cfg.Name, floodDropOversize)
 			c.clearSRM(level, id)
 			continue
 		}
@@ -309,6 +319,7 @@ func (s *IsisServer) transmitSRM(c *circuit, level packet.Level, now time.Time) 
 			continue
 		}
 		s.metrics.FloodTx(c.cfg.Name)
+		s.oversizeWarned.clear(oversizeKey{circuit: c.cfg.Name, id: id}) // it fits again: re-arm
 		if c.cfg.P2P {
 			c.srm[level][id] = now.Add(minLSPTransmissionInterval)
 		} else {

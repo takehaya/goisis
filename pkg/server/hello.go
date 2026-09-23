@@ -443,20 +443,20 @@ func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency, reason string) {
 	s.requestLSPRegen()
 }
 
-// helloFromSelf reports whether a hello carries our own system ID, warning
-// once per circuit. Such a hello means a duplicate system ID on the segment
-// (a misconfiguration or a cloned VM); forming an adjacency "to ourselves"
-// would corrupt DIS election and SPF, so the caller drops it without touching
-// adjacency state.
+// helloFromSelf reports whether a hello carries our own system ID. Such a
+// hello means a duplicate system ID on the segment (a misconfiguration or a
+// cloned VM); forming an adjacency "to ourselves" would corrupt DIS election
+// and SPF, so the caller drops it without touching adjacency state. Hellos
+// arrive every few seconds, so the warning is edge-triggered per circuit and
+// re-armed when the link returns (SetCircuitLinkState).
 func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
 	if src != s.systemID {
 		return false
 	}
-	if !c.dupSystemIDWarned {
-		c.dupSystemIDWarned = true
+	s.dupSystemIDWarned.warn(c.cfg.Name, func() {
 		s.logger.Warn("drop hello carrying our own system ID: duplicate system ID on the circuit; suppressing repeats",
 			"circuit", c.cfg.Name, "systemID", src)
-	}
+	})
 	return true
 }
 
