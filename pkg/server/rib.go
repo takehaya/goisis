@@ -219,24 +219,28 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 {
 			continue
 		}
-		m := min(r.metric, maxPathMetric-1)
-		if !s.l2LeakFilter(AdvertisedPrefix{Prefix: p, Metric: m}) {
+		// The metric is clamped where it goes on the wire, as the upward
+		// export's is (regenerateNodeLSP), not here: SPF drops a path that
+		// reaches the ceiling, so a route in this set is already below it and
+		// a clamp here could never fire.
+		if !s.l2LeakFilter(AdvertisedPrefix{Prefix: p, Metric: r.metric}) {
 			continue
 		}
 		if leak == nil {
 			leak = map[netip.Prefix]uint32{}
 		}
-		leak[p] = m
+		leak[p] = r.metric
 	}
 	return leak
 }
 
 // ownAdvertised returns the prefixes this node originates itself, at every
-// level it is enabled for. The two owners of "we originate this ourselves":
-// every circuit subnet originatedPrefixes derives is connected by definition,
-// so these two sets cover it without rebuilding the sorted advertisement list
-// here. Both inter-level transfers subtract it, so neither re-advertises a
-// prefix regenerateNodeLSP already carries.
+// level it is enabled for: the prefixes an option or AddPrefix named, the
+// subnets its circuits have connected, and its SRv6 locators. Every circuit
+// subnet originatedPrefixes derives is connected by definition, so these sets
+// cover the advertised list without rebuilding its sorted form here. Both
+// inter-level transfers subtract it, so neither re-advertises a prefix
+// regenerateNodeLSP already carries.
 func (s *IsisServer) ownAdvertised() map[netip.Prefix]bool {
 	own := map[netip.Prefix]bool{}
 	for p := range s.optionPrefixes {

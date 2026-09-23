@@ -276,10 +276,11 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	// the leak as well.
 	if level == packet.Level1 && s.levelCap.has(packet.Level2) {
 		for _, p := range slices.SortedFunc(maps.Keys(s.l2Leak), netip.Prefix.Compare) {
+			m := min(s.l2Leak[p], maxPathMetric-1)
 			if p.Addr().Is4() {
-				v4 = append(v4, packet.ExtendedIPReachEntry{Metric: s.l2Leak[p], Prefix: p, Down: true})
+				v4 = append(v4, packet.ExtendedIPReachEntry{Metric: m, Prefix: p, Down: true})
 			} else {
-				v6 = append(v6, packet.IPv6ReachEntry{Metric: s.l2Leak[p], Prefix: p, Down: true})
+				v6 = append(v6, packet.IPv6ReachEntry{Metric: m, Prefix: p, Down: true})
 			}
 		}
 	}

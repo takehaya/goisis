@@ -25,6 +25,11 @@
 | `flex-algo` | list | Flexible Algorithm 定義。下記参照。 |
 | `policy` | object | 広報・FIB 書き込み・L2→L1 リークを制御する prefix-list。[`policy`](#policy) を参照。 |
 
+再起動が要るもののうち、運用中に繰り返し触るのは `policy` です。prefix-list の
+変更はリロードでは反映されません。ランタイムで変えるには管理 API にフィルタの
+RPC が要りますが、現状ありません。
+
+
 > FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
 > goisis 同士で相互運用します。
 
@@ -192,7 +197,8 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `srv6.locators` | 反映。各 locator の End SID も追従します。 |
 | `flex-algo` | 反映。定義の変更は削除と再追加で行い、束ねられた locator も一度外して付け直します。 |
 | `circuits` | **要再起動**。増減には transport と受信ゴルーチンの生成・破棄が必要で、level・メトリック・タイマ・鍵の変更も同じ作り直しになります。インターフェイスのアドレスとキャリアは実時間で追従するので、どちらも不要です。 |
-| `net` / `hostname` | **要再起動**。System ID とエリアアドレスは、このノードが出した全 LSP の identity です。 |
+| `net` | **要再起動**。System ID とエリアアドレスは、このノードが出した全 LSP の identity です。 |
+| `hostname` | **要再起動**。自 LSP で広報するため、下にある System ID ごと作り直さずに名前だけ変えることはできません。 |
 | `area-*` / `domain-*` のパスワード・アルゴリズム・鍵 ID | **要再起動**。[鍵のローテーション](#鍵のローテーション)により、一斉切り替えではなくローリング再起動で済みます。 |
 | `fib` / `fib-table` / `lsp-mtu` / `lsdb-entry-limit` / `overload-on-startup` / `policy` | **要再起動**。 |
 
