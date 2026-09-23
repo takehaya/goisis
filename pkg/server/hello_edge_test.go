@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -174,4 +175,40 @@ func TestHelloWithOwnSystemIDIsIgnoredAndWarnedOnce(t *testing.T) {
 			s.processP2PHello(c, peer, p2pHelloEchoing(sys, area, sys, c.extCircID))
 		})
 	})
+}
+
+// TestLANHelloWithManyNeighborsSerializes is a regression for the LAN hello
+// that stopped being sent once a circuit had 43 neighbors: every SNPA went
+// into a single IS Neighbors TLV, whose value overflowed the 255-octet limit
+// and made Serialize fail, so the circuit fell silent until the neighbors
+// aged out. ISO 10589 8.4.5 lets a hello carry several IS Neighbors TLVs.
+func TestLANHelloWithManyNeighborsSerializes(t *testing.T) {
+	for _, n := range []int{43, 200} {
+		t.Run(fmt.Sprintf("%d_neighbors", n), func(t *testing.T) {
+			s, c := snpServer(t, false)
+			want := make([]packet.SNPA, n)
+			for i := range want {
+				want[i] = packet.SNPA{0x02, 0, 0, 0, byte(i / 256), byte(i % 256)}
+				id := packet.SystemID{0, 0, 0, 0, byte(i / 256), byte(i % 256)}
+				c.adjs[packet.Level2][id] = &adjacency{systemID: id, snpa: want[i], state: AdjUp}
+			}
+
+			wire, err := s.buildLANHello(c, packet.Level2).Serialize()
+			if err != nil {
+				t.Fatalf("serialize LAN hello with %d neighbors: %v", n, err)
+			}
+			if budget := c.cfg.Transport.MTU() - 3; len(wire) > budget {
+				t.Errorf("hello is %d octets, over the %d-octet MTU budget", len(wire), budget)
+			}
+			pdu, err := packet.DecodePDU(wire)
+			if err != nil {
+				t.Fatalf("decode hello: %v", err)
+			}
+			for _, snpa := range want {
+				if !snpaListed(pdu.(*packet.LANHello).TLVs, snpa) {
+					t.Fatalf("SNPA %s missing from the hello: the neighbor never completes the handshake", snpa)
+				}
+			}
+		})
+	}
 }
