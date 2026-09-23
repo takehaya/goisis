@@ -2,13 +2,17 @@ package main
 
 import (
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestParseAPIListen(t *testing.T) {
@@ -184,5 +188,112 @@ func TestNonLoopbackAPI(t *testing.T) {
 		if got := nonLoopbackAPI(tc.addr); got != tc.want {
 			t.Errorf("nonLoopbackAPI(%q) = %v, want %v", tc.addr, got, tc.want)
 		}
+	}
+}
+
+// syncBuffer is a log sink several of the daemon's goroutines write to at once.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// setupVeth creates a veth pair and returns the name of one end, so the daemon
+// under test has a real interface to open an AF_PACKET socket on. Same pattern,
+// and the same root requirement, as pkg/datalink's transport tests.
+func setupVeth(t *testing.T) string {
+	t.Helper()
+	a, b := "gisishup0", "gisishup1"
+	_ = exec.Command("ip", "link", "del", a).Run() // best-effort pre-clean
+	if out, err := exec.Command("ip", "link", "add", a, "type", "veth", "peer", "name", b).CombinedOutput(); err != nil {
+		t.Fatalf("create veth: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("ip", "link", "del", a).Run() })
+	for _, name := range []string{a, b} {
+		if out, err := exec.Command("ip", "link", "set", name, "up").CombinedOutput(); err != nil {
+			t.Fatalf("set %s up: %v: %s", name, err, out)
+		}
+	}
+	return a
+}
+
+// TestSIGHUPReloadsTheConfigurationFile pins the plumbing between the signal
+// and config.Reload, which everything below has tests of its own for and
+// nothing exercises end to end. SIGHUP's default disposition terminates a
+// process, so the handler is what keeps the daemon alive as much as what
+// re-reads the file: moved after an early return, or notified on the wrong
+// channel, the daemon would die of a reload request -- taking this test binary
+// with it -- and no other test would say so.
+func TestSIGHUPReloadsTheConfigurationFile(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root for AF_PACKET + veth; run: go test -exec sudo ./cmd/goisisd")
+	}
+	iface := setupVeth(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "goisisd.yaml")
+	write := func(prefix string) {
+		t.Helper()
+		cfg := "net: 49.0001.0000.0000.0001.00\nprefixes:\n  - " + prefix + "\ncircuits:\n  - interface: " + iface + "\n"
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("192.0.2.0/24")
+
+	logs := &syncBuffer{}
+	exited := make(chan error, 1)
+	go func() {
+		exited <- run(slog.New(slog.NewTextHandler(logs, nil)), "unix://"+filepath.Join(dir, "goisisd.sock"), false, path)
+	}()
+	waitForLog := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if strings.Contains(logs.String(), what) {
+				return
+			}
+			select {
+			case err := <-exited:
+				t.Fatalf("goisisd exited before logging %q: %v\n%s", what, err, logs.String())
+			default:
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %q in the log:\n%s", what, logs.String())
+	}
+
+	// The management loop is started after signal.Notify, so this is the first
+	// point at which SIGHUP is safe to send: before it, the default disposition
+	// would take the test process down with the daemon.
+	waitForLog("goisis server started")
+
+	write("198.51.100.0/24")
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("SIGHUP: %v", err)
+	}
+	waitForLog("configuration reloaded")
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("SIGTERM: %v", err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("goisisd did not exit on SIGTERM:\n%s", logs.String())
 	}
 }
