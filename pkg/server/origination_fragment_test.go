@@ -104,6 +104,7 @@ func TestSPFAggregatesAcrossFragments(t *testing.T) {
 	inFrag1 := netip.MustParsePrefix("10.2.0.0/24")
 
 	put := func(sysID packet.SystemID, frag uint8, tlvs []packet.TLV) {
+		seedImpliedAdjacencies(s, packet.Level2, nodeID(sysID, 0), tlvs)
 		id := lspIDFrag(sysID, 0, frag)
 		s.dbs[packet.Level2].entries[id] = &lspEntry{
 			lsp:      &packet.LSP{Level: packet.Level2, RemainingTime: maxAgeSeconds, LSPID: id, SequenceNumber: 1, ISType: 2, TLVs: tlvs},
