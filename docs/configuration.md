@@ -20,7 +20,7 @@ options. ([日本語](configuration.ja.md))
 | `area-key-id` | uint16 | RFC 5310 key ID (SHA only). |
 | `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | The same, for Level-2. |
 | `circuits` | list (required) | Interfaces to run IS-IS on; see below. |
-| `prefixes` | list | Extra prefixes to originate, each a bare CIDR (`10.1.1.1/32`, metric 10) or a mapping `{prefix: 10.1.1.1/32, metric: 20}`. Connected subnets of the circuits are advertised automatically. |
+| `prefixes` | list | Extra prefixes to originate, each a bare CIDR (`10.1.1.1/32`, metric 10) or a mapping `{prefix: 10.1.1.1/32, metric: 20}`. Connected subnets of the circuits are advertised automatically; naming one here does not advertise it twice, it only sets the metric it is advertised at. |
 | `srv6` | object | SRv6 locators; see below. |
 | `flex-algo` | list | Flexible Algorithm definitions; see below. |
 | `policy` | object | Prefix-lists gating origination and FIB programming; see [`policy`](#policy). |
@@ -177,6 +177,10 @@ $ goisis prefix add 10.9.9.0/24 --metric 10   # and: goisis prefix delete 10.9.9
 $ goisis overload on                          # maintenance; "off" clears it
 $ goisis neighbor clear --interface eth0      # add --system-id for one neighbor
 ```
+
+`prefix delete` only withdraws what `prefixes` or `prefix add` originates. An
+interface's connected subnet is refused, naming the interface it is connected
+on: remove the address, or suppress it with `policy.advertise`.
 
 ## Metrics
 

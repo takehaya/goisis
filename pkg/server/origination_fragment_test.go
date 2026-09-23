@@ -152,7 +152,8 @@ func TestOriginationPurgesStaleFragments(t *testing.T) {
 	}
 
 	// Drop to a single prefix and re-originate.
-	s.prefixes = []AdvertisedPrefix{{Prefix: netip.MustParsePrefix("10.0.0.1/32"), Metric: 10}}
+	one := netip.MustParsePrefix("10.0.0.1/32")
+	s.optionPrefixes = map[netip.Prefix]AdvertisedPrefix{one: {Prefix: one, Metric: 10}}
 	s.regenerateNodeLSP(packet.Level2, false, now)
 
 	after := ownFragments(s)

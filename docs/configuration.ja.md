@@ -20,7 +20,7 @@
 | `area-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
 | `domain-password` / `domain-accept-passwords` / `domain-auth-algorithm` / `domain-key-id` | | Level-2 用に同じ。 |
 | `circuits` | list(必須) | IS-IS を動かすインターフェース。下記参照。 |
-| `prefixes` | list | 追加で広報する prefix。各要素は CIDR 文字列(`10.1.1.1/32`、メトリック 10)か、マッピング `{prefix: 10.1.1.1/32, metric: 20}`。サーキットの接続サブネットは自動で広報される。 |
+| `prefixes` | list | 追加で広報する prefix。各要素は CIDR 文字列(`10.1.1.1/32`、メトリック 10)か、マッピング `{prefix: 10.1.1.1/32, metric: 20}`。サーキットの接続サブネットは自動で広報される。同じサブネットをここに書いても二重広報にはならず、広報時のメトリックだけが決まる。 |
 | `srv6` | object | SRv6 locator。下記参照。 |
 | `flex-algo` | list | Flexible Algorithm 定義。下記参照。 |
 | `policy` | object | 広報と FIB 書き込みを制御する prefix-list。[`policy`](#policy) を参照。 |
@@ -173,6 +173,10 @@ $ goisis prefix add 10.9.9.0/24 --metric 10   # 削除は goisis prefix delete 1
 $ goisis overload on                          # 保守用。"off" で解除
 $ goisis neighbor clear --interface eth0      # --system-id で 1 隣接のみ
 ```
+
+`prefix delete` が取り下げられるのは `prefixes` か `prefix add` が広報している
+ものだけです。インターフェイスの接続サブネットは、どのインターフェイスで直結して
+いるかを示して拒否されます。アドレスを外すか `policy.advertise` で抑止してください。
 
 ## メトリクス
 

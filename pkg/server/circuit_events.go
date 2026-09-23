@@ -24,17 +24,13 @@ func (s *IsisServer) SetCircuitAddresses(ctx context.Context, name string, v4, v
 		if c == nil {
 			return fmt.Errorf("goisis: unknown circuit %q", name)
 		}
-		masked := make([]netip.Prefix, 0, len(connected))
-		for _, p := range connected {
-			masked = append(masked, p.Masked())
-		}
+		masked := maskedSet(connected)
 		if slices.Equal(c.cfg.IPv4Addrs, v4) && slices.Equal(c.cfg.IPv6Addrs, v6) &&
 			slices.Equal(s.circuitPrefixes[name], masked) {
 			return nil
 		}
 		c.cfg.IPv4Addrs, c.cfg.IPv6Addrs = v4, v6
-		s.removeCircuitPrefixes(name)
-		s.addCircuitPrefixes(name, c.cfg.Metric, masked)
+		s.setCircuitPrefixes(name, masked)
 
 		now := time.Now()
 		s.sendHellos(c, now)
@@ -80,47 +76,38 @@ func (s *IsisServer) circuitNamed(name string) *circuit {
 	return nil
 }
 
-// addCircuitPrefixes originates a circuit's connected subnets at its metric and
-// records them against the circuit. A prefix another origin already advertises
-// is recorded but not advertised twice.
-func (s *IsisServer) addCircuitPrefixes(name string, metric uint32, prefixes []netip.Prefix) {
+// maskedSet returns prefixes in masked form — the key the RIB, the FIB and the
+// sweep agree on — keeping the given order and dropping repeats (the same
+// subnet listed twice on one circuit).
+func maskedSet(prefixes []netip.Prefix) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(prefixes))
 	for _, p := range prefixes {
-		p = p.Masked()
-		if slices.Contains(s.circuitPrefixes[name], p) {
-			continue // the same subnet listed twice on one circuit
+		if p = p.Masked(); !slices.Contains(out, p) {
+			out = append(out, p)
 		}
-		if !s.prefixContributed(p, name) {
-			s.prefixes = append(s.prefixes, AdvertisedPrefix{Prefix: p, Metric: metric})
+	}
+	return out
+}
+
+// setCircuitPrefixes replaces the connected subnets recorded against a circuit
+// (already masked) and rebuilds the directly-connected set from every circuit
+// plus the option set. A subnet is connected because a circuit or an option has
+// it, never because of who advertises it: what goes into the LSP is derived
+// separately (originatedPrefixes), so an advertisement can neither withdraw
+// another owner's prefix nor take the never-install guard with it.
+func (s *IsisServer) setCircuitPrefixes(name string, masked []netip.Prefix) {
+	if len(masked) == 0 {
+		delete(s.circuitPrefixes, name)
+	} else {
+		s.circuitPrefixes[name] = masked
+	}
+	s.connected = make(map[netip.Prefix]bool, len(s.connected))
+	for p := range s.optionConnected {
+		s.connected[p] = true
+	}
+	for _, ps := range s.circuitPrefixes {
+		for _, p := range ps {
 			s.connected[p] = true
 		}
-		s.circuitPrefixes[name] = append(s.circuitPrefixes[name], p)
 	}
-}
-
-// removeCircuitPrefixes withdraws the connected subnets recorded against a
-// circuit, keeping the ones another circuit or an option still contributes.
-func (s *IsisServer) removeCircuitPrefixes(name string) {
-	old := s.circuitPrefixes[name]
-	delete(s.circuitPrefixes, name)
-	for _, p := range old {
-		if s.prefixContributed(p, name) {
-			continue
-		}
-		delete(s.connected, p)
-		s.prefixes = slices.DeleteFunc(s.prefixes, func(a AdvertisedPrefix) bool { return a.Prefix == p })
-	}
-}
-
-// prefixContributed reports whether an option or a circuit other than except
-// still wants the prefix originated.
-func (s *IsisServer) prefixContributed(p netip.Prefix, except string) bool {
-	if s.optionPrefixes[p] {
-		return true
-	}
-	for name, ps := range s.circuitPrefixes {
-		if name != except && slices.Contains(ps, p) {
-			return true
-		}
-	}
-	return false
 }
