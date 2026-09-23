@@ -95,7 +95,8 @@ for neighbor` once for that adjacency. An interface with only link-locals on it
 is therefore the one case where a link carries no End.X SIDs.
 
 A locator bound to a Flexible Algorithm is configured under `flex-algo` instead
-(see `locator` below), not here — `srv6.locators` are algorithm-0 locators.
+(see `locator` below), not here — `srv6.locators` are algorithm-0 locators. Its
+End.X SIDs are restricted further: see `flex-algo[].locator`.
 
 ## `flex-algo[]`
 
@@ -119,6 +120,15 @@ flex-algo:
 A node participates in every listed algorithm (advertised in the SR-Algorithm
 sub-TLV, 19). A locator bound to an algorithm the node does not participate in
 is rejected at startup, since it would be unreachable.
+
+An End.X SID carries the algorithm of the locator it comes from (RFC 9352
+§8.1), so a locator bound to an algorithm hands one out only towards a
+neighbour that advertises **that same algorithm** in its own SR-Algorithm
+sub-TLV — the participation that decides whether SPF keeps the neighbour in the
+algorithm's topology. A neighbour outside the algorithm keeps its algorithm-0
+End.X SIDs and gets none from the Flex-Algo locator; the SID appears (and is
+released again) as the neighbour's fragment-0 LSP starts and stops listing the
+algorithm.
 
 ## `policy`
 

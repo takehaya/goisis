@@ -64,8 +64,9 @@ All take a `context.Context` and return typed snapshots:
 `ListLSDBDetail` renders them, which for a large database costs far more than
 the rest of the snapshot. Each `LocatorInfo` carries the locator's End
 SID and its `EndXSIDs` — one End.X SID per Up adjacency that has a global
-on-link neighbor address, with that neighbor's System ID and the circuit it
-sits on.
+on-link neighbor address and, for a locator bound to a Flexible Algorithm,
+participates in that algorithm; each carries the neighbor's System ID and the
+circuit it sits on.
 
 ## Route policy
 

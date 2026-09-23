@@ -375,7 +375,8 @@ func WithSRv6Locator(prefix netip.Prefix) ServerOption {
 
 // WithSRv6LocatorForAlgo advertises an SRv6 locator bound to a Flexible
 // Algorithm (algo 128-255). Unlike a plain locator it is not mirrored into IPv6
-// reachability, and its route is computed over the algorithm's pruned topology.
+// reachability, its route is computed over the algorithm's pruned topology, and
+// its End.X SIDs go only to adjacencies that participate in the algorithm.
 func WithSRv6LocatorForAlgo(prefix netip.Prefix, algo uint8) ServerOption {
 	return func(o *options) { o.locators = append(o.locators, SRv6LocatorConfig{Prefix: prefix, Algo: algo}) }
 }

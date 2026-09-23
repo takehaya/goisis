@@ -30,7 +30,7 @@ func (s *IsisServer) isType() uint8 {
 func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 	// Reconcile the adjacency-scoped SRv6 SIDs first, so the TLV 22 entries
 	// built below advertise the set that is (being) programmed.
-	s.syncEndXSIDs()
+	s.syncEndXSIDs(now)
 	for _, l := range s.levelCap.levels() {
 		s.regenerateNodeLSP(l, forceRefresh, now)
 		s.regeneratePseudonodeLSPs(l, forceRefresh, now)

@@ -158,10 +158,13 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	}
 	s.markDirty()
 
-	// A neighbor's fragment 0 carries its interface addresses (TLV 232), which
-	// is where a peer that lists only link-locals in its hellos (FRR, per RFC
-	// 5308 3) publishes the global on-link address an End.X SID towards it
-	// needs. Re-originate so the SID appears once that fragment arrives.
+	// A neighbor's fragment 0 carries the state our End.X SIDs towards it are
+	// derived from: its interface addresses (TLV 232), where a peer that lists
+	// only link-locals in its hellos (FRR, per RFC 5308 3) publishes the global
+	// on-link address a SID needs as its next hop, and its SR-Algorithm
+	// participation (TLV 242), which decides whether a Flex-Algo locator may
+	// hand it one at all (endXParticipates). Both arrive after the adjacency,
+	// so re-originate to reconcile once that fragment lands.
 	if id.FragmentID() == 0 && id.IsNodeLSP() {
 		if adj, _ := s.findAdjacency(id.NodeID().SystemID()); adj != nil {
 			s.requestLSPRegen()

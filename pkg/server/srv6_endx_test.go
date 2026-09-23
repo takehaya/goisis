@@ -341,12 +341,13 @@ func TestEndXUsesGlobalOnLinkNexthopAndWithholdsWithoutOne(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs syncBuf
+			now := time.Now()
 			s, rf := endXServer(t, &logs, tc.hello)
 			if tc.lsp != nil {
-				injectLSP(s, endXNeighbor, []packet.TLV{&packet.IPv6InterfaceAddressesTLV{Addresses: tc.lsp}}, time.Now())
+				injectLSP(s, endXNeighbor, []packet.TLV{&packet.IPv6InterfaceAddressesTLV{Addresses: tc.lsp}}, now)
 			}
-			s.syncEndXSIDs()
-			s.syncEndXSIDs() // idempotent, and the warning is edge-triggered
+			s.syncEndXSIDs(now)
+			s.syncEndXSIDs(now) // idempotent, and the warning is edge-triggered
 
 			subs := s.endXSubTLVs(s.circuits[0], s.circuits[0].p2pAdj)
 			entry, programmed := rf.getSID(sid)
@@ -451,7 +452,7 @@ func TestEndXFollowsNeighborFragmentZeroLSP(t *testing.T) {
 	s, rf := endXServer(t, &logs, []netip.Addr{netip.MustParseAddr("fe80::b2")})
 	c := s.circuits[0]
 	now := time.Now()
-	s.syncEndXSIDs() // settles with no next hop and nothing advertised
+	s.syncEndXSIDs(now) // settles with no next hop and nothing advertised
 	s.lspGenPending = false
 
 	lsp := func(id packet.SystemID, tlvs ...packet.TLV) (*packet.LSP, []byte) {
@@ -578,7 +579,7 @@ func TestEndXFIBFailureIsCountedAndRepairedByHousekeeping(t *testing.T) {
 	s.circuits[0].p2pAdj.holding, s.circuits[0].p2pAdj.lastHeard = 30, now
 
 	rf.failSID(sid, true, false)
-	s.syncEndXSIDs()
+	s.syncEndXSIDs(now)
 	installErrors := m.count("fib_error", fibOpAddSID)
 	if installErrors == 0 {
 		t.Fatal("a failed End.X SID install was not counted as a FIB error")
@@ -607,7 +608,7 @@ func TestEndXFIBFailureIsCountedAndRepairedByHousekeeping(t *testing.T) {
 	// out of the kernel.
 	rf.failSID(sid, false, true)
 	s.circuits[0].p2pAdj = nil
-	s.syncEndXSIDs()
+	s.syncEndXSIDs(now)
 	if n := m.count("fib_error", fibOpRemoveSID); n != 1 {
 		t.Errorf("remove_sid FIB errors = %d, want 1", n)
 	}
@@ -621,5 +622,68 @@ func TestEndXFIBFailureIsCountedAndRepairedByHousekeeping(t *testing.T) {
 	}
 	if s.sidPending[sid] {
 		t.Error("a removal that succeeded on retry is still pending")
+	}
+}
+
+// TestFlexAlgoLocatorAllocatesEndXOnlyTowardParticipants: an End.X SID carries
+// its locator's algorithm (RFC 9352 §8.1), so a Flex-Algo locator hands one out
+// only towards a neighbor that advertises the algorithm — the participation SPF
+// prunes the topology on. The algorithm-0 locator has nothing to check and
+// always gets one; the Flex-Algo SID appears once the neighbor's fragment 0
+// lists the algorithm and is released again when it stops.
+func TestFlexAlgoLocatorAllocatesEndXOnlyTowardParticipants(t *testing.T) {
+	var logs syncBuf
+	onLink := netip.MustParseAddr("2001:db8::2")
+	s, rf := endXServer(t, &logs, []netip.Addr{netip.MustParseAddr("fe80::b2"), onLink},
+		WithFlexAlgo(FlexAlgoConfig{Algo: 128}),
+		WithSRv6LocatorForAlgo(netip.MustParsePrefix("fc00:0:128::/48"), 128))
+	now := time.Now()
+
+	algo0SID := netip.MustParseAddr("fc00:0:1:1::")
+	algo128SID := netip.MustParseAddr("fc00:0:128:1::")
+
+	srAlgo := func(algos ...uint8) packet.TLV {
+		return &packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{&packet.SRAlgorithmSubTLV{Algorithms: algos}}}
+	}
+	advertised := func() []netip.Addr {
+		var out []netip.Addr
+		for _, sub := range s.endXSubTLVs(s.circuits[0], s.circuits[0].p2pAdj) {
+			e := sub.(*packet.SRv6EndXSIDSubTLV)
+			if e.SID == algo128SID && e.Algorithm != 128 {
+				t.Errorf("End.X SID %s advertised for algorithm %d, want 128", e.SID, e.Algorithm)
+			}
+			out = append(out, e.SID)
+		}
+		return out
+	}
+
+	// The neighbor participates in algorithm 0 only.
+	injectLSP(s, endXNeighbor, []packet.TLV{srAlgo(0)}, now)
+	s.syncEndXSIDs(now)
+	if got := advertised(); !slices.Equal(got, []netip.Addr{algo0SID}) {
+		t.Errorf("End.X SIDs towards a non-participant = %v, want only %s", got, algo0SID)
+	}
+	if _, ok := rf.getSID(algo128SID); ok {
+		t.Errorf("programmed algo-128 End.X SID %s towards a neighbor outside the algorithm", algo128SID)
+	}
+
+	// It starts advertising algorithm 128: the Flex-Algo locator hands out a SID.
+	injectLSP(s, endXNeighbor, []packet.TLV{srAlgo(0, 128)}, now)
+	s.syncEndXSIDs(now)
+	if got := advertised(); !slices.Equal(got, []netip.Addr{algo0SID, algo128SID}) {
+		t.Errorf("End.X SIDs towards a participant = %v, want %s and %s", got, algo0SID, algo128SID)
+	}
+	if e, ok := rf.getSID(algo128SID); !ok || e.Nexthop != onLink || e.Interface != "a" {
+		t.Errorf("programmed algo-128 End.X SID = %+v (present %v), want next hop %s on a", e, ok, onLink)
+	}
+
+	// And stops again: the SID is withdrawn and released from the FIB.
+	injectLSP(s, endXNeighbor, []packet.TLV{srAlgo(0)}, now)
+	s.syncEndXSIDs(now)
+	if got := advertised(); !slices.Equal(got, []netip.Addr{algo0SID}) {
+		t.Errorf("End.X SIDs after the neighbor left the algorithm = %v, want only %s", got, algo0SID)
+	}
+	if _, ok := rf.getSID(algo128SID); ok {
+		t.Errorf("algo-128 End.X SID %s survived the neighbor leaving the algorithm", algo128SID)
 	}
 }

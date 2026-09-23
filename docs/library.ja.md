@@ -63,8 +63,9 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 `ListLocators` / `ListFlexAlgos`。`ListLSDB` は `LSPInfo.TLVs` を空のままにします。
 描画するのは `ListLSDBDetail` で、大規模な LSDB ではスナップショット本体より
 はるかに高くつきます。`LocatorInfo` は locator の End SID に加えて
-`EndXSIDs` を持ちます — グローバルな on-link アドレスを持つ Up の隣接ごとに 1 つの
-End.X SID で、その隣接のシステム ID と、隣接が乗っているサーキットが付きます。
+`EndXSIDs` を持ちます — グローバルな on-link アドレスを持ち、Flexible Algorithm に
+紐づく locator ならそのアルゴリズムにも参加している Up の隣接ごとに 1 つの End.X SID
+で、その隣接のシステム ID と、隣接が乗っているサーキットが付きます。
 
 ## 経路ポリシー
 
