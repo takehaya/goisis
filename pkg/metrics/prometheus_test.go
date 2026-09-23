@@ -24,6 +24,9 @@ func TestPrometheusRecords(t *testing.T) {
 	m.EventQueueDepth(7)
 	m.PDUTxError("eth0", "send")
 	m.PDURxError("eth0")
+	m.ConfigReload("partial")
+	m.LSPLifetimeFloored("eth0")
+	m.InterLevelPrefixes("l2_to_l1", 3)
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -48,6 +51,9 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_event_queue_depth",
 		"goisis_pdu_tx_errors_total",
 		"goisis_pdu_rx_errors_total",
+		"goisis_config_reloads_total",
+		"goisis_lsp_lifetime_floored_total",
+		"goisis_inter_level_prefixes",
 	} {
 		if !got[want] {
 			t.Errorf("metric %q not registered/emitted", want)
@@ -87,6 +93,9 @@ func TestPrometheusRecords(t *testing.T) {
 		{"goisis_event_queue_depth", 7},
 		{"goisis_pdu_tx_errors_total", 1},
 		{"goisis_pdu_rx_errors_total", 1},
+		{"goisis_config_reloads_total", 1},
+		{"goisis_lsp_lifetime_floored_total", 1},
+		{"goisis_inter_level_prefixes", 3},
 	} {
 		if v, ok := singleValue(tc.name); !ok || v != tc.want {
 			t.Errorf("%s = %v (single series %v), want %v", tc.name, v, ok, tc.want)

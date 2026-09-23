@@ -209,10 +209,9 @@ routes yourself — see [`examples/watchroutes`](../examples/watchroutes)).
 
 ## Custom metrics
 
-Implement `server.Metrics` (`AdjacencyTransition`, `SPFRun`, `LSDBSize`,
-`FloodTx`, `FIBPending`, `PDURx`, `PDUDrop`, `AdjacencyCount`, `RouteCount`,
-`FIBError`, `EventQueueDepth`) to feed your telemetry pipeline, or use the
-Prometheus adapter:
+Implement `server.Metrics` to feed your telemetry pipeline, or use the
+Prometheus adapter. Embed `server.NoopMetrics` and override only the events you
+care about, so a method added to the interface later does not break your build:
 
 ```go
 import "github.com/takehaya/goisis/pkg/metrics"

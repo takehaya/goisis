@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/takehaya/goisis/pkg/datalink"
@@ -377,5 +378,116 @@ circuits:
 	}
 	if !reflect.DeepEqual(again, want) {
 		t.Errorf("the next SIGHUP diffs\n got %+v\nwant %+v: the refused change is no longer retried", again, want)
+	}
+}
+
+// reloadMetrics records the outcomes the server reported. It embeds
+// server.NoopMetrics so only the method under test needs an implementation,
+// and guards its map because the report is made on the management goroutine
+// while the test reads it from its own.
+type reloadMetrics struct {
+	server.NoopMetrics
+	mu       sync.Mutex
+	outcomes map[string]int
+}
+
+func (m *reloadMetrics) ConfigReload(outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.outcomes == nil {
+		m.outcomes = map[string]int{}
+	}
+	m.outcomes[outcome]++
+}
+
+func (m *reloadMetrics) count(outcome string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.outcomes[outcome]
+}
+
+// TestReloadReportsEveryOutcome pins the three states an operator has to be
+// able to tell apart without reading the log. "Applied" is the file running.
+// "Refused" left the node exactly as it was, so the running configuration is
+// still a configuration someone wrote. "Partial" is the one that matters: the
+// node is in neither, and no further signal repairs it by itself.
+//
+// Reload runs on the daemon's own goroutine, so this also pins that the report
+// reaches the sink at all: Metrics is called only from the management
+// goroutine, and a report made anywhere else would be a data race rather than
+// a count.
+func TestReloadReportsEveryOutcome(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+srv6:
+  locators:
+    - fc00:0:1::/48
+flex-algo:
+  - algo: 128
+    priority: 100
+    locator: fc00:128:1::/48
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(initial)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	m := &reloadMetrics{}
+	s, err := server.NewIsisServer(append(opts, server.WithMetrics(m))...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	ctx := t.Context()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+
+	// A difference the runtime API expresses, and nothing else.
+	write(strings.Replace(initial, "192.0.2.0/24", "198.51.100.0/24", 1))
+	if _, err := Reload(ctx, s, cfg, path, logger); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got := m.count("applied"); got != 1 {
+		t.Errorf("applied reloads = %d, want 1", got)
+	}
+
+	// A file a restart would refuse: validated before the first call goes out,
+	// so nothing changed.
+	write(strings.Replace(initial, "net: 49.0001.1921.6800.1001.00", "net: 49.0001.1921.6800.1001", 1))
+	if _, err := Reload(ctx, s, cfg, path, logger); err == nil {
+		t.Fatal("Reload accepted a file a restart would refuse")
+	}
+	if got := m.count("refused"); got != 1 {
+		t.Errorf("refused reloads = %d, want 1", got)
+	}
+
+	// A reserved algorithm number: Diff turns the edit into withdraw-then-
+	// re-add, the withdrawals land and the additions are refused.
+	write(strings.NewReplacer("priority: 100", "priority: 200", "- algo: 128", "- algo: 100").Replace(initial))
+	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want an ErrPartiallyApplied", err)
+	}
+	if got := m.count("partial"); got != 1 {
+		t.Errorf("partially applied reloads = %d, want 1", got)
+	}
+	if got := m.count("applied"); got != 1 {
+		t.Errorf("applied reloads = %d after a refusal, want the first one only", got)
 	}
 }

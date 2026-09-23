@@ -157,6 +157,11 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		s.l2Leak = leak
 		s.lspGenPending = true
 	}
+	// Reported on every recompute for the same reason RouteCount is: a node
+	// that stops leaking or exporting has to report 0 rather than leave its
+	// last count behind.
+	s.metrics.InterLevelPrefixes(dirL2ToL1, len(s.l2Leak))
+	s.metrics.InterLevelPrefixes(dirL1ToL2, len(s.l1Export))
 }
 
 // l1ExportSet returns the Level-1 prefixes this IS propagates upward into its

@@ -610,3 +610,43 @@ func TestBothBordersKeepExportingAnIntraAreaPrefixASiblingLeaks(t *testing.T) {
 		t.Errorf("the intra-area %s was leaked back into its own area as %v", intraV4, e)
 	}
 }
+
+// TestInterLevelPrefixCountsAreReportedOnEveryRecompute covers what this node
+// injects across the level boundary in both directions. The RIB gauge counts
+// what the node learned; these count what it originates because of the level
+// boundary, which is the number a leak policy edit moves. They are reported on
+// every recompute, not only when the set changes, so a node that stops leaking
+// reports 0 instead of leaving its last count behind.
+func TestInterLevelPrefixCountsAreReportedOnEveryRecompute(t *testing.T) {
+	areaV4 := netip.MustParsePrefix("10.1.0.0/24")
+	permitted := PrefixList{Rules: []PrefixRule{{Action: Permit, Prefix: leakV4}}}
+	m := newCountingMetrics()
+	s := l1l2Server(t, true, WithL2LeakFilter(permitted.AdvertiseFilter()), WithMetrics(m))
+	now := time.Now()
+	injectB(s, now, &packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{{Prefix: areaV4, Metric: 5}},
+	})
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{
+			{Prefix: leakV4, Metric: 5},
+			{Prefix: leakDeniedV4, Metric: 5},
+		},
+	})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+
+	if n, ok := m.gauge("inter_level_prefixes", "l2_to_l1"); !ok || n != 1 {
+		t.Errorf("leaked into Level 1 = %d (reported %v), want 1: only %s is permitted", n, ok, leakV4)
+	}
+	if n, ok := m.gauge("inter_level_prefixes", "l1_to_l2"); !ok || n != 1 {
+		t.Errorf("exported into Level 2 = %d (reported %v), want 1: %s is the area's own", n, ok, areaV4)
+	}
+
+	// The Level-2 topology goes away: the leak set empties, and the gauge has
+	// to follow it down rather than stay at its last value.
+	delete(s.dbs[packet.Level2].entries, lspID(l1l2PeerB, 0))
+	s.updateRIB(now)
+	if n, _ := m.gauge("inter_level_prefixes", "l2_to_l1"); n != 0 {
+		t.Errorf("leaked into Level 1 = %d after the Level-2 route went away, want 0", n)
+	}
+}

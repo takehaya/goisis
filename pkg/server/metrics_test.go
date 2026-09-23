@@ -38,6 +38,12 @@ func (m *countingMetrics) PDURxError(circuit string)         { m.inc("pdu_rx_err
 
 func (m *countingMetrics) FloodDrop(circuit, reason string) { m.inc("flood_drop", circuit, reason) }
 
+func (m *countingMetrics) LSPLifetimeFloored(circuit string) { m.inc("lsp_lifetime_floored", circuit) }
+
+func (m *countingMetrics) InterLevelPrefixes(direction string, n int) {
+	m.set(n, "inter_level_prefixes", direction)
+}
+
 func (m *countingMetrics) AdjacencyCount(circuit, level string, n int) {
 	m.set(n, "adjacencies", circuit, level)
 }
@@ -575,4 +581,34 @@ func (m *countingMetrics) FloodTx(circuit string) { m.inc("flood_tx", circuit) }
 
 func (m *countingMetrics) AdjacencyTransition(circuit, level, state string) {
 	m.inc("adj_transition", circuit, level, state)
+}
+
+// TestAFlooredLifetimeIsCountedPerCircuit pins the only signal left once the
+// RFC 7987 floor is in place. The floor removed the symptom a corrupted
+// Remaining Lifetime used to produce -- a premature purge and the originator's
+// re-origination behind it -- so nothing else says the field is being rewritten
+// in flight. A single event is normal, since any re-flood from a mid-area node
+// carries an aged value; what diagnoses a link is the rate on one circuit
+// against its neighbors, which is why this is counted and never logged.
+func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name      string
+		remaining uint16
+		want      int
+	}{
+		{"a lifetime below MaxAge is raised, and counted", 30, 1},
+		{"MaxAge itself is not raised", maxAgeSeconds, 0},
+		{"a lifetime above MaxAge is kept as advertised", maxAgeSeconds + 100, 0},
+		{"a purge is never a floored lifetime", 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, c, m := metricsServer(t, true)
+			addUpAdjacency(c, now)
+			s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(tc.remaining)), Src: metricsPeerSNPA})
+			if got := m.count("lsp_lifetime_floored", "c"); got != tc.want {
+				t.Errorf("floored lifetimes on c = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }

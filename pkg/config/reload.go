@@ -280,12 +280,22 @@ func flexAlgoSet(c *Config) (map[uint8]server.FlexAlgoConfig, error) {
 // the server refuses once the batch has begun is ErrPartiallyApplied, the one
 // outcome that does change the node without adopting the file.
 func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string, logger *slog.Logger) (*Config, error) {
+	// Counting the reload must not be able to fail one: the management loop
+	// may already be shutting down, and a node that applied its file did so
+	// whether or not the report landed.
+	report := func(outcome server.ReloadOutcome) {
+		if err := s.ReportConfigReload(ctx, outcome); err != nil {
+			logger.Debug("configuration reload: outcome not recorded", "outcome", outcome, "error", err)
+		}
+	}
 	next, err := Load(path)
 	if err != nil {
+		report(server.ReloadRefused)
 		return cur, err
 	}
 	ch, err := Diff(cur, next)
 	if err != nil {
+		report(server.ReloadRefused)
 		return cur, err
 	}
 	for _, key := range ch.Ignored {
@@ -297,8 +307,10 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 		// owed instead is honesty — the baseline stays where it was, so the
 		// next SIGHUP re-diffs the whole change and reports it again, rather
 		// than recording a file the node never adopted as the truth.
+		report(server.ReloadPartial)
 		return cur, fmt.Errorf("%w: %w", ErrPartiallyApplied, err)
 	}
+	report(server.ReloadApplied)
 
 	running := *cur
 	running.Prefixes, running.SRv6, running.FlexAlgo = next.Prefixes, next.SRv6, next.FlexAlgo

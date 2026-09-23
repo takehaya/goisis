@@ -27,6 +27,9 @@ type Prometheus struct {
 	eventQueue     prometheus.Gauge
 	pduTxErrors    *prometheus.CounterVec
 	pduRxErrors    *prometheus.CounterVec
+	configReloads  *prometheus.CounterVec
+	lifetimeFloors *prometheus.CounterVec
+	interLevel     *prometheus.GaugeVec
 }
 
 // NewPrometheus creates the collectors and registers them in reg (e.g.
@@ -91,10 +94,22 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_pdu_rx_errors_total",
 			Help: "Count of failed receives on a circuit; the reader retries.",
 		}, []string{"circuit"}),
+		configReloads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_config_reloads_total",
+			Help: "Count of configuration reloads, by outcome.",
+		}, []string{"outcome"}),
+		lifetimeFloors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_lsp_lifetime_floored_total",
+			Help: "Count of received LSPs whose remaining lifetime was raised to MaxAge (RFC 7987).",
+		}, []string{"circuit"}),
+		interLevel: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "goisis_inter_level_prefixes",
+			Help: "Number of prefixes this node originates across the level boundary, by direction.",
+		}, []string{"direction"}),
 	}
 	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
 		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue,
-		p.pduTxErrors, p.pduRxErrors)
+		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.lifetimeFloors, p.interLevel)
 	return p
 }
 
@@ -166,6 +181,21 @@ func (p *Prometheus) PDUTxError(circuit, reason string) {
 // PDURxError implements server.Metrics.
 func (p *Prometheus) PDURxError(circuit string) {
 	p.pduRxErrors.WithLabelValues(circuit).Inc()
+}
+
+// ConfigReload implements server.Metrics.
+func (p *Prometheus) ConfigReload(outcome string) {
+	p.configReloads.WithLabelValues(outcome).Inc()
+}
+
+// LSPLifetimeFloored implements server.Metrics.
+func (p *Prometheus) LSPLifetimeFloored(circuit string) {
+	p.lifetimeFloors.WithLabelValues(circuit).Inc()
+}
+
+// InterLevelPrefixes implements server.Metrics.
+func (p *Prometheus) InterLevelPrefixes(direction string, n int) {
+	p.interLevel.WithLabelValues(direction).Set(float64(n))
 }
 
 var _ server.Metrics = (*Prometheus)(nil)
