@@ -156,6 +156,31 @@ policy:
 アルゴリズム別の独立 RIB(BGP の複数テーブルに相当)が欲しい場合はフィルタでなく
 Flexible Algorithm を使ってください。
 
+## 設定のリロード
+
+`goisisd` は `SIGHUP` で `-f` のファイルを読み直し、ランタイム API で表現できる
+差分だけを反映します。それ以外の差分は反映せず、何を無視したかをログに名指し
+します。黙って設定の半分だけが効く状態にはなりません:
+
+```console
+$ systemctl reload goisisd         # または kill -HUP $(pidof goisisd)
+WARN configuration reload: this change needs a restart and was not applied key="circuits: eth1 added"
+```
+
+| キー | `SIGHUP` での扱い |
+|------|-------------------|
+| `prefixes` | 反映。メトリックの変更は取り下げと再広報になります。 |
+| `srv6.locators` | 反映。各 locator の End SID も追従します。 |
+| `flex-algo` | 反映。定義の変更は削除と再追加で行い、束ねられた locator も一度外して付け直します。 |
+| `circuits` | **要再起動**。増減には transport と受信ゴルーチンの生成・破棄が必要で、level・メトリック・タイマ・鍵の変更も同じ作り直しになります。インターフェイスのアドレスとキャリアは実時間で追従するので、どちらも不要です。 |
+| `net` / `hostname` | **要再起動**。System ID とエリアアドレスは、このノードが出した全 LSP の identity です。 |
+| `area-*` / `domain-*` のパスワード・アルゴリズム・鍵 ID | **要再起動**。[鍵のローテーション](#鍵のローテーション)により、一斉切り替えではなくローリング再起動で済みます。 |
+| `fib` / `fib-table` / `lsp-mtu` / `lsdb-entry-limit` / `overload-on-startup` / `policy` | **要再起動**。 |
+
+パースできないファイルはデーモンを一切変えず、`-f` なしで起動したデーモンへの
+`SIGHUP` は致命的にせず無視します。オーバーロードビットはそもそもファイルの
+キーではなく、実行時に `goisis overload on` で設定します。
+
 ## ケーパビリティ
 
 `goisisd` は `CAP_NET_RAW`(AF_PACKET)を、`fib: true` のとき `CAP_NET_ADMIN` を

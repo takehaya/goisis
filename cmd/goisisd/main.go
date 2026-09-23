@@ -190,6 +190,13 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 
 	logger.Info("starting goisisd", "version", version.Version, "api", apiListen)
 
+	// SIGHUP is handled even without -f: its default disposition kills the
+	// process, and a daemon with nothing to re-read should not die of a reload
+	// request. It is deliberately not part of the shutdown NotifyContext above.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	g, gctx := errgroup.WithContext(ctx)
 	// The management loop runs on its own context and is stopped only after
 	// the HTTP server has shut down, so RPCs draining during Shutdown can
@@ -207,6 +214,30 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 			return config.WatchInterfaces(gctx, isis, cfg, logger)
 		})
 	}
+	g.Go(func() error {
+		// The reload's own view of the running configuration. It never changes
+		// the circuits, so the watcher's copy stays correct and this goroutine
+		// shares nothing writable with it.
+		running := cfg
+		for {
+			select {
+			case <-gctx.Done():
+				return nil
+			case <-hup:
+				if running == nil {
+					logger.Warn("SIGHUP ignored: goisisd was started without -f")
+					continue
+				}
+				next, err := config.Reload(gctx, isis, running, configFile, logger)
+				if err != nil {
+					logger.Error("configuration reload failed; the running configuration is unchanged", "error", err)
+					continue
+				}
+				running = next
+				logger.Info("configuration reloaded", "file", configFile)
+			}
+		}
+	})
 	g.Go(func() error {
 		if err := httpServer.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			return err
