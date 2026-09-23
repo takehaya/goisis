@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -17,32 +18,47 @@ import (
 func tlvSummaries(tlvs []packet.TLV) []string {
 	out := make([]string, 0, len(tlvs))
 	for _, tlv := range tlvs {
-		if s := tlvSummary(tlv); s != "" {
-			out = append(out, strings.Split(s, "\n")...)
-		}
+		out = append(out, tlvSummary(tlv)...)
 	}
 	return out
 }
 
-// tlvSummary renders one TLV as human-readable text, entries separated by
-// newlines. It lives here and not in pkg/packet because that package is a pure
-// codec. A TLV this switch does not name falls back to its type and length, so
-// the output stays useful in front of a peer advertising what goisis does not
-// decode.
-func tlvSummary(tlv packet.TLV) string {
+// displayString makes a peer-supplied string fit to leave the daemon. Two
+// reasons, both of them reachable from one hostile TLV 137: a proto3 string
+// field must hold valid UTF-8, so invalid bytes fail the Marshal of the whole
+// response and break `goisis database`/`goisis neighbor` for every operator
+// until the LSP ages out; and a control character is either an escape sequence
+// the operator's terminal obeys or a newline that forges a line of --detail
+// output. RFC 5301 constrains neither the octets of TLV 137 nor their
+// encoding, so neither case is hypothetical. The codec keeps the bytes as
+// received; only display is sanitized.
+func displayString(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(s, "\uFFFD"))
+}
+
+// tlvSummary renders one TLV as human-readable text, one line per entry. It
+// lives here and not in pkg/packet because that package is a pure codec. A TLV
+// this switch does not name falls back to its type and length, so the output
+// stays useful in front of a peer advertising what goisis does not decode.
+func tlvSummary(tlv packet.TLV) []string {
 	switch t := tlv.(type) {
 	case *packet.AreaAddressesTLV:
 		areas := make([]string, 0, len(t.Addresses))
 		for _, a := range t.Addresses {
 			areas = append(areas, a.String())
 		}
-		return "Area Addresses: " + strings.Join(areas, " ")
+		return []string{"Area Addresses: " + strings.Join(areas, " ")}
 
 	case *packet.ProtocolsSupportedTLV:
-		return "Protocols Supported: " + strings.Join(nlpidNames(t.NLPIDs), " ")
+		return []string{"Protocols Supported: " + strings.Join(nlpidNames(t.NLPIDs), " ")}
 
 	case *packet.DynamicHostnameTLV:
-		return "Dynamic Hostname: " + t.Hostname
+		return []string{"Dynamic Hostname: " + displayString(t.Hostname)}
 
 	case *packet.ExtendedISReachabilityTLV:
 		lines := make([]string, 0, len(t.Neighbors))
@@ -53,21 +69,21 @@ func tlvSummary(tlv packet.TLV) string {
 			}
 			lines = append(lines, line)
 		}
-		return strings.Join(lines, "\n")
+		return lines
 
 	case *packet.ExtendedIPReachabilityTLV:
 		lines := make([]string, 0, len(t.Prefixes))
 		for _, p := range t.Prefixes {
 			lines = append(lines, "IPv4 Reachability: "+prefixSummary(p.Prefix, p.Metric, p.Down))
 		}
-		return strings.Join(lines, "\n")
+		return lines
 
 	case *packet.IPv6ReachabilityTLV:
 		lines := make([]string, 0, len(t.Prefixes))
 		for _, p := range t.Prefixes {
 			lines = append(lines, "IPv6 Reachability: "+prefixSummary(p.Prefix, p.Metric, p.Down))
 		}
-		return strings.Join(lines, "\n")
+		return lines
 
 	case *packet.SRv6LocatorTLV:
 		lines := make([]string, 0, len(t.Locators))
@@ -78,24 +94,24 @@ func tlvSummary(tlv packet.TLV) string {
 			}
 			lines = append(lines, line)
 		}
-		return strings.Join(lines, "\n")
+		return lines
 
 	case *packet.RouterCapabilityTLV:
-		return routerCapSummary(t)
+		return []string{routerCapSummary(t)}
 
 	case *packet.AuthenticationTLV:
-		return authSummary(t)
+		return []string{authSummary(t)}
 
 	case *packet.UnknownTLV:
 		// TLV 13 has no decoder (RFC 6232 is carried opaquely), but an
 		// operator chasing a purge wants to see who sent it.
 		if t.TLVType == packet.TLVTypePurgeOriginatorID {
 			if s, ok := purgeOriginatorSummary(t.Value); ok {
-				return s
+				return []string{s}
 			}
 		}
 	}
-	return rawTLVSummary(tlv)
+	return []string{rawTLVSummary(tlv)}
 }
 
 func prefixSummary(p netip.Prefix, metric uint32, down bool) string {

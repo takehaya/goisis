@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 
@@ -184,5 +185,69 @@ func TestWatchEventIncludeInitialOverConnect(t *testing.T) {
 	}
 	if got := stream.Msg().GetRoute().GetRoute().GetPrefix(); got != dst.String() {
 		t.Errorf("first event = %+v, want snapshot route %s", stream.Msg(), dst)
+	}
+}
+
+// TestGetLsdbSurvivesInvalidUTF8Hostname: a peer that advertises a TLV 137
+// whose bytes are not valid UTF-8 must not break the management API. proto3
+// string fields must hold valid UTF-8, so an unsanitized hostname makes
+// Marshal fail and takes `goisis database`/`goisis neighbor` down for every
+// operator until the LSP ages out.
+func TestGetLsdbSurvivesInvalidUTF8Hostname(t *testing.T) {
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	// The LSP and the adjacency both have to exist for the hostname to reach
+	// the two RPCs: GetLsdb renders it from the LSDB, ListAdjacencies resolves
+	// it per neighbor.
+	if err := s.mgmtOperation(ctx, func() error {
+		injectLSPAt(s, packet.Level2, peer,
+			[]packet.TLV{&packet.DynamicHostnameTLV{Hostname: "\xff\xfe"}}, time.Now())
+		var l2 levelSet
+		l2.add(packet.Level2)
+		s.circuits[0].adjs[packet.Level2][peer] = &adjacency{
+			systemID: peer, snpa: packet.SNPA{0, 0, 0, 0, 0, 2}, state: AdjUp, levels: l2,
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed LSDB: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle(NewConnectHandler(s))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := goisisv1connect.NewIsisServiceClient(ts.Client(), ts.URL)
+
+	lsdb, err := client.GetLsdb(ctx, connect.NewRequest(&goisisv1.GetLsdbRequest{}))
+	if err != nil {
+		t.Fatalf("GetLsdb: %v", err)
+	}
+	for _, l := range lsdb.Msg.GetLsps() {
+		if !utf8.ValidString(l.GetHostname()) {
+			t.Errorf("LSP %s hostname %q is not valid UTF-8", l.GetLspId(), l.GetHostname())
+		}
+		for _, tlv := range l.GetTlvs() {
+			if !utf8.ValidString(tlv) {
+				t.Errorf("LSP %s TLV line %q is not valid UTF-8", l.GetLspId(), tlv)
+			}
+		}
+	}
+
+	adjs, err := client.ListAdjacencies(ctx, connect.NewRequest(&goisisv1.ListAdjacenciesRequest{}))
+	if err != nil {
+		t.Fatalf("ListAdjacencies: %v", err)
+	}
+	for _, a := range adjs.Msg.GetAdjacencies() {
+		if !utf8.ValidString(a.GetHostname()) {
+			t.Errorf("adjacency %s hostname %q is not valid UTF-8", a.GetSystemId(), a.GetHostname())
+		}
 	}
 }

@@ -547,7 +547,7 @@ func (s *IsisServer) hostnameIndex(now time.Time) map[packet.SystemID]string {
 			}
 			for _, tlv := range e.lsp.TLVs {
 				if h, ok := tlv.(*packet.DynamicHostnameTLV); ok {
-					out[id.NodeID().SystemID()] = h.Hostname
+					out[id.NodeID().SystemID()] = displayString(h.Hostname)
 					break
 				}
 			}
