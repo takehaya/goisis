@@ -68,6 +68,8 @@ type IsisServer struct {
 	lsdbLimitWarned   edgeLog[packet.Level]     // levels whose entry-limit drop was already logged
 	oversizeWarned    edgeLog[oversizeKey]      // (circuit,LSP) that does not fit the circuit MTU
 	dupSystemIDWarned edgeLog[string]           // circuits that heard a hello carrying our own System ID
+	adjLimitWarned    edgeLog[string]           // circuits that turned a station away at their adjacency limit
+	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 
 	// What this node originates has exactly two owners: optionPrefixes, the
@@ -275,9 +277,9 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 		s.logger.Error("fib startup sweep", "error", err)
 	}
 
-	// Instantiate the local End SID for each advertised SRv6 locator. This is
-	// re-asserted on every housekeeping tick so a SID removed out-of-band (or
-	// one whose initial install failed) is repaired without a restart.
+	// Instantiate the local End SID for each advertised SRv6 locator.
+	// Housekeeping re-asserts them, so a SID removed out-of-band (or one whose
+	// install failed) is repaired without a restart.
 	s.installLocalSIDs()
 
 	ticker := time.NewTicker(housekeepInterval)
@@ -340,6 +342,10 @@ func (s *IsisServer) localSIDs() []netip.Addr {
 	}
 	return out
 }
+
+// sidReassertTicks is how many housekeeping ticks pass between full re-asserts
+// of the local SIDs.
+const sidReassertTicks = 30
 
 // installLocalSIDs (re-)programs the local End SID for every advertised SRv6
 // locator and every allocated End.X SID. AddLocalSID is idempotent
@@ -488,6 +494,7 @@ func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
 // housekeeping runs periodic maintenance: hello transmission, holding-time
 // expiry, LSP aging/refresh, and flooding transmission.
 func (s *IsisServer) housekeeping(now time.Time) {
+	s.ticks++
 	for _, c := range s.circuits {
 		if !now.Before(c.nextHello) {
 			s.sendHellos(c, now)
@@ -505,7 +512,15 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	s.ageLSPs(now)
 	s.refreshOwnLSPs(now)
 	s.floodTransmit(now)
-	if len(s.locators) > 0 || len(s.endXSIDs) > 0 {
+	// Re-assert the local SIDs. This is a self-heal for a SID deleted
+	// out-of-band, not a retry path, and it costs one synchronous netlink write
+	// per locator and per adjacency — at every tick that is a steady load
+	// proportional to the adjacency count — so it sweeps every
+	// sidReassertTicks. A SID whose last write failed is not one we believe
+	// fine: while any is outstanding the sweep runs every tick, so a FIB that
+	// comes back is picked up within the second.
+	if (len(s.locators) > 0 || len(s.endXSIDs) > 0) &&
+		(s.sidFailed.any() || s.ticks%sidReassertTicks == 0) {
 		s.installLocalSIDs()
 	}
 	// Retry the removals that failed. Unlike an install, nothing else re-asserts

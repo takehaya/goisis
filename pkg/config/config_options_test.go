@@ -429,9 +429,10 @@ circuits:
 	}
 }
 
-// TestCircuitTimersAndPaddingFromYAML checks the hello timers and padding reach
-// the circuit configuration, and that a malformed interval is rejected with the
-// circuit named.
+// TestCircuitTimersAndPaddingFromYAML checks the hello timers, padding and
+// adjacency limit reach the circuit configuration — an explicit
+// adjacency-limit of 0 (no cap) as such, not as "unset" — and that a malformed
+// interval is rejected with the circuit named.
 func TestCircuitTimersAndPaddingFromYAML(t *testing.T) {
 	open := mockCircuits(map[string]mockCircuit{
 		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
@@ -442,6 +443,7 @@ circuits:
     hello-interval: 500ms
     hold-multiplier: 4
     padding: false
+    adjacency-limit: 0
 `)
 	cfg, err := c.Circuits[0].circuit(open)
 	if err != nil {
@@ -452,6 +454,9 @@ circuits:
 	}
 	if cfg.Padding == nil || *cfg.Padding {
 		t.Errorf("padding = %v, want an explicit false", cfg.Padding)
+	}
+	if cfg.AdjacencyLimit == nil || *cfg.AdjacencyLimit != 0 {
+		t.Errorf("adjacency limit = %v, want an explicit 0 (no cap)", cfg.AdjacencyLimit)
 	}
 
 	c.OpenCircuit = open

@@ -38,8 +38,8 @@ type Metrics interface {
 	PDURx(circuit, pduType string)
 	// PDUDrop records one received PDU that was not installed as it arrived,
 	// with the reason: "decode", "auth", "no_adjacency", "checksum",
-	// "lsdb_limit", "unknown_purge", "own_sysid_purge", "own_fragment_purge",
-	// "own_lsp_reclaimed" or "own_seq_wrap".
+	// "lsdb_limit", "adjacency_limit", "unknown_purge", "own_sysid_purge",
+	// "own_fragment_purge", "own_lsp_reclaimed" or "own_seq_wrap".
 	//
 	// The four "own_*" reasons are handled rather than discarded: the PDU
 	// carried this node's own System ID, so it drove a re-origination or a
@@ -78,6 +78,7 @@ const (
 	dropOwnFragmentPurge = "own_fragment_purge" // a fragment of our node LSP we never originated
 	dropOwnLSPReclaimed  = "own_lsp_reclaimed"  // a copy of an LSP we originate, superseded by re-origination
 	dropOwnSeqWrap       = "own_seq_wrap"       // a copy of one of ours at the maximum sequence number (ISO 10589 7.3.16.1)
+	dropAdjacencyLimit   = "adjacency_limit"    // a hello from a new neighbor on a circuit at its adjacency limit
 )
 
 // Reasons reported through Metrics.FloodDrop.

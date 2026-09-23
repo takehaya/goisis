@@ -687,3 +687,36 @@ func TestFlexAlgoLocatorAllocatesEndXOnlyTowardParticipants(t *testing.T) {
 		t.Errorf("algo-128 End.X SID %s survived the neighbor leaving the algorithm", algo128SID)
 	}
 }
+
+// TestLocalSIDReassertRunsOnTheSlowCadence: re-asserting every local SID costs
+// one synchronous netlink write per locator and per adjacency, so housekeeping
+// sweeps them every sidReassertTicks instead of every tick — the sweep repairs
+// a SID deleted out-of-band, which is rare, and is not the retry path for a
+// write that failed (that one still runs every tick, see
+// TestEndXFIBFailureIsCountedAndRepairedByHousekeeping).
+func TestLocalSIDReassertRunsOnTheSlowCadence(t *testing.T) {
+	now := time.Now()
+	sid := netip.MustParseAddr("fc00:0:1:1::")
+	s, rf := endXServer(t, io.Discard, []netip.Addr{netip.MustParseAddr("2001:db8::2")})
+	// Housekeeping expires an adjacency it has not heard from; keep this one.
+	s.circuits[0].p2pAdj.holding, s.circuits[0].p2pAdj.lastHeard = 30, now
+
+	s.syncEndXSIDs(now)
+	if _, ok := rf.getSID(sid); !ok {
+		t.Fatal("the End.X SID was not installed when it was allocated")
+	}
+	// Someone removes the seg6local route behind our back.
+	if err := rf.RemoveLocalSID(sid); err != nil {
+		t.Fatalf("RemoveLocalSID: %v", err)
+	}
+	for range sidReassertTicks - 1 {
+		s.housekeeping(now)
+	}
+	if _, ok := rf.getSID(sid); ok {
+		t.Errorf("the local SIDs were re-asserted within %d ticks: that is a netlink write per SID per second", sidReassertTicks)
+	}
+	s.housekeeping(now)
+	if _, ok := rf.getSID(sid); !ok {
+		t.Errorf("the re-assert on the %dth tick did not repair a SID deleted out-of-band", sidReassertTicks)
+	}
+}

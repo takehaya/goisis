@@ -29,6 +29,10 @@ func (e *edgeLog[K]) warn(key K, fn func()) {
 	fn()
 }
 
+// any reports whether any key is currently fired: the condition is live
+// somewhere and has not been seen to end.
+func (e *edgeLog[K]) any() bool { return len(e.fired) > 0 }
+
 // clear re-arms a key: the condition went away, so its return is worth logging.
 func (e *edgeLog[K]) clear(key K) { delete(e.fired, key) }
 

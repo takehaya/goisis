@@ -40,6 +40,7 @@ options. ([日本語](configuration.ja.md))
 | `hello-interval` | duration | Time between hellos, e.g. `1s`, `500ms` (default `3s`). |
 | `hold-multiplier` | int | Advertised holding time is `hello-interval x hold-multiplier` (default 10). |
 | `padding` | bool | Pad hellos toward the MTU to detect MTU mismatches, per ISO 10589 (default `true`). |
+| `adjacency-limit` | int | Neighbors this circuit takes on. At the cap, a hello from a System ID it holds no adjacency for is dropped (counted as `adjacency_limit`) and the adjacencies it has keep working. Default 128; `0` removes the cap. |
 | `hello-password` | string | Enables HMAC hello authentication. Hellos are signed with it and received hellos must carry a matching digest or they are dropped. |
 | `hello-auth-algorithm` | string | `md5` (default, RFC 5304; FRR's `isis password md5`), or an HMAC-SHA variant (RFC 5310). |
 | `hello-accept-passwords` | list of string | Extra keys accepted on received hellos; never used to sign. See [Key rotation](#key-rotation). |
@@ -228,8 +229,8 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisis_fib_pending`,
 `goisis_pdu_rx_total{circuit,type}`, `goisis_pdu_drops_total{circuit,reason}`
 (reasons: `decode`, `auth`, `no_adjacency`, `checksum`, `lsdb_limit`,
-`unknown_purge`, `own_sysid_purge`, `own_fragment_purge`, `own_lsp_reclaimed`,
-`own_seq_wrap`),
+`adjacency_limit`, `unknown_purge`, `own_sysid_purge`, `own_fragment_purge`,
+`own_lsp_reclaimed`, `own_seq_wrap`),
 `goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
 `remove_sid`) and `goisis_event_queue_depth`.

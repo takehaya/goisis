@@ -21,6 +21,7 @@ const (
 	DefaultHoldingMultiplier = 10
 	DefaultPriority          = 64
 	DefaultMetric            = 10
+	DefaultAdjacencyLimit    = 128
 	housekeepInterval        = 1 * time.Second
 )
 
@@ -65,6 +66,16 @@ type CircuitConfig struct {
 	ConnectedPrefixes []netip.Prefix
 	// Padding pads hellos toward the MTU (ISO 10589); default true.
 	Padding *bool
+	// AdjacencyLimit caps the number of neighbors this circuit takes on. At
+	// the cap, hellos from a System ID the circuit holds no adjacency for are
+	// dropped; the adjacencies it already has are untouched. nil selects
+	// DefaultAdjacencyLimit and zero or negative disables the cap (the
+	// convention WithLSDBEntryLimit uses) — a pointer, because the default is
+	// not the zero value here. Every neighbor admitted costs an End.X SID, an
+	// IS reachability entry, a RIB/FIB route and the netlink writes behind
+	// them, and on an unauthenticated segment a station reaches Up merely by
+	// echoing our SNPA; the LSDB cap bounds the database, not this.
+	AdjacencyLimit *int
 	// HelloPassword, if set, enables HMAC authentication of hellos on this
 	// circuit: hellos are signed with it and received hellos must carry a
 	// matching digest or they are dropped (no adjacency). HelloAuthAlgorithm
@@ -123,6 +134,14 @@ func (c *CircuitConfig) priority() uint8 {
 		return DefaultPriority
 	}
 	return *c.Priority
+}
+
+// adjacencyLimit returns the resolved neighbor cap; zero or less is no cap.
+func (c *CircuitConfig) adjacencyLimit() int {
+	if c.AdjacencyLimit == nil {
+		return DefaultAdjacencyLimit
+	}
+	return *c.AdjacencyLimit
 }
 
 func (c *CircuitConfig) padding() bool {

@@ -301,6 +301,9 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	}
 
 	adj, existed := c.adjs[level][h.SourceID]
+	if !existed && s.adjacencyLimited(c, h.SourceID) {
+		return
+	}
 	if !existed {
 		adj = &adjacency{systemID: h.SourceID}
 		c.adjs[level][h.SourceID] = adj
@@ -481,6 +484,26 @@ func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
 	return true
 }
 
+// adjacencyLimited reports whether the circuit is at its adjacency limit and
+// this station is not one of the neighbors it already has, dropping and
+// counting the hello if so. The station is turned away rather than replacing
+// anyone: an adjacency that formed keeps working, and what the cap bounds is
+// the per-neighbor state (an End.X SID, an IS reachability entry, a route)
+// that a segment without hello authentication can otherwise make us allocate
+// at will. Hellos repeat every few seconds, so the warning is edge-triggered
+// per circuit, re-armed when an adjacency goes away (dropAdjacencies).
+func (s *IsisServer) adjacencyLimited(c *circuit, src packet.SystemID) bool {
+	if !c.atAdjacencyLimit(src) {
+		return false
+	}
+	s.metrics.PDUDrop(c.cfg.Name, dropAdjacencyLimit)
+	s.adjLimitWarned.warn(c.cfg.Name, func() {
+		s.logger.Warn("drop hello from a new neighbor: circuit is at its adjacency limit; suppressing repeats",
+			"circuit", c.cfg.Name, "limit", c.cfg.adjacencyLimit(), "systemID", src)
+	})
+	return true
+}
+
 // expireAdjacencies tears down adjacencies whose holding time has elapsed.
 func (s *IsisServer) expireAdjacencies(c *circuit, now time.Time) {
 	s.dropAdjacencies(c, "adjacency expired", func(adj *adjacency) bool { return expired(adj, now) })
@@ -513,6 +536,8 @@ func (s *IsisServer) dropAdjacencies(c *circuit, reason string, drop func(*adjac
 		}
 	}
 	if changed {
+		// The circuit has room again, so the next station it turns away is news.
+		s.adjLimitWarned.clear(c.cfg.Name)
 		s.requestLSPRegen()
 	}
 }
