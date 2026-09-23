@@ -34,6 +34,11 @@ type RouteInfo struct {
 // algorithm; see its doc for the rationale).
 func (s *IsisServer) updateRIB(now time.Time) {
 	merged := map[netip.Prefix]route{}
+	// The Level-2 algorithm-0 route set, kept aside as the leak candidates:
+	// merged only holds the winner per prefix, and a prefix reachable at both
+	// levels is won by Level 1 (betterRoute), which is exactly the prefix
+	// l2LeakSet still has to look at to decide it is intra-area.
+	var l2Reach map[netip.Prefix]route
 	algos := s.routingAlgos()
 	// Iteration order is immaterial: betterRoute alone decides which route wins
 	// when the same prefix is computed at both levels or under two algorithms.
@@ -68,7 +73,11 @@ func (s *IsisServer) updateRIB(now time.Time) {
 				}
 				s.algoWarned.clear(algoKey{level: level, algo: algo}) // re-arm
 			}
-			for p, r := range s.computeSPF(level, algo, now) {
+			computed := s.computeSPF(level, algo, now)
+			if level == packet.Level2 && algo == 0 {
+				l2Reach = computed
+			}
+			for p, r := range computed {
 				if cur, ok := merged[p]; ok && !betterRoute(r, cur) {
 					continue
 				}
@@ -141,6 +150,13 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		s.l1Export = export
 		s.lspGenPending = true
 	}
+	// The other direction, and the same one-extra-pass argument: our own
+	// prefixes are skipped by computeSPF, so the leak we originate never
+	// re-enters our own route set and the second pass finds the set unchanged.
+	if leak := s.l2LeakSet(merged, l2Reach); !maps.Equal(leak, s.l2Leak) {
+		s.l2Leak = leak
+		s.lspGenPending = true
+	}
 }
 
 // l1ExportSet returns the Level-1 prefixes this IS propagates upward into its
@@ -150,19 +166,7 @@ func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix
 	if !s.levelCap.has(packet.Level1) || !s.levelCap.has(packet.Level2) {
 		return nil
 	}
-	own := map[netip.Prefix]bool{}
-	// The two owners of "we originate this ourselves": every circuit subnet
-	// originatedPrefixes derives is connected by definition, so these two sets
-	// cover it without rebuilding the sorted advertisement list here.
-	for p := range s.optionPrefixes {
-		own[p] = true
-	}
-	for p := range s.connected {
-		own[p] = true
-	}
-	for _, lc := range s.locators {
-		own[lc.Prefix.Masked()] = true
-	}
+	own := s.ownAdvertised()
 	var export map[netip.Prefix]uint32
 	for p, r := range merged {
 		switch {
@@ -181,6 +185,69 @@ func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix
 		export[p] = r.metric
 	}
 	return export
+}
+
+// l2LeakSet returns the Level-2 prefixes this IS leaks down into its Level-1
+// LSP, keyed by masked prefix to the total Level-2 path metric. An L1-only node
+// adds its own Level-1 distance to us on top, so the metric composes the same
+// way the upward export does. Leaking is off unless an operator installs a leak
+// policy: pushing a whole Level-2 table into an area is a decision, not a
+// default. l2 holds only algorithm-0 Level-2 routes, so there is no algorithm
+// to test here.
+func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Prefix]uint32 {
+	if s.l2LeakFilter == nil || !s.levelCap.has(packet.Level1) || !s.levelCap.has(packet.Level2) {
+		return nil
+	}
+	own := s.ownAdvertised()
+	var leak map[netip.Prefix]uint32
+	for p, r := range l2 {
+		switch {
+		case r.down:
+			continue // already leaked down once; leaking it again would loop
+		case p == defaultV4 || p == defaultV6:
+			continue // a default is not reachability to leak; the ATT bit carries that
+		case own[p]:
+			continue // regenerateNodeLSP already originates this one at both levels
+		}
+		// Reachability the area already has is not leaked. A down-marked
+		// Level-1 route does not count as that: it is another L1L2 IS leaking
+		// the same prefix, and standing down for it would make every border
+		// router in the area stop and start together (RFC 5305 §4.1 expects
+		// several of them to leak the same prefix; the bit, not suppression,
+		// is what stops the loop).
+		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 && !cur.down {
+			continue
+		}
+		m := min(r.metric, maxPathMetric-1)
+		if !s.l2LeakFilter(AdvertisedPrefix{Prefix: p, Metric: m}) {
+			continue
+		}
+		if leak == nil {
+			leak = map[netip.Prefix]uint32{}
+		}
+		leak[p] = m
+	}
+	return leak
+}
+
+// ownAdvertised returns the prefixes this node originates itself, at every
+// level it is enabled for. The two owners of "we originate this ourselves":
+// every circuit subnet originatedPrefixes derives is connected by definition,
+// so these two sets cover it without rebuilding the sorted advertisement list
+// here. Both inter-level transfers subtract it, so neither re-advertises a
+// prefix regenerateNodeLSP already carries.
+func (s *IsisServer) ownAdvertised() map[netip.Prefix]bool {
+	own := map[netip.Prefix]bool{}
+	for p := range s.optionPrefixes {
+		own[p] = true
+	}
+	for p := range s.connected {
+		own[p] = true
+	}
+	for _, lc := range s.locators {
+		own[lc.Prefix.Masked()] = true
+	}
+	return own
 }
 
 // betterRoute reports whether candidate should replace incumbent as the route

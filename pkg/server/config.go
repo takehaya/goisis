@@ -275,6 +275,7 @@ type options struct {
 	areaAuth          AuthConfig // L1 LSP/SNP authentication
 	domainAuth        AuthConfig // L2 LSP/SNP authentication
 	advertiseFilter   AdvertiseFilter
+	l2LeakFilter      AdvertiseFilter
 	fibFilter         FIBFilter
 	lsdbEntryLimit    int
 	lspMTU            int
@@ -360,6 +361,17 @@ func WithFIB(f fib.FIB) ServerOption {
 // AdvertiseFilter.
 func WithAdvertiseFilter(f AdvertiseFilter) ServerOption {
 	return func(o *options) { o.advertiseFilter = f }
+}
+
+// WithL2LeakFilter turns on Level-2 to Level-1 route leaking (ISO 10589 7.2.9,
+// RFC 5305 §4.1 / RFC 5308 §2) and gates it: an L1L2 node originates the
+// Level-2 prefixes for which f returns true into its Level-1 LSP, with the
+// up/down bit set so nobody sends them back up. Leaking is off when this option
+// is absent — pushing a whole Level-2 table into an area is an operator's
+// decision, not a default. f is the only gate on leaked prefixes; the
+// AdvertiseFilter governs what this node originates of its own.
+func WithL2LeakFilter(f AdvertiseFilter) ServerOption {
+	return func(o *options) { o.l2LeakFilter = f }
 }
 
 // WithFIBFilter installs a FIB policy: only routes for which f returns true are

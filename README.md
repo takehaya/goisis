@@ -10,14 +10,13 @@ IS-IS routing protocol implementation in Go — the IS-IS counterpart of
 ## Features
 
 - Dual-stack (IPv4/IPv6) L1/L2 routing — wide metrics, per-level SPF, ECMP, overload bit, netlink FIB
-- ATT default routes and L1→L2 propagation; SPF back-off and LSP generation throttling
+- ATT default routes, L1→L2 propagation and policy-gated L2→L1 leaking; SPF back-off and LSP generation throttling
 - SRv6 locators with per-adjacency End.X SIDs (RFC 9352) and Flexible Algorithm (RFC 9350)
 - Connect RPC API (TCP or unix socket) + CLI, with `WatchEvent` streaming and runtime reconfiguration
 - HMAC authentication (RFC 5304/5310) of hellos and LSPs/SNPs
 - Prometheus metrics, and continuous interop against FRR
 
-> Single-area MVP: L2→L1 leaking, multi-topology, graceful restart, and BFD are
-> deferred.
+> Single-area MVP: multi-topology, graceful restart, and BFD are deferred.
 
 ## Install
 

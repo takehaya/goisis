@@ -148,6 +148,9 @@ policy:
     default: permit
     rules:
       - deny: 192.0.2.0/24
+  leak-l2-to-l1:
+    rules:
+      - permit: 203.0.113.0/24
 `
 	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
@@ -156,7 +159,7 @@ policy:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.Policy == nil || c.Policy.Advertise == nil || c.Policy.FIB == nil {
+	if c.Policy == nil || c.Policy.Advertise == nil || c.Policy.FIB == nil || c.Policy.LeakL2ToL1 == nil {
 		t.Fatalf("policy not parsed: %+v", c.Policy)
 	}
 
@@ -180,6 +183,36 @@ policy:
 	}
 	if !fib.Allows(netip.MustParsePrefix("198.51.100.0/24")) {
 		t.Error("198.51.100/24 should pass the default-permit fib policy")
+	}
+
+	// The leak list has no default, so it is an allowlist: only what it names
+	// is leaked from Level 2 into Level 1.
+	leak, err := c.Policy.LeakL2ToL1.prefixList()
+	if err != nil {
+		t.Fatalf("leak-l2-to-l1 prefixList: %v", err)
+	}
+	if !leak.Allows(netip.MustParsePrefix("203.0.113.0/24")) {
+		t.Error("203.0.113/24 should be permitted by the leak policy")
+	}
+	if leak.Allows(netip.MustParsePrefix("198.51.100.0/24")) {
+		t.Error("198.51.100/24 should be denied by the leak policy's deny-by-default")
+	}
+}
+
+// Without a policy.leak-l2-to-l1 section the server gets no leak filter, which
+// is what keeps Level-2 to Level-1 leaking off by default.
+func TestLeakPolicyIsAbsentByDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := "net: 49.0001.0000.0000.0001.00\ncircuits:\n  - interface: eth0\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Policy != nil && c.Policy.LeakL2ToL1 != nil {
+		t.Errorf("leak policy = %+v, want none when the config does not ask for it", c.Policy.LeakL2ToL1)
 	}
 }
 

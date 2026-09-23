@@ -66,6 +66,9 @@ prefixes:
 #   advertise: which prefixes this node originates into its own LSP
 #   fib:       which computed routes are programmed into the kernel FIB
 #              (rejected routes stay in the RIB, visible via the API/WatchEvent)
+#   leak-l2-to-l1: which Level-2 prefixes an L1L2 node leaks down into its area,
+#              with the up/down bit set. Writing the section is what turns
+#              leaking on; without it nothing is leaked.
 # Each rule is "permit:"/"deny:" a CIDR with optional ge/le length bounds. The
 # first matching rule wins; default is "deny" (a permit list is an allowlist).
 # policy:
@@ -79,6 +82,9 @@ prefixes:
 #     rules:
 #       - deny: 0.0.0.0/0      # control-plane only: keep IPv4 in the RIB,
 #         le: 32               # don't program it into the kernel
+#   leak-l2-to-l1:
+#     rules:
+#       - permit: 203.0.113.0/24   # this one Level-2 prefix reaches the area
 
 # SRv6 locators (RFC 9352). Each is advertised in the SRv6 Locator TLV with a
 # local End SID at its base address; with fib:true that End SID is installed as

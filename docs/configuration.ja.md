@@ -23,7 +23,7 @@
 | `prefixes` | list | 追加で広報する prefix。各要素は CIDR 文字列(`10.1.1.1/32`、メトリック 10)か、マッピング `{prefix: 10.1.1.1/32, metric: 20}`。サーキットの接続サブネットは自動で広報される。同じサブネットをここに書いても二重広報にはならず、広報時のメトリックだけが決まる。 |
 | `srv6` | object | SRv6 locator。下記参照。 |
 | `flex-algo` | list | Flexible Algorithm 定義。下記参照。 |
-| `policy` | object | 広報と FIB 書き込みを制御する prefix-list。[`policy`](#policy) を参照。 |
+| `policy` | object | 広報・FIB 書き込み・L2→L1 リークを制御する prefix-list。[`policy`](#policy) を参照。 |
 
 > FRR の IS-IS 認証は HMAC-MD5 のみなので、SHA 系(RFC 5310)は FRR とではなく
 > goisis 同士で相互運用します。
@@ -142,12 +142,16 @@ policy:
     rules:
       - deny: 0.0.0.0/0
         le: 32        # コントロールプレーンのみ:RIB には残しカーネルには入れない
+  leak-l2-to-l1:      # L1L2 ノードがエリアへリークする Level-2 prefix
+    rules:
+      - permit: 203.0.113.0/24
 ```
 
 | キー | 型 | 説明 |
 |-----|------|-------------|
 | `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。自身の prefix に加え、L1L2 ノードが Level-2 LSP へ伝搬する Level-1 prefix にも適用される。 |
 | `fib` | prefix-list | FIB ポリシー:フォワーディングプレーンに入れる経路。拒否分も RIB には残り `ListRoutes`/`WatchEvent` で見える。 |
+| `leak-l2-to-l1` | prefix-list | リークポリシー:L1L2 ノードが up/down ビット付きで Level-1 LSP に載せる Level-2 prefix。省略すると何もリークしない。 |
 | `<list>.default` | string | `deny`(デフォルト)/ `permit`。どのルールにもマッチしないときに適用。 |
 | `<list>.rules[]` | list | 順序付き。最初のマッチが勝つ。各ルールは `permit:`/`deny:` の CIDR + 任意の `ge`/`le` 長範囲。 |
 
@@ -155,6 +159,15 @@ policy:
 完全長一致)。フラッディングされる LSDB には一切影響しません。トポロジ別 /
 アルゴリズム別の独立 RIB(BGP の複数テーブルに相当)が欲しい場合はフィルタでなく
 Flexible Algorithm を使ってください。
+
+`leak-l2-to-l1` はリークの有効化と対象指定を兼ねます。Level-2 テーブルを丸ごと
+各エリアへ流すのは既定値にすべきではないため、このセクションを書くことが
+リークするという判断そのものです。エリアが Level-1 で既に到達できる prefix は
+リークしません。リーク対象を絞るのはこのリストだけで、`advertise` は自ノードの
+prefix と Level-2 へ伝搬する Level-1 prefix を受け持ちます。したがって `advertise` を
+ループバックだけの許可リストにしても、リークが黙って空になることはありません。
+広報するメトリックは自ノードの Level-2 経路メトリックで、受け取る Level-1 ノードが
+自分からの距離をそれに加算します。
 
 ## 設定のリロード
 

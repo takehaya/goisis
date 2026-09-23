@@ -35,6 +35,7 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | HMAC authentication of L1 / L2 LSPs and SNPs. `AuthConfig.AcceptSecrets` (and `CircuitConfig.HelloAcceptPasswords` for hellos) are extra keys accepted on receive but never used to sign, so a key can be rotated node by node. `WithAreaPassword` / `WithDomainPassword(string)` are the HMAC-MD5 shorthands. |
 | `WithFIB(fib.FIB)` | Forwarding sink (default `fib.Noop`). |
 | `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | Export policy: which prefixes to originate. |
+| `WithL2LeakFilter(func(AdvertisedPrefix) bool)` | Leak policy: which Level-2 prefixes an L1L2 node originates into its Level-1 LSP, with the up/down bit set. Absent, nothing is leaked. |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB policy: which computed routes to program (rejected ones stay in the RIB). |
 | `WithMetrics(server.Metrics)` | Telemetry sink (default `NoopMetrics`). |
 | `WithLogger(*slog.Logger)` | Structured logger. |
@@ -73,10 +74,14 @@ circuit it sits on.
 IS-IS is an IGP: every node in an area shares one LSDB and must converge on the
 same SPF result, so there is no BGP-style import/export policy on the flooded
 link state — filtering it would break consistency. Policy applies only at the
-edges, where goisis exposes two hooks:
+edges, where goisis exposes three hooks:
 
 - **Export** (`WithAdvertiseFilter`): gate which configured prefixes this node
   originates into its own LSP. Flooding and the LSDB are untouched.
+- **Leak** (`WithL2LeakFilter`): on an L1L2 node, gate which Level-2 prefixes it
+  originates into its Level-1 LSP with the up/down bit set. Installing the
+  option is what turns leaking on: without it nothing is leaked, because pushing
+  a whole Level-2 table into an area is an operator's decision.
 - **FIB** (`WithFIBFilter`): gate which computed routes reach the forwarding
   plane. A rejected route stays in the RIB — `ListRoutes` and `WatchEvent` still
   report it — so a watch-only consumer can act on it. This is the IS-IS
