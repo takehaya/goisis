@@ -588,8 +588,20 @@ func (s *IsisServer) hostnameIndex(now time.Time) map[packet.SystemID]string {
 	return out
 }
 
-// ListLSDB returns a snapshot of the link-state database for every level.
+// ListLSDB returns a snapshot of the link-state database for every level,
+// with LSPInfo.TLVs left empty. Use ListLSDBDetail to get the rendered text.
 func (s *IsisServer) ListLSDB(ctx context.Context) ([]LSPInfo, error) {
+	return s.listLSDB(ctx, false)
+}
+
+// ListLSDBDetail is ListLSDB with LSPInfo.TLVs rendered. The rendering runs in
+// the caller's goroutine once the snapshot is out of the management operation,
+// so its cost is the caller's and not the Serve loop's.
+func (s *IsisServer) ListLSDBDetail(ctx context.Context) ([]LSPInfo, error) {
+	return s.listLSDB(ctx, true)
+}
+
+func (s *IsisServer) listLSDB(ctx context.Context, detail bool) ([]LSPInfo, error) {
 	var out []LSPInfo
 	err := s.mgmtOperation(ctx, func() error {
 		now := time.Now()
@@ -599,7 +611,13 @@ func (s *IsisServer) ListLSDB(ctx context.Context) ([]LSPInfo, error) {
 		}
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	if detail {
+		renderTLVs(out)
+	}
+	return out, nil
 }
 
 // ListAdjacencies returns a snapshot of all adjacencies across all circuits.

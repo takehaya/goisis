@@ -1092,7 +1092,12 @@ func (x *ListAdjacenciesResponse) GetAdjacencies() []*Adjacency {
 }
 
 type GetLsdbRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// detail asks for Lsp.tlvs to be rendered. Rendering a large database costs
+	// more than everything else in the response put together, so a client that
+	// does not display TLVs leaves this false and pays for neither the rendering
+	// nor the bytes.
+	Detail        bool `protobuf:"varint,1,opt,name=detail,proto3" json:"detail,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1125,6 +1130,13 @@ func (x *GetLsdbRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetLsdbRequest.ProtoReflect.Descriptor instead.
 func (*GetLsdbRequest) Descriptor() ([]byte, []int) {
 	return file_goisis_v1_goisis_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *GetLsdbRequest) GetDetail() bool {
+	if x != nil {
+		return x.Detail
+	}
+	return false
 }
 
 type GetLsdbResponse struct {
@@ -2420,8 +2432,9 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\bcircuits\x18\x01 \x03(\v2\x12.goisis.v1.CircuitR\bcircuits\"\x18\n" +
 	"\x16ListAdjacenciesRequest\"Q\n" +
 	"\x17ListAdjacenciesResponse\x126\n" +
-	"\vadjacencies\x18\x01 \x03(\v2\x14.goisis.v1.AdjacencyR\vadjacencies\"\x10\n" +
-	"\x0eGetLsdbRequest\"5\n" +
+	"\vadjacencies\x18\x01 \x03(\v2\x14.goisis.v1.AdjacencyR\vadjacencies\"(\n" +
+	"\x0eGetLsdbRequest\x12\x16\n" +
+	"\x06detail\x18\x01 \x01(\bR\x06detail\"5\n" +
 	"\x0fGetLsdbResponse\x12\"\n" +
 	"\x04lsps\x18\x01 \x03(\v2\x0e.goisis.v1.LspR\x04lsps\"\x13\n" +
 	"\x11ListRoutesRequest\">\n" +

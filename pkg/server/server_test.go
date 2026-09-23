@@ -208,9 +208,10 @@ func TestMgmtOperationCancelled(t *testing.T) {
 	}
 }
 
-// TestListsResolveHostnames: ListLSDB and ListAdjacencies resolve a system ID
-// to the dynamic hostname (TLV 137) the node's fragment-0 LSP advertises, and
-// the LSP snapshot carries its TLVs rendered for display.
+// TestListsResolveHostnames: ListLSDBDetail and ListAdjacencies resolve a
+// system ID to the dynamic hostname (TLV 137) the node's fragment-0 LSP
+// advertises, and the detailed LSP snapshot carries its TLVs rendered for
+// display.
 func TestListsResolveHostnames(t *testing.T) {
 	s := ribServer(t, false)
 	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
@@ -230,9 +231,9 @@ func TestListsResolveHostnames(t *testing.T) {
 	defer cancel()
 	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
 
-	lsps, err := s.ListLSDB(ctx)
+	lsps, err := s.ListLSDBDetail(ctx)
 	if err != nil {
-		t.Fatalf("ListLSDB: %v", err)
+		t.Fatalf("ListLSDBDetail: %v", err)
 	}
 	var found bool
 	for _, l := range lsps {
@@ -249,7 +250,7 @@ func TestListsResolveHostnames(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("the injected peer LSP is missing from ListLSDB")
+		t.Fatal("the injected peer LSP is missing from ListLSDBDetail")
 	}
 
 	adjs, err := s.ListAdjacencies(ctx)

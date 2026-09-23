@@ -60,7 +60,9 @@ same two lists at runtime.
 
 All take a `context.Context` and return typed snapshots:
 `GetGlobal`, `ListCircuits`, `ListAdjacencies`, `ListLSDB`, `ListRoutes`,
-`ListLocators`, `ListFlexAlgos`. Each `LocatorInfo` carries the locator's End
+`ListLocators`, `ListFlexAlgos`. `ListLSDB` leaves `LSPInfo.TLVs` empty;
+`ListLSDBDetail` renders them, which for a large database costs far more than
+the rest of the snapshot. Each `LocatorInfo` carries the locator's End
 SID and its `EndXSIDs` — one End.X SID per Up adjacency that has a global
 on-link neighbor address, with that neighbor's System ID and the circuit it
 sits on.

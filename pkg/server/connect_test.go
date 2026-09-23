@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -240,7 +241,7 @@ func TestGetLsdbSurvivesInvalidUTF8Hostname(t *testing.T) {
 	defer ts.Close()
 	client := goisisv1connect.NewIsisServiceClient(ts.Client(), ts.URL)
 
-	lsdb, err := client.GetLsdb(ctx, connect.NewRequest(&goisisv1.GetLsdbRequest{}))
+	lsdb, err := client.GetLsdb(ctx, connect.NewRequest(&goisisv1.GetLsdbRequest{Detail: true}))
 	if err != nil {
 		t.Fatalf("GetLsdb: %v", err)
 	}
@@ -262,6 +263,61 @@ func TestGetLsdbSurvivesInvalidUTF8Hostname(t *testing.T) {
 	for _, a := range adjs.Msg.GetAdjacencies() {
 		if !utf8.ValidString(a.GetHostname()) {
 			t.Errorf("adjacency %s hostname %q is not valid UTF-8", a.GetSystemId(), a.GetHostname())
+		}
+	}
+}
+
+// TestGetLsdbSendsTLVTextOnlyWhenAsked: rendering an LSP's TLVs costs more
+// than the rest of the response put together, so GetLsdb renders them only for
+// a client that asks. `goisis database` without --detail never displays them.
+func TestGetLsdbSendsTLVTextOnlyWhenAsked(t *testing.T) {
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	if err := s.mgmtOperation(ctx, func() error {
+		injectLSPAt(s, packet.Level2, peer,
+			[]packet.TLV{&packet.DynamicHostnameTLV{Hostname: "r2"}}, time.Now())
+		return nil
+	}); err != nil {
+		t.Fatalf("seed LSDB: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle(NewConnectHandler(s))
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	client := goisisv1connect.NewIsisServiceClient(ts.Client(), ts.URL)
+
+	for _, tc := range []struct {
+		detail bool
+		want   []string
+	}{
+		{detail: false, want: nil},
+		{detail: true, want: []string{"Dynamic Hostname: r2"}},
+	} {
+		res, err := client.GetLsdb(ctx, connect.NewRequest(&goisisv1.GetLsdbRequest{Detail: tc.detail}))
+		if err != nil {
+			t.Fatalf("GetLsdb(detail=%t): %v", tc.detail, err)
+		}
+		var found bool
+		for _, l := range res.Msg.GetLsps() {
+			if l.GetHostname() != "r2" {
+				continue
+			}
+			found = true
+			if got := l.GetTlvs(); !slices.Equal(got, tc.want) {
+				t.Errorf("GetLsdb(detail=%t) tlvs = %q, want %q", tc.detail, got, tc.want)
+			}
+		}
+		if !found {
+			t.Fatalf("GetLsdb(detail=%t): the injected peer LSP is missing", tc.detail)
 		}
 	}
 }
