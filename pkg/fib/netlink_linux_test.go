@@ -137,3 +137,83 @@ func TestNetlinkSweepKeepsListed(t *testing.T) {
 		}
 	})
 }
+
+// TestNetlinkRouteCarriesPriorityOnEveryNexthopShape guarantees that both the
+// single-gateway and the ECMP form key on a non-zero metric, which is what
+// keeps an IS-IS route from aliasing the kernel's connected route.
+func TestNetlinkRouteCarriesPriorityOnEveryNexthopShape(t *testing.T) {
+	if _, err := netlink.LinkByName("lo"); err != nil {
+		t.Skipf("no loopback interface to resolve next hops against: %v", err)
+	}
+	f := NewNetlink(unix.RT_TABLE_MAIN)
+	nh := func(gw string) Nexthop { return Nexthop{Interface: "lo", Gateway: netip.MustParseAddr(gw)} }
+	for _, tc := range []struct {
+		name     string
+		nexthops []Nexthop
+	}{
+		{"single gateway", []Nexthop{nh("10.0.0.2")}},
+		{"ecmp", []Nexthop{nh("10.0.0.2"), nh("10.0.0.3")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := f.route(netip.MustParsePrefix("10.9.9.0/24"), tc.nexthops)
+			if err != nil {
+				t.Fatalf("route: %v", err)
+			}
+			if r.Priority != routePriority {
+				t.Errorf("Priority = %d, want %d", r.Priority, routePriority)
+			}
+		})
+	}
+}
+
+// TestNetlinkKeepsConnectedRouteForTheSamePrefix guarantees that installing an
+// IS-IS route for a locally connected subnet leaves the kernel's connected
+// route alone — both while the IS-IS route is installed and after it is
+// withdrawn, since the two no longer share the [prefix, tos, priority] key
+// NLM_F_REPLACE matches on.
+func TestNetlinkKeepsConnectedRouteForTheSamePrefix(t *testing.T) {
+	withNetns(t, func(t *testing.T) {
+		f := NewNetlink(unix.RT_TABLE_MAIN)
+		// dum0 carries 10.0.0.1/24, so 10.0.0.0/24 is connected.
+		dst := netip.MustParsePrefix("10.0.0.0/24")
+		gw := netip.MustParseAddr("10.0.0.2")
+
+		if err := f.Update(dst, []Nexthop{{Interface: "dum0", Gateway: gw}}); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		routes := protoISISRoutes(t, netlink.FAMILY_V4)
+		if len(routes) != 1 || routes[0].Priority != routePriority {
+			t.Fatalf("want one proto-isis route at metric %d, got %+v", routePriority, routes)
+		}
+		if !hasConnectedRoute(t, dst) {
+			t.Fatalf("Update replaced the connected route for %s", dst)
+		}
+
+		if err := f.Withdraw(dst); err != nil {
+			t.Fatalf("withdraw: %v", err)
+		}
+		if routes := protoISISRoutes(t, netlink.FAMILY_V4); len(routes) != 0 {
+			t.Fatalf("withdraw left the isis route behind: %+v", routes)
+		}
+		if !hasConnectedRoute(t, dst) {
+			t.Fatalf("Withdraw removed the connected route for %s", dst)
+		}
+	})
+}
+
+// hasConnectedRoute reports whether the kernel's own (proto kernel scope link)
+// route for prefix is present.
+func hasConnectedRoute(t *testing.T, prefix netip.Prefix) bool {
+	t.Helper()
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4,
+		&netlink.Route{Protocol: unix.RTPROT_KERNEL}, netlink.RT_FILTER_PROTOCOL)
+	if err != nil {
+		t.Fatalf("list connected routes: %v", err)
+	}
+	for _, r := range routes {
+		if r.Dst != nil && r.Dst.String() == prefix.String() {
+			return true
+		}
+	}
+	return false
+}

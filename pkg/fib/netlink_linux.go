@@ -18,6 +18,16 @@ import (
 // sweepable (`ip route show proto isis`).
 const rtprotoISIS = unix.RTPROT_ISIS
 
+// routePriority is the metric (RTA_PRIORITY) on every IS-IS route. It must be
+// non-zero: a route's kernel key is [prefix, tos, priority], so at metric 0 an
+// IS-IS route for a locally connected subnet shares the key with the kernel's
+// `proto kernel scope link` route and NLM_F_REPLACE overwrites it — Withdraw
+// then leaves the subnet unrouted. 115 is the conventional IS-IS
+// administrative distance; an IPv4 connected route (metric 0) still wins.
+// Not applied to seg6local local-SID routes: those are ours alone, nothing
+// else installs the SID address, and RemoveLocalSID must keep matching them.
+const routePriority = 115
+
 // Netlink is a Linux FIB that programs routes via rtnetlink. Routes are
 // installed in the given table tagged with the IS-IS route protocol. It
 // requires CAP_NET_ADMIN.
@@ -55,8 +65,7 @@ func (n *Netlink) Update(prefix netip.Prefix, nexthops []Nexthop) error {
 
 // Withdraw implements FIB.
 func (n *Netlink) Withdraw(prefix netip.Prefix) error {
-	r := &netlink.Route{Dst: prefixToIPNet(prefix), Protocol: rtprotoISIS, Table: n.table}
-	if err := netlink.RouteDel(r); err != nil && !isNotExist(err) {
+	if err := netlink.RouteDel(n.baseRoute(prefix)); err != nil && !isNotExist(err) {
 		return fmt.Errorf("fib: delete %s: %w", prefix, err)
 	}
 	return nil
@@ -88,10 +97,21 @@ func (n *Netlink) Sweep(keep func(netip.Prefix) bool) error {
 	return nil
 }
 
+// baseRoute is the key shared by every IS-IS route: Update, Withdraw and the
+// startup sweep must agree on it, or a delete misses the route it installed.
+func (n *Netlink) baseRoute(prefix netip.Prefix) *netlink.Route {
+	return &netlink.Route{
+		Dst:      prefixToIPNet(prefix),
+		Protocol: rtprotoISIS,
+		Table:    n.table,
+		Priority: routePriority,
+	}
+}
+
 // route builds the netlink route for a prefix and its next-hop set, using a
 // single gateway for one next hop and an ECMP multipath for several.
 func (n *Netlink) route(prefix netip.Prefix, nexthops []Nexthop) (*netlink.Route, error) {
-	r := &netlink.Route{Dst: prefixToIPNet(prefix), Protocol: rtprotoISIS, Table: n.table}
+	r := n.baseRoute(prefix)
 	if len(nexthops) == 1 {
 		link, err := netlink.LinkByName(nexthops[0].Interface)
 		if err != nil {

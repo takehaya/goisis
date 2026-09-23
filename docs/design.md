@@ -247,8 +247,10 @@ Two invariants matter beyond the codec:
   comparator (`betterRoute`): Level-1 beats Level-2, then algorithm 0 beats
   Flex-Algo. The RIB holds the *desired* state; FIB write failures land in a
   pending set retried on the next recompute, surfaced by the
-  `goisis_fib_pending` gauge. On startup the FIB is swept of routes a
-  previous incarnation left behind.
+  `goisis_fib_pending` gauge. Routes carry metric 115 (the IS-IS
+  administrative distance), so they never share the kernel's
+  `[prefix, tos, priority]` key with a connected route and cannot replace one.
+  On startup the FIB is swept of routes a previous incarnation left behind.
 - **Flex-Algo (RFC 9350).** Definition election follows priority / system-ID;
   participation prunes the topology per algorithm. Only the IGP metric is
   computed today; constraint sub-sub-TLVs are preserved on the wire for a
