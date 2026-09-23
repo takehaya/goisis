@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -83,6 +84,23 @@ func FuzzHandleRx(f *testing.F) {
 			now := time.Now()
 			s.floodTransmit(now)
 			s.updateRIB(now)
+			// The management API renders the LSDB into proto3 string fields,
+			// which must hold valid UTF-8: a peer-supplied hostname that does
+			// not would break GetLsdb for every operator, not just for the
+			// PDU that carried it.
+			hostnames := s.hostnameIndex(now)
+			for _, l := range []packet.Level{packet.Level1, packet.Level2} {
+				for _, info := range s.dbs[l].snapshot(now, hostnames) {
+					if !utf8.ValidString(info.Hostname) {
+						t.Fatalf("LSP %s hostname %q is not valid UTF-8", info.LSPID, info.Hostname)
+					}
+					for _, line := range info.TLVs {
+						if !utf8.ValidString(line) {
+							t.Fatalf("LSP %s TLV line %q is not valid UTF-8", info.LSPID, line)
+						}
+					}
+				}
+			}
 		}
 	})
 }
@@ -102,6 +120,11 @@ func rxFuzzSeeds(f *testing.F) [][]byte {
 		// A purge for an LSP ID we do not hold.
 		&packet.LSP{Level: packet.Level2, RemainingTime: 0, ISType: 2,
 			LSPID: lspID(fuzzPeerID, 0), SequenceNumber: 9},
+		// A hostname (TLV 137) whose octets are not valid UTF-8: it reaches
+		// the operator-facing snapshot the body checks above.
+		&packet.LSP{Level: packet.Level2, RemainingTime: 1000, ISType: 2,
+			LSPID: lspID(fuzzPeerID, 0), SequenceNumber: 5,
+			TLVs: []packet.TLV{&packet.DynamicHostnameTLV{Hostname: "\xff\xfe"}}},
 		// A CSNP with Start > End: no LSP ID can fall inside the range.
 		&packet.CSNP{Level: packet.Level2, SourceID: nodeID(fuzzPeerID, 0),
 			StartLSP: maxID, EndLSP: packet.LSPID{}},
