@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,13 +52,19 @@ func TestSRv6EndXOnP2PAdjacency(t *testing.T) {
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	loc1 := netip.MustParsePrefix("fc00:0:1::/48")
 	loc2 := netip.MustParsePrefix("fc00:0:2::/48")
+	// End.X forwards to the neighbor's global on-link address, never to its
+	// link-local (see endXNexthop), so both ends carry one on the link's /64.
 	bLL := netip.MustParseAddr("fe80::b2")
+	bGlobal := netip.MustParseAddr("2001:db8::b2")
+	subnet := netip.MustParsePrefix("2001:db8::/64")
 	idB := packet.SystemID{0, 0, 0, 0, 0, 2}
 
 	cfgA := CircuitConfig{Name: "a", Transport: ta, P2P: true, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs: []netip.Addr{netip.MustParseAddr("fe80::a1")}}
+		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
 	cfgB := CircuitConfig{Name: "b", Transport: tb, P2P: true, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs: []netip.Addr{bLL}}
+		IPv6Addrs:         []netip.Addr{bLL, bGlobal},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
 	fastHello(&cfgA)
 	fastHello(&cfgB)
 
@@ -100,12 +109,12 @@ func TestSRv6EndXOnP2PAdjacency(t *testing.T) {
 		}
 	}
 
-	// Both SIDs are programmed towards B's link-local on the circuit A learned
-	// it on.
+	// Both SIDs are programmed towards B's global on-link address, on the
+	// circuit A learned it on.
 	waitFor(t, "a programmed both End.X SIDs", func() bool {
 		for _, sid := range []netip.Addr{sid1, sid2} {
 			e, ok := afib.getSID(sid)
-			if !ok || e.Behavior != fib.BehaviorEndX || e.Nexthop != bLL || e.Interface != "a" {
+			if !ok || e.Behavior != fib.BehaviorEndX || e.Nexthop != bGlobal || e.Interface != "a" {
 				return false
 			}
 		}
@@ -155,13 +164,16 @@ func TestSRv6LANEndXOnBroadcastAdjacency(t *testing.T) {
 
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	loc := netip.MustParsePrefix("fc00:0:1::/48")
-	bLL := netip.MustParseAddr("fe80::b2")
+	bGlobal := netip.MustParseAddr("2001:db8::b2")
+	subnet := netip.MustParsePrefix("2001:db8::/64")
 	idB := packet.SystemID{0, 0, 0, 0, 0, 2}
 
 	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs: []netip.Addr{netip.MustParseAddr("fe80::a1")}}
+		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
 	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs: []netip.Addr{bLL}}
+		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::b2"), bGlobal},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
 	fastHello(&cfgA)
 	fastHello(&cfgB)
 
@@ -195,7 +207,7 @@ func TestSRv6LANEndXOnBroadcastAdjacency(t *testing.T) {
 	}
 	waitFor(t, "a programmed the LAN End.X SID", func() bool {
 		e, ok := afib.getSID(sid)
-		return ok && e.Behavior == fib.BehaviorEndX && e.Nexthop == bLL && e.Interface == "a"
+		return ok && e.Behavior == fib.BehaviorEndX && e.Nexthop == bGlobal && e.Interface == "a"
 	})
 }
 
@@ -266,5 +278,205 @@ func TestSRv6EndXEntrySplitting(t *testing.T) {
 	}
 	if _, err := (&packet.ExtendedISReachabilityTLV{Neighbors: entries[:1]}).Serialize(); err != nil {
 		t.Errorf("split entry does not serialize: %v", err)
+	}
+}
+
+// endXNeighbor is the neighbor an End.X next-hop test holds an adjacency to.
+var endXNeighbor = packet.SystemID{0, 0, 0, 0, 0, 2}
+
+// endXServer builds a server with one SRv6 locator on a point-to-point circuit
+// whose connected subnet is 2001:db8::/64, holding an Up adjacency to
+// endXNeighbor that listed helloAddrs in its hellos (TLV 232). Serve is not
+// started: the tests drive syncEndXSIDs directly, as the regeneration path does.
+func endXServer(t *testing.T, logs io.Writer, helloAddrs []netip.Addr) (*IsisServer, *recordFIB) {
+	t.Helper()
+	rf := newRecordFIB()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name: "a", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500),
+			P2P: true, Level2: true, Padding: ptrFalse(),
+			IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::1")},
+			ConnectedPrefixes: []netip.Prefix{netip.MustParsePrefix("2001:db8::/64")},
+		}),
+		WithSRv6Locator(netip.MustParsePrefix("fc00:0:1::/48")),
+		WithFIB(rf),
+		WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
+	)
+	var lv levelSet
+	lv.add(packet.Level2)
+	s.circuits[0].p2pAdj = &adjacency{systemID: endXNeighbor, state: AdjUp, levels: lv, neighborIPv6: helloAddrs}
+	return s, rf
+}
+
+// TestEndXUsesGlobalOnLinkNexthopAndWithholdsWithoutOne: an End.X SID is
+// allocated, advertised and programmed only when the neighbor announces a
+// global IPv6 address inside one of the circuit's connected subnets — from its
+// hellos, or failing that from its fragment-0 LSP (FRR lists only link-locals
+// in hellos, as RFC 5308 3 requires, and its globals in the LSP). Linux
+// resolves an End.X next hop with seg6_lookup_any_nexthop, which confines a
+// link-local destination to the ingress interface, so a link-local next hop
+// drops every transit packet: with no global on-link address there is nothing
+// worth advertising, and the adjacency is warned about exactly once.
+func TestEndXUsesGlobalOnLinkNexthopAndWithholdsWithoutOne(t *testing.T) {
+	linkLocal := netip.MustParseAddr("fe80::b2")
+	onLink := netip.MustParseAddr("2001:db8::2")
+	offLink := netip.MustParseAddr("2001:db8:ffff::2")
+	sid := netip.MustParseAddr("fc00:0:1:1::")
+
+	tests := []struct {
+		name    string
+		hello   []netip.Addr
+		lsp     []netip.Addr // TLV 232 of the neighbor's fragment-0 LSP
+		nexthop netip.Addr   // invalid: no SID at all
+	}{
+		{name: "global on-link address in the hello", hello: []netip.Addr{linkLocal, onLink}, nexthop: onLink},
+		{name: "global on-link address only in the neighbor LSP", hello: []netip.Addr{linkLocal}, lsp: []netip.Addr{linkLocal, onLink}, nexthop: onLink},
+		{name: "link-local only", hello: []netip.Addr{linkLocal}},
+		{name: "global address off this link", hello: []netip.Addr{linkLocal, offLink}, lsp: []netip.Addr{offLink}},
+		{name: "no addresses at all"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs syncBuf
+			s, rf := endXServer(t, &logs, tc.hello)
+			if tc.lsp != nil {
+				injectLSP(s, endXNeighbor, []packet.TLV{&packet.IPv6InterfaceAddressesTLV{Addresses: tc.lsp}}, time.Now())
+			}
+			s.syncEndXSIDs()
+			s.syncEndXSIDs() // idempotent, and the warning is edge-triggered
+
+			subs := s.endXSubTLVs(s.circuits[0], s.circuits[0].p2pAdj)
+			entry, programmed := rf.getSID(sid)
+			warnings := strings.Count(logs.String(), "no on-link global IPv6 address")
+
+			if !tc.nexthop.IsValid() {
+				if len(subs) != 0 {
+					t.Errorf("advertised %d End.X sub-TLVs, want none", len(subs))
+				}
+				if programmed {
+					t.Errorf("programmed End.X SID %s, want none", sid)
+				}
+				if warnings != 1 {
+					t.Errorf("warnings about the missing next hop = %d, want 1", warnings)
+				}
+				return
+			}
+			if len(subs) != 1 || subs[0].(*packet.SRv6EndXSIDSubTLV).SID != sid {
+				t.Fatalf("End.X sub-TLVs = %+v, want one advertising %s", subs, sid)
+			}
+			if !programmed || entry.Behavior != fib.BehaviorEndX || entry.Nexthop != tc.nexthop || entry.Interface != "a" {
+				t.Errorf("programmed End.X SID = %+v (present %v), want next hop %s on a", entry, programmed, tc.nexthop)
+			}
+			if warnings != 0 {
+				t.Errorf("warned %d times about a next hop that exists", warnings)
+			}
+		})
+	}
+}
+
+// TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater: a neighbor that at
+// first lists only a link-local gets no End.X SID, and the hello that later
+// adds a global on-link address is itself what triggers the regeneration that
+// allocates, advertises and programs one.
+func TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater(t *testing.T) {
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	subnet := netip.MustParsePrefix("2001:db8::/64")
+	bLL := netip.MustParseAddr("fe80::b2")
+	bGlobal := netip.MustParseAddr("2001:db8::b2")
+
+	cfgA := CircuitConfig{Name: "a", Transport: ta, P2P: true, Level2: true, Padding: ptrFalse(),
+		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, P2P: true, Level2: true, Padding: ptrFalse(),
+		IPv6Addrs: []netip.Addr{bLL}}
+	fastHello(&cfgA)
+	fastHello(&cfgB)
+
+	afib := newRecordFIB()
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area),
+		WithCircuit(cfgA), WithSRv6Locator(netip.MustParsePrefix("fc00:0:1::/48")), WithFIB(afib))
+	b := mustServer(t, WithSystemID(endXNeighbor), WithAreaAddresses(area), WithCircuit(cfgB))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	// Wait past the regeneration the adjacency coming Up asks for, so the SID
+	// below can only come from the address change itself.
+	waitFor(t, "a advertises its adjacency to b", func() bool {
+		for _, tlv := range ownLSPTLVs(t, a) {
+			if r, ok := tlv.(*packet.ExtendedISReachabilityTLV); ok && len(r.Neighbors) > 0 {
+				return true
+			}
+		}
+		return false
+	})
+	if p2p, _ := ownEndXSubTLVs(t, a); len(p2p) != 0 {
+		t.Fatalf("advertised %d End.X SIDs towards a link-local-only neighbor, want none", len(p2p))
+	}
+
+	// Only b's hellos change: its own LSP carries neither TLV 232 nor a
+	// connected prefix, so nothing else can prompt a to re-originate.
+	if err := b.SetCircuitAddresses(ctx, "b", nil, []netip.Addr{bLL, bGlobal}, nil); err != nil {
+		t.Fatalf("SetCircuitAddresses: %v", err)
+	}
+	sid := netip.MustParseAddr("fc00:0:1:1::")
+	waitFor(t, "a advertises and programs the End.X SID", func() bool {
+		p2p, _ := ownEndXSubTLVs(t, a)
+		if len(p2p) != 1 || p2p[0].SID != sid {
+			return false
+		}
+		e, ok := afib.getSID(sid)
+		return ok && e.Nexthop == bGlobal && e.Interface == "a"
+	})
+}
+
+// TestEndXFollowsNeighborFragmentZeroLSP: a neighbor that lists only a
+// link-local in its hellos publishes its global addresses in TLV 232 of its
+// fragment-0 LSP (FRR does). Installing that fragment asks for a regeneration,
+// so the End.X SID appears as soon as the LSP arrives; an LSP from a system we
+// hold no adjacency to asks for nothing.
+func TestEndXFollowsNeighborFragmentZeroLSP(t *testing.T) {
+	var logs syncBuf
+	s, rf := endXServer(t, &logs, []netip.Addr{netip.MustParseAddr("fe80::b2")})
+	c := s.circuits[0]
+	now := time.Now()
+	s.syncEndXSIDs() // settles with no next hop and nothing advertised
+	s.lspGenPending = false
+
+	lsp := func(id packet.SystemID, tlvs ...packet.TLV) (*packet.LSP, []byte) {
+		t.Helper()
+		l := &packet.LSP{Level: packet.Level2, RemainingTime: maxAgeSeconds, LSPID: lspID(id, 0),
+			SequenceNumber: 1, ISType: 2, TLVs: tlvs}
+		raw, err := l.Serialize()
+		if err != nil {
+			t.Fatalf("serialize LSP: %v", err)
+		}
+		return l, raw
+	}
+
+	stranger, raw := lsp(packet.SystemID{0, 0, 0, 0, 0, 9})
+	s.processLSP(c, raw, stranger, now)
+	if s.lspGenPending {
+		t.Error("an LSP from a system we hold no adjacency to asked for a regeneration")
+	}
+
+	onLink := netip.MustParseAddr("2001:db8::2")
+	neighbor, raw := lsp(endXNeighbor, &packet.IPv6InterfaceAddressesTLV{Addresses: []netip.Addr{onLink}})
+	s.processLSP(c, raw, neighbor, now)
+	if !s.lspGenPending {
+		t.Fatal("the neighbor's fragment 0 did not ask for a regeneration")
+	}
+	s.drainLSPGen(now)
+	sid := netip.MustParseAddr("fc00:0:1:1::")
+	if e, ok := rf.getSID(sid); !ok || e.Nexthop != onLink {
+		t.Errorf("programmed End.X SID = %+v (present %v), want next hop %s", e, ok, onLink)
 	}
 }

@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -48,13 +49,25 @@ type adjacency struct {
 	levels            levelSet
 
 	// Neighbor interface addresses from its hellos (TLV 132 / 232), used to
-	// resolve SPF next-hop gateways. IPv6 are link-local.
+	// resolve SPF next-hop gateways (IPv6 are link-local) and, when the peer
+	// lists a global one, End.X SID next hops.
 	neighborIPv4 []netip.Addr
 	neighborIPv6 []netip.Addr
 
 	// NLPIDs the neighbor routes (TLV 129, RFC 1195 3.1); nil when the hello
 	// carried no such TLV.
 	nlpids []byte
+}
+
+// setNeighborAddrs records the addresses a hello listed and reports whether
+// they differ from the ones held. The set decides both the SPF next hop and
+// whether an End.X SID can be advertised at all (see endXNexthop), so a change
+// on an established adjacency has to re-run origination, not just sit in the
+// table until the next unrelated event.
+func (a *adjacency) setNeighborAddrs(v4, v6 []netip.Addr) bool {
+	changed := !slices.Equal(a.neighborIPv4, v4) || !slices.Equal(a.neighborIPv6, v6)
+	a.neighborIPv4, a.neighborIPv6 = v4, v6
+	return changed
 }
 
 // AdjacencyInfo is an exported snapshot of an adjacency.

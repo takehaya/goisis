@@ -74,10 +74,24 @@ Capability TLV (242). It is also mirrored into IPv6 reachability (TLV 236) for
 peers that don't parse TLV 27. With `fib: true` the End SID is installed as a
 `seg6local` End route.
 
-Every adjacency also gets an End.X SID per locator, taken from the locator's
+An adjacency also gets an End.X SID per locator, taken from the locator's
 function space starting at 1 and advertised in the neighbour's IS reachability
 entry (RFC 9352 §8). With `fib: true` each one becomes a `seg6local` End.X
 route towards that neighbour; there is nothing to configure.
+
+That needs the neighbour to have a **global IPv6 address on one of the
+circuit's connected subnets**: goisis takes it from the neighbour's hellos and
+otherwise from TLV 232 of its fragment-0 LSP (FRR sends only link-locals in
+hellos). Linux resolves an End.X next hop against the interface the packet
+arrived on, so a link-local next hop would drop everything that is not a
+hairpin. Where no such address is known, nothing is allocated, advertised or
+programmed, and the circuit logs `no on-link global IPv6 address for neighbor`
+once for that adjacency.
+
+Today that address only ever comes from a peer that publishes one: FRR does, in
+its LSP. `goisisd` itself publishes none — its hellos carry link-locals as RFC
+5308 3 requires and its LSPs carry no TLV 232 — so a link between two goisis
+nodes gets no End.X SIDs.
 
 A locator bound to a Flexible Algorithm is configured under `flex-algo` instead
 (see `locator` below), not here — `srv6.locators` are algorithm-0 locators.

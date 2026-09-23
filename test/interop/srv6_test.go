@@ -112,6 +112,24 @@ router isis 1
 		t.Log("kernel lacks seg6local (CONFIG_IPV6_SEG6_LWTUNNEL); skipping End SID dataplane assertion")
 	}
 
+	// FRR lists only link-locals in its hellos (RFC 5308 3) and its global
+	// addresses in TLV 232 of its LSP, so goisis's End.X SID towards it must
+	// come out with the on-link global 2001:db8::2 as its next hop — a
+	// link-local one would black-hole every transit packet.
+	if seg6localSupported(t) {
+		waitUp(t, "goisis programs an End.X SID via FRR's global on-link address", func() bool {
+			out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show").CombinedOutput()
+			for _, line := range strings.Split(string(out), "\n") {
+				if strings.Contains(line, "End.X") && strings.Contains(line, "nh6 2001:db8::2") {
+					return true
+				}
+			}
+			return false
+		})
+	} else {
+		t.Log("kernel lacks seg6local (CONFIG_IPV6_SEG6_LWTUNNEL); skipping End.X SID dataplane assertion")
+	}
+
 	// goisis must install FRR's locator into its kernel FIB (proto isis).
 	waitUp(t, "goisis installs FRR locator fc00:0:2::/48", func() bool {
 		out, _ := exec.Command("nsenter", "-t", pgi, "-n", "ip", "-6", "route", "show", "proto", "isis").CombinedOutput()

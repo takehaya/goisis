@@ -54,6 +54,7 @@ type IsisServer struct {
 	algoWarned    map[algoKey]bool        // (level,algo) whose unsupported metric-type was logged
 	endXSIDs      map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 	seqWrapUntil  map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
+	endXNoNexthop map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)
@@ -118,6 +119,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		algoWarned:        map[algoKey]bool{},
 		endXSIDs:          map[endXKey]endXSID{},
 		seqWrapUntil:      map[lspKey]time.Time{},
+		endXNoNexthop:     map[endXAdjKey]bool{},
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,

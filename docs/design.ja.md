@@ -232,9 +232,9 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
   バイト、サーキットや `lsp-mtu` がより狭ければその値)を超える TLV 集合は
   シリアライズサイズでフラグメント 0 + スピル分のフラグメント 1..255 に
   詰め、集合が縮んだら余ったフラグメントをパージします。End.X SID の整合も
-  この再生成で取ります: Up の隣接は locator ごとに 1 つ SID を持ち、値は
-  その locator の function 空間から取ります。隣接が消えた SID は解放し、FIB
-  からも削除します。
+  この再生成で取ります: グローバルな on-link アドレスを持つ Up の隣接は
+  locator ごとに 1 つ SID を持ち、値はその locator の function 空間から取り
+  ます。隣接(やアドレス)が消えた SID は解放し、FIB からも削除します。
 - **SPF。** LSDB から構築したトポロジ上で `(レベル, アルゴリズム)` ごと
   に Dijkstra を実行します。ISO の双方向接続チェック、擬似ノードの
   ゼロコスト辺、オーバーロードビットによる中継回避、64 ビット累積 +
@@ -294,6 +294,7 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
 | RFC 7987 の lifetime 下限なし | 受信 LSP のエージングは広告された remaining lifetime にそのまま従います。 |
 | End.DT46 | `fib` API では宣言されていますが netlink FIB ではプログラムできません（vendored ライブラリに該当 seg6local アクションがないため）。End/End.X/End.DT4/End.DT6 は動きます。 |
 | End.X SID は無保護 | End.X SID は (locator, 隣接) ごとに 1 つで、flags と weight は 0 で広報します。backup (B)・SID セット (S)・再起動をまたぐ永続化 (P) はいずれも扱わないため、再起動すると function 値は割り当て直しになります。B フラグの利用先である TI-LFA は対象外です。 |
+| End.X には隣接のグローバル on-link アドレスが必要 | End.X SID の割り当て・広報・FIB 投入は、隣接がその回線の connected プレフィクス内にグローバル IPv6 アドレスを持つ場合に限ります。アドレスは隣接の hello、無ければ fragment 0 LSP の TLV 232 から取ります。Linux の End.X は次ホップを*入力*インタフェース側で解決するため、RFC 5308 が与える link-local を次ホップにすると hairpin しか転送できず transit は落ちます。hello に link-local、LSP にグローバルを載せる FRR が相手なら、リンクにグローバルな subnet があれば End.X が付きます。goisisd 同士では付きません: 本デーモンは hello に link-local しか載せず(RFC 5308 3)、自分の TLV 232 も広報しないため、転送先になるアドレスを公開していないからです。アドレスが分からない間は割り当ても広報も FIB 投入もせず、隣接ごとに 1 回警告します。 |
 
 ## テスト戦略
 

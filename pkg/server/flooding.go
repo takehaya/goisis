@@ -159,6 +159,16 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	}
 	s.markDirty()
 
+	// A neighbor's fragment 0 carries its interface addresses (TLV 232), which
+	// is where a peer that lists only link-locals in its hellos (FRR, per RFC
+	// 5308 3) publishes the global on-link address an End.X SID towards it
+	// needs. Re-originate so the SID appears once that fragment arrives.
+	if id.FragmentID() == 0 && id.IsNodeLSP() {
+		if adj, _ := s.findAdjacency(id.NodeID().SystemID()); adj != nil {
+			s.requestLSPRegen()
+		}
+	}
+
 	// Flood to all other circuits; on the arrival circuit clear SRM and, on
 	// p2p, acknowledge.
 	s.floodLSP(level, id, c, now)

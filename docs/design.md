@@ -233,10 +233,10 @@ Two invariants matter beyond the codec:
   TLV sets that exceed the LSP buffer — 1492 bytes, or less when the
   circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
   fragment 0 plus spill fragments 1..255; stale fragments are purged when the
-  set shrinks. Re-origination is also where End.X SIDs are reconciled: every Up
-  adjacency holds one SID per locator, taken from that locator's function
-  space, and a SID whose adjacency is gone is released and removed from the
-  FIB.
+  set shrinks. Re-origination is also where End.X SIDs are reconciled: an Up
+  adjacency with a global on-link neighbour address holds one SID per locator,
+  taken from that locator's function space, and a SID whose adjacency (or
+  address) is gone is released and removed from the FIB.
 - **SPF.** Dijkstra per `(level, algorithm)` over a topology built from the
   LSDB, with the ISO two-way connectivity check, pseudonode zero-cost edges,
   overload-bit transit avoidance, 64-bit metric accumulation with an
@@ -297,6 +297,7 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No RFC 7987 lifetime floor | Received-LSP aging follows the advertised remaining lifetime as-is. |
 | End.DT46 | Declared in the `fib` API but not programmable via the netlink FIB (the vendored library lacks the seg6local action); End/End.X/End.DT4/End.DT6 work. |
 | End.X SIDs are unprotected | One End.X SID per (locator, adjacency), advertised with flags and weight zero: no backup (B) flag, no SID sets (S), and no persistence across restarts (P), so a restart reallocates function values. TI-LFA, which is what the B flag would feed, is out of scope. |
+| End.X needs a global on-link neighbour address | An End.X SID is allocated, advertised and programmed only where the neighbour has a global IPv6 address inside one of the circuit's connected prefixes — taken from its hellos, or from TLV 232 of its fragment-0 LSP. Linux resolves an End.X next hop against the *ingress* interface, so a link-local next hop (all RFC 5308 gives) forwards only a hairpin and drops transit traffic. Against FRR, which advertises link-locals in hellos and globals in its LSP, an End.X SID appears wherever the link carries a global subnet. Between two `goisisd` nodes none appears at all: the daemon puts only link-locals in hellos (RFC 5308 3) and originates no TLV 232 of its own, so a goisis peer publishes no address to forward to. Where no address is known, nothing is allocated, advertised or programmed and the adjacency is warned about once. |
 
 ## Testing strategy
 
