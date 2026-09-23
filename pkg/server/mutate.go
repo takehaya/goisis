@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"time"
 
 	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -47,8 +46,7 @@ func (s *IsisServer) AddLocator(ctx context.Context, cfg SRv6LocatorConfig) erro
 		}
 		s.locators = append(s.locators, cfg)
 		s.programSID(fib.LocalSID{SID: cfg.endSID(), Behavior: fib.BehaviorEnd})
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -71,8 +69,7 @@ func (s *IsisServer) DeleteLocator(ctx context.Context, prefix netip.Prefix) err
 		removed := s.locators[idx]
 		s.locators = append(s.locators[:idx], s.locators[idx+1:]...)
 		s.unprogramSID(removed.endSID())
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -89,8 +86,7 @@ func (s *IsisServer) AddFlexAlgo(ctx context.Context, cfg FlexAlgoConfig) error 
 			return fmt.Errorf("goisis: Flex-Algo %d is already configured", cfg.Algo)
 		}
 		s.flexAlgos = append(s.flexAlgos, cfg)
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -122,8 +118,7 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 		for _, level := range []packet.Level{packet.Level1, packet.Level2} {
 			s.algoWarned.clear(algoKey{level: level, algo: algo})
 		}
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -157,8 +152,7 @@ func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error 
 			return fmt.Errorf("goisis: prefix %s is already advertised", want)
 		}
 		s.optionPrefixes[want] = AdvertisedPrefix{Prefix: want, Metric: cfg.Metric}
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -183,8 +177,7 @@ func (s *IsisServer) DeletePrefix(ctx context.Context, prefix netip.Prefix) erro
 			return fmt.Errorf("goisis: prefix %s is not advertised", want)
 		}
 		delete(s.optionPrefixes, want)
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -197,8 +190,7 @@ func (s *IsisServer) SetOverload(ctx context.Context, on bool) error {
 	return s.mgmtOperation(ctx, func() error {
 		s.overloadManual = on
 		s.logger.Info("manual overload bit", "set", on)
-		s.regenerateLSPs(false, time.Now())
-		s.markDirty()
+		s.requestLSPRegen()
 		return nil
 	})
 }
@@ -213,29 +205,9 @@ func (s *IsisServer) ClearAdjacency(ctx context.Context, circuit string, systemI
 		if c == nil {
 			return fmt.Errorf("goisis: circuit %s is not configured", circuit)
 		}
-		if c.cfg.P2P {
-			if adj := c.p2pAdj; adj != nil && (systemID == nil || *systemID == adj.systemID) {
-				s.teardownP2PAdj(c, adj, "p2p adjacency cleared")
-				c.p2pAdj = nil
-			}
-			return nil
-		}
-		changed := false
-		for _, level := range c.cfg.levels() {
-			for id, adj := range c.adjs[level] {
-				if systemID != nil && *systemID != id {
-					continue
-				}
-				s.logger.Info("adjacency cleared", "circuit", c.cfg.Name, "level", level, "neighbor", id)
-				s.emitAdjacencyDown(c, adj, level)
-				delete(c.adjs[level], id)
-				s.electDIS(c, level)
-				changed = true
-			}
-		}
-		if changed {
-			s.regenerateLSPs(false, time.Now())
-		}
+		s.dropAdjacencies(c, "adjacency cleared", func(adj *adjacency) bool {
+			return systemID == nil || *systemID == adj.systemID
+		})
 		return nil
 	})
 }

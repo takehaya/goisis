@@ -109,6 +109,12 @@ func TestSetCircuitAddressesReachesHellosAndLSP(t *testing.T) {
 		t.Errorf("b still advertises the withdrawn address %s: %v", oldAddr, addrs)
 	}
 
+	// The push asks for a re-origination rather than making one, so the LSP
+	// follows within minLSPGenInterval instead of before the RPC returns.
+	waitFor(t, "own LSP advertises the renumbered subnet", func() bool {
+		_, ok := v4Reach(ownLSPTLVs(t, a))[renumbered]
+		return ok
+	})
 	got := v4Reach(ownLSPTLVs(t, a))
 	if m, ok := got[renumbered]; !ok || m != 42 {
 		t.Errorf("own LSP: %s metric = %d (present %v), want 42", renumbered, m, ok)

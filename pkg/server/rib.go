@@ -131,12 +131,15 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	}
 
 	// ISO 10589 7.2.9 / RFC 1195 §3.1: an L1L2 IS advertises the prefixes
-	// reachable inside its Level-1 area in its Level-2 LSP. The regeneration
-	// marks dirty, so a later iteration recomputes; the export set is unchanged
-	// then and the cascade stops after that one extra pass.
+	// reachable inside its Level-1 area in its Level-2 LSP. Originating the new
+	// export set marks dirty, so a later iteration recomputes; the export set is
+	// unchanged then and the cascade stops after that one extra pass. The flag
+	// is set here rather than through requestLSPRegen precisely so that one pass
+	// is all it costs: marking dirty from inside the recompute buys another one
+	// for every iteration the generation throttle holds the LSP back.
 	if export := s.l1ExportSet(merged); !maps.Equal(export, s.l1Export) {
 		s.l1Export = export
-		s.requestLSPRegen()
+		s.lspGenPending = true
 	}
 }
 
