@@ -222,6 +222,14 @@ Flexible Algorithm や locator の変更は取り下げと再広報の組なの�
 ください。前回すでに通った呼び出しは冗長として拒否されるので、ファイルが採用される
 までにリロードが 1 回余分に要ります。
 
+ファイルは `SIGHUP` のたびに読み直されるので、その所有者とモードは次回起動時では
+なく動作中のルーティング状態に対するアクセス制御です。書き込める人は、このノードに
+デフォルト経路をエリア全体へ広報させられます。同梱ユニットの `ExecReload=` により
+同じ経路が `systemctl reload goisisd` からも届き、polkit は root を渡さずにこれを
+許可できます。root 所有・モード `0640` 以下で配置してください。届かないのは認証で、
+`area-*` と `domain-*` の鍵はいずれも再起動が必要です。つまり書き込み権限で得られる
+のはこのノードが広報する到達性であって、HMAC を無効化する手段ではありません。
+
 ## ケーパビリティ
 
 `goisisd` は `CAP_NET_RAW`(AF_PACKET)を、`fib: true` のとき `CAP_NET_ADMIN` を
@@ -244,6 +252,12 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 `-o json` を付けると、一覧・表示系コマンドは表の代わりに RPC のレスポンスを
 JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
 の行の下にその TLV を並べるので、パケットキャプチャなしで対向の広告内容を読めます。
+
+`database` の `LIFETIME` 列は生成元の値ではなく、このノード自身の値です。受信した
+LSP は、MaxAge 未満で届いた場合 MaxAge からエージングされる(RFC 7987、
+[メトリクス](#メトリクス)参照)ため、この列が示すのは「このノードがあと何秒
+保持するか」です。「この LSP はもうすぐエージアウトするか」に答えられるのは、
+`*` の付いた生成元のノードだけです。
 
 `goisisd -api-listen` の既定は `127.0.0.1:50051` で、ホスト外から届くアドレスに
 バインドするには `-api-allow-remote` の明示が必要です。`:50051` のようにホスト部
@@ -295,7 +309,11 @@ unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の�
 `send`) / `goisis_pdu_rx_errors_total{circuit}` /
 `goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
-`remove_sid`) / `goisis_event_queue_depth`。
+`remove_sid`) / `goisis_event_queue_depth` /
+`goisis_config_reloads_total{outcome}` (outcome は `applied` / `refused` /
+`partial`) / `goisis_lsp_lifetime_floored_total{circuit}` /
+`goisis_inter_level_prefixes{direction}` (direction は `l2_to_l1` /
+`l1_to_l2`)。
 
 隣接が上がらないときの drop 理由は 3 つに分かれる。`hello_invalid` はこのサーキット
 では使えない hello で、ポイントツーポイントに LAN hello が来た (逆も同様)、holding
@@ -331,3 +349,23 @@ rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
 ```
 rate(goisis_flooding_lsp_drops_total[5m]) > 0
 ```
+
+リロードの outcome でアラートすべきは `partial` である。`refused` は誰かが書いた
+設定のままノードが動いている状態だが、`partial` はどちらの設定でもない状態で、
+以降の信号だけでは元に戻らない:
+
+```
+increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
+```
+
+`goisis_lsp_lifetime_floored_total` は、受信 LSP の remaining lifetime を
+RFC 7987 が MaxAge まで引き上げた回数を数える。このフィールドはチェックサムの
+対象外かつ認証ハッシュの対象外で、化けた値で LSP が早期にパージされるのを
+止めているのがこの下限だが、同時に破損の唯一の症状も消している。再フラッディング
+では古い lifetime が来るのが普通なので、1 件の発生は正常である。リンクが値を
+書き換えていると分かるのは、1 サーキットのレートを隣接サーキットと比べたときだ。
+
+`goisis_inter_level_prefixes` は、`goisis_routes` が学習した経路数であるのに対し、
+このノードがレベル境界をまたいで注入しているプレフィックス数である。
+`policy.leak-l2-to-l1` の変更で動くのはこのゲージで、Level-2 のテーブル全体が
+Level-1 エリアへ流れ込んでいることを、Level-1 LSP が oversize になる前に示す。

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -77,6 +78,59 @@ type Metrics interface {
 	// log is edge-triggered per outage, which leaves this the only sign of a
 	// socket that keeps failing.
 	PDURxError(circuit string)
+	// ConfigReload records one configuration reload by how it ended:
+	// "applied", "refused" (nothing changed) or "partial". The three are
+	// different operational events — only "partial" leaves the node in
+	// neither configuration — so an alert on "is this daemon running its
+	// configuration file" needs them apart. The reload runs off a signal,
+	// outside the management goroutine; see ReportConfigReload.
+	ConfigReload(outcome string)
+	// LSPLifetimeFloored records one received LSP whose remaining lifetime the
+	// RFC 7987 floor raised to MaxAge, on the circuit it arrived on. The floor
+	// is what removed the symptom a corrupted lifetime used to produce (a
+	// premature purge, and the originator's re-origination behind it), so this
+	// is the only remaining sign of the field being rewritten in flight. A
+	// single event is normal — a re-flood from a mid-area node carries an aged
+	// value — so what diagnoses a link is the rate on one circuit against its
+	// neighbors, which is why this is counted rather than logged.
+	LSPLifetimeFloored(circuit string)
+	// InterLevelPrefixes reports the number of prefixes this node originates
+	// because of the level boundary, by direction: "l2_to_l1" is the leak and
+	// "l1_to_l2" the upward export. RouteCount is what this node learned;
+	// these are what it injects, which is the number a policy edit moves.
+	// Every direction reports on every recompute, so a node that stops leaking
+	// reports 0 instead of leaving a stale gauge behind.
+	InterLevelPrefixes(direction string, n int)
+}
+
+// ReloadOutcome is how a configuration reload ended, as reported through
+// Metrics.ConfigReload.
+type ReloadOutcome string
+
+// The outcomes of a configuration reload. The set is closed, so the label
+// stays constant-derived and its cardinality is three.
+const (
+	ReloadApplied ReloadOutcome = "applied" // the file is what the node runs
+	ReloadRefused ReloadOutcome = "refused" // rejected before anything changed
+	ReloadPartial ReloadOutcome = "partial" // some calls landed, one was refused
+)
+
+// Directions reported through Metrics.InterLevelPrefixes.
+const (
+	dirL2ToL1 = "l2_to_l1" // leaked down, up/down bit set (RFC 5305 4.1)
+	dirL1ToL2 = "l1_to_l2" // exported up (ISO 10589 7.2.9 / RFC 1195 3.1)
+)
+
+// ReportConfigReload records the outcome of a configuration reload. A reload
+// is driven by a signal, from a goroutine that is not the management loop, and
+// Metrics is called only from that loop — so the report is routed onto it the
+// same way a reader goroutine's receive failure is, rather than written to the
+// sink where it happened.
+func (s *IsisServer) ReportConfigReload(ctx context.Context, outcome ReloadOutcome) error {
+	return s.mgmtOperation(ctx, func() error {
+		s.metrics.ConfigReload(string(outcome))
+		return nil
+	})
 }
 
 // Reasons reported through Metrics.PDUDrop, one per point at which a received
@@ -175,6 +229,15 @@ func (NoopMetrics) PDUTxError(string, string) {}
 
 // PDURxError implements Metrics.
 func (NoopMetrics) PDURxError(string) {}
+
+// ConfigReload implements Metrics.
+func (NoopMetrics) ConfigReload(string) {}
+
+// LSPLifetimeFloored implements Metrics.
+func (NoopMetrics) LSPLifetimeFloored(string) {}
+
+// InterLevelPrefixes implements Metrics.
+func (NoopMetrics) InterLevelPrefixes(string, int) {}
 
 // txFailKey identifies one kind of transmit failure on one circuit. The key is
 // (circuit, step) and not the PDU: what fails is the circuit's socket or its

@@ -203,10 +203,9 @@ on-link IPv6 アドレス)と `Interface` は `BehaviorEndX` SID が転送する
 
 ## 独自メトリクス
 
-テレメトリ基盤へ流すには `server.Metrics`(`AdjacencyTransition` / `SPFRun` /
-`LSDBSize` / `FloodTx` / `FIBPending` / `PDURx` / `PDUDrop` /
-`AdjacencyCount` / `RouteCount` / `FIBError` / `EventQueueDepth`)を実装するか、
-Prometheus アダプタを使います:
+テレメトリ基盤へ流すには `server.Metrics` を実装するか、Prometheus アダプタを
+使います。`server.NoopMetrics` を埋め込んで必要なイベントだけを上書きすれば、
+後からインターフェースにメソッドが増えてもビルドは壊れません:
 
 ```go
 import "github.com/takehaya/goisis/pkg/metrics"

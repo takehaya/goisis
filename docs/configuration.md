@@ -232,6 +232,15 @@ Repeat the signal until it stops reporting a refusal: a call an earlier attempt
 already landed is refused as redundant, which costs one more reload before the
 file is adopted.
 
+The file is read again on every `SIGHUP`, so its ownership and mode are access
+control for live routing state, not just for the next restart: whoever can
+write it can make this node originate a default route area-wide, and the
+shipped unit's `ExecReload=` reaches the same path through `systemctl reload
+goisisd`, which polkit can grant without granting root. Ship it root-owned and
+`0640` at most. What that does not reach is authentication: every `area-*` and
+`domain-*` key needs a restart, so a writable file buys the reachability this
+node advertises, never the ability to turn HMAC off.
+
 ## Capabilities
 
 `goisisd` needs `CAP_NET_RAW` (AF_PACKET) and, with `fib: true`, `CAP_NET_ADMIN`:
@@ -254,6 +263,12 @@ current adjacencies and routes before following changes), and `version`.
 of a table, for scripts and `jq`. `goisis database --detail` additionally prints
 each LSP's TLVs under its row, so a peer's advertisement can be read without a
 packet capture.
+
+`database`'s `LIFETIME` column is this node's own view, not the originator's: a
+received LSP is aged from MaxAge whenever it arrived with less (RFC 7987, see
+[Metrics](#metrics)), so the column says how long *this* node will hold the
+LSP. "Is this LSP about to age out?" is answerable only on the node that
+originates it, where the row is marked `*`.
 
 `goisisd -api-listen` binds `127.0.0.1:50051` by default; anything reachable
 from off the host needs the `-api-allow-remote` opt-in. A bare `:50051` counts
@@ -305,7 +320,10 @@ on: remove the address, or suppress it with `policy.advertise`.
 `send`), `goisis_pdu_rx_errors_total{circuit}`,
 `goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
-`remove_sid`) and `goisis_event_queue_depth`.
+`remove_sid`), `goisis_event_queue_depth`,
+`goisis_config_reloads_total{outcome}` (outcomes: `applied`, `refused`,
+`partial`), `goisis_lsp_lifetime_floored_total{circuit}` and
+`goisis_inter_level_prefixes{direction}` (directions: `l2_to_l1`, `l1_to_l2`).
 
 An adjacency that will not come up is one of three drop reasons.
 `hello_invalid` is a hello this circuit cannot use at all — sent as LAN on a
@@ -335,6 +353,27 @@ steady rate means another node is originating LSPs in this node's name:
 rate(goisis_pdu_drops_total{reason!~"own_.*"}[5m]) > 0
 rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
 ```
+
+A `partial` reload outcome is the one to alert on: `refused` left the node
+running a configuration somebody wrote, `partial` left it in neither, and no
+further signal repairs that by itself.
+
+```
+increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
+```
+
+`goisis_lsp_lifetime_floored_total` counts received LSPs whose remaining
+lifetime RFC 7987 raised to MaxAge. That field sits outside the checksum and
+outside the authentication hash, and the floor is what stops a corrupted one
+from purging the LSP early — which also removed the only symptom the corruption
+used to produce. A single event is ordinary, since any re-flood from a
+mid-area node carries an aged value, so what says a link is rewriting the field
+is the rate on one circuit against its neighbours.
+
+`goisis_inter_level_prefixes` is what this node injects across the level
+boundary, where `goisis_routes` is what it learned. It is the gauge a
+`policy.leak-l2-to-l1` edit moves, and the one that shows a whole Level-2 table
+entering a Level-1 area before the Level-1 LSP goes oversize.
 
 An `oversize` flood drop is a neighbor whose database can never catch up: the
 LSP is larger than the circuit MTU and a transit node may not re-fragment a
