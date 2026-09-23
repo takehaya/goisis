@@ -28,6 +28,12 @@ options. ([日本語](configuration.ja.md))
 > FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
 > interop goisis↔goisis, not with FRR.
 
+A key the schema does not have is an error: `goisisd` refuses to start and a
+`SIGHUP` refuses the file. Releases up to 0.4.0 dropped an unrecognised key in
+silence, so `area-pasword` — one transposed letter — left the node
+unauthenticated with nothing to report it. **A file carrying keys goisisd does
+not define no longer loads**; comment them out or delete them.
+
 ## `circuits[]`
 
 | Key | Type | Description |
@@ -197,9 +203,27 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `area-*` / `domain-*` passwords, algorithms and key IDs | **Restart** — a rolling one, not a flag day, via [Key rotation](#key-rotation). |
 | `fib`, `fib-table`, `lsp-mtu`, `lsdb-entry-limit`, `overload-on-startup`, `policy` | **Restart.** |
 
-A file that will not parse leaves the daemon exactly as it was, and a `SIGHUP`
-to a daemon started without `-f` is ignored rather than fatal. The overload bit
-is not a file key at all: `goisis overload on` sets it at runtime.
+A file that will not parse, or that a restart would refuse, leaves the daemon
+exactly as it was: the whole file is validated before the first call goes out.
+A `SIGHUP` to a daemon started without `-f` is ignored rather than fatal. The
+overload bit is not a file key at all: `goisis overload on` sets it at runtime.
+
+What validation cannot foresee is a call the running server refuses. A reload
+has no rollback — undoing it needs the inverse of every call — so it stops
+where the refusal left it and says so, rather than recording the file as
+applied:
+
+```console
+ERROR configuration reload was refused part way; the node is not in the state the file describes; fix the file and send SIGHUP again
+```
+
+Changing a Flexible Algorithm or a locator is a withdrawal followed by a
+re-advertisement, so a refusal there can leave the resource withdrawn. The
+reload keeps the baseline it had, so the next `SIGHUP` re-issues the whole
+change instead of treating a file the node never adopted as what it runs.
+Repeat the signal until it stops reporting a refusal: a call an earlier attempt
+already landed is refused as redundant, which costs one more reload before the
+file is adopted.
 
 ## Capabilities
 

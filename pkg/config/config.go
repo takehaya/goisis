@@ -4,10 +4,15 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,7 +93,20 @@ func (p *PrefixConfig) UnmarshalYAML(n *yaml.Node) error {
 	}
 	// A defined type without the method, so Decode does not recurse into it.
 	type plain PrefixConfig
-	return n.Decode((*plain)(p))
+	if err := n.Decode((*plain)(p)); err != nil {
+		return err
+	}
+	// Node.Decode builds its own decoder, so Load's KnownFields does not reach
+	// here: without this check a mistyped "metirc" is the one key in the file
+	// still dropped in silence.
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		switch key := n.Content[i]; key.Value {
+		case "prefix", "metric":
+		default:
+			return fmt.Errorf("line %d: field %s not found in type config.PrefixConfig", key.Line, key.Value)
+		}
+	}
+	return nil
 }
 
 // metric returns the metric to advertise this prefix at.
@@ -168,15 +186,22 @@ type CircuitConfig struct {
 	HelloKeyID           uint16   `yaml:"hello-key-id"`
 }
 
-// Load reads and parses a configuration file.
+// Load reads and parses a configuration file. A key the schema does not have
+// is an error: dropped in silence, "area-pasword" leaves the node
+// unauthenticated, and a reload cannot even name it, because the key never
+// reached Config.
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("config %q: %w", path, err)
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	// An empty file decodes to io.EOF rather than a zero Config; the required
+	// keys below are what report it, in the words the operator can act on.
+	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("config %q: %s", path, parseError(b, err))
 	}
 	if c.NET == "" {
 		return nil, fmt.Errorf("config %q: net is required", path)
@@ -185,6 +210,55 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config %q: at least one circuit is required", path)
 	}
 	return &c, nil
+}
+
+var (
+	// yamlScalar matches the value yaml.v3 quotes into a type error:
+	// "line 2: cannot unmarshal !!str `pass1234` into []string" (a scalar
+	// longer than ten characters is quoted by its first seven).
+	yamlScalar = regexp.MustCompile("(!!\\w+) `[^`]*`")
+	// yamlLine matches the line number every yaml.v3 type error carries.
+	yamlLine = regexp.MustCompile(`^line (\d+): `)
+	// yamlKey matches the key a configuration line names, to put back what
+	// redacting the value takes away.
+	yamlKey = regexp.MustCompile(`^\s*([a-z0-9-]+):`)
+)
+
+// parseError renders a YAML failure the way a daemon may log it: yaml.v3
+// quotes the scalar it could not convert, and writing a password as a scalar
+// where a list is expected — the typo the documented key rotation invites —
+// would put an HMAC key verbatim into the log. What is left is where (the
+// line, and the key written on it) and what (the two types), which is what the
+// operator needs and all they need.
+func parseError(src []byte, err error) string {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		// Everything else yaml.v3 reports (scanner and parser failures,
+		// unknown anchors) names positions and keys, never a scalar's value.
+		return err.Error()
+	}
+	lines := strings.Split(string(src), "\n")
+	out := make([]string, len(te.Errors))
+	for i, msg := range te.Errors {
+		out[i] = yamlScalar.ReplaceAllString(msg, "$1")
+		if out[i] == msg {
+			// Nothing was removed, so the message is still complete: the
+			// unknown-key and duplicate-key errors already name their key.
+			continue
+		}
+		n := yamlLine.FindStringSubmatch(msg)
+		if n == nil {
+			continue
+		}
+		ln, convErr := strconv.Atoi(n[1])
+		if convErr != nil || ln < 1 || ln > len(lines) {
+			continue
+		}
+		if key := yamlKey.FindStringSubmatch(lines[ln-1]); key != nil {
+			out[i] += fmt.Sprintf(" (key %q)", key[1])
+		}
+	}
+	return "yaml: " + strings.Join(out, "; ")
 }
 
 // Options translates the configuration into server options, opening an

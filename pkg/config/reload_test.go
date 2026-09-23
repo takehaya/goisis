@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -271,4 +272,110 @@ func ownLSPHas(t *testing.T, s *server.IsisServer, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// TestDiffRefusesAFileARestartWouldRefuse pins that a reload validates the new
+// file the way startup does, before it issues a single call. Half of these
+// defects only surface inside NewIsisServer or Options, which a reload never
+// reached: the file was accepted, the withdrawals ran, and the operator found
+// out from the refusal of whatever came after them.
+func TestDiffRefusesAFileARestartWouldRefuse(t *testing.T) {
+	old := loadConfig(t, reloadBase)
+	for name, next := range map[string]string{
+		"malformed net":           strings.Replace(reloadBase, "net: 49.0001.0000.0000.0001.00", "net: 49.0001.0000.0000.0001", 1),
+		"unknown circuit level":   strings.Replace(reloadBase, `level: "2"`, `level: "3"`, 1),
+		"invalid overload window": reloadBase + "overload-on-startup: 30x\n",
+		"invalid policy rule":     reloadBase + "policy:\n  advertise:\n    rules:\n      - permit: 192.0.2.0\n",
+		"unknown auth algorithm":  reloadBase + "area-auth-algorithm: sha999\n",
+	} {
+		if _, err := Diff(old, loadConfig(t, next)); err == nil {
+			t.Errorf("%s: Diff accepted a file a restart would refuse", name)
+		}
+	}
+}
+
+// TestReloadKeepsItsBaselineWhenAnApplyIsRefused is the contract a refusal
+// part way through a reload has to honour. There is no rollback -- undoing the
+// calls that landed needs the inverse of every mutator, and stopping leaves a
+// state the operator can see -- so what is left is honesty: the caller is told
+// (goisisd logs a failure instead of "configuration reloaded"), and the
+// baseline does not advance, so the next SIGHUP re-diffs the same change
+// rather than treating a file the node never adopted as the truth.
+func TestReloadKeepsItsBaselineWhenAnApplyIsRefused(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+srv6:
+  locators:
+    - fc00:0:1::/48
+flex-algo:
+  - algo: 128
+    priority: 100
+    locator: fc00:128:1::/48
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	// The operator raises the priority and mistypes the algorithm as a
+	// reserved number. Diff turns that into withdraw-then-re-add: the two
+	// withdrawals land and both additions are refused.
+	next := strings.NewReplacer("priority: 100", "priority: 200", "- algo: 128", "- algo: 100").Replace(initial)
+
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(initial)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	ctx := t.Context()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	write(next)
+	want, err := Diff(cfg, loadConfigFile(t, path))
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+
+	var logs bytes.Buffer
+	running, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err == nil {
+		t.Fatal("Reload reported success after a refused call; goisisd would log \"configuration reloaded\"")
+	}
+	if !errors.Is(err, ErrPartiallyApplied) {
+		t.Errorf("Reload error is not an ErrPartiallyApplied, so goisisd cannot tell an untouched node from a half-changed one: %v", err)
+	}
+
+	// The refusal is destructive by design: the locator the algorithm needed
+	// was withdrawn before the algorithm was refused. That is what the caller
+	// has to be told, and it is why the baseline must not move.
+	locators, err := s.ListLocators(ctx)
+	if err != nil {
+		t.Fatalf("ListLocators: %v", err)
+	}
+	if slices.ContainsFunc(locators, func(l server.LocatorInfo) bool { return l.Algorithm == 128 }) {
+		t.Errorf("locators = %+v: the test no longer exercises a refusal after a withdrawal", locators)
+	}
+
+	again, err := Diff(running, loadConfigFile(t, path))
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !reflect.DeepEqual(again, want) {
+		t.Errorf("the next SIGHUP diffs\n got %+v\nwant %+v: the refused change is no longer retried", again, want)
+	}
 }

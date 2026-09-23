@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/takehaya/goisis/pkg/datalink"
@@ -300,5 +303,68 @@ circuits:
 	}
 	if _, err := server.NewIsisServer(opts...); err == nil {
 		t.Error("lsp-mtu 400 built a server; the value never reached WithLSPMTU")
+	}
+}
+
+// TestLoadRejectsAMisspelledKey pins that a key the schema does not have is an
+// error rather than a silent drop. "area-pasword" is the case that matters:
+// dropped, it leaves the node unauthenticated, and a reload has nothing to
+// compare because the key never reached Config.
+func TestLoadRejectsAMisspelledKey(t *testing.T) {
+	const secret = "s3cret"
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+area-pasword: `+secret+`
+circuits:
+  - interface: mock0
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted a misspelled key: the node would run unauthenticated")
+	}
+	if !strings.Contains(err.Error(), "area-pasword") {
+		t.Errorf("the error does not name the offending key: %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the error carries the value written under a password key: %v", err)
+	}
+}
+
+// TestLoadNeverReportsTheValueOfAMistypedSecret pins the promise the reload
+// makes about its log ("values are never included: half of these keys are
+// secrets") on the one path that broke it: a password written as a scalar
+// where a list is expected, which is the typo the documented key rotation
+// invites. The parser quotes the scalar it could not convert; what goisisd
+// logs must name the key and the types and nothing else.
+func TestLoadNeverReportsTheValueOfAMistypedSecret(t *testing.T) {
+	// yaml.v3 quotes a scalar of 10 characters or fewer in full and a longer
+	// one by its first 7, so both lengths are checked.
+	for _, secret := range []string{"pass1234", "R0tationKey2026"} {
+		path := filepath.Join(t.TempDir(), "c.yaml")
+		if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+area-accept-passwords: `+secret+`
+circuits:
+  - interface: mock0
+`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(path)
+		if err == nil {
+			t.Fatalf("%q: Load accepted a scalar where a list is required", secret)
+		}
+		// What goisisd does with the error on a failed reload.
+		var logs bytes.Buffer
+		slog.New(slog.NewTextHandler(&logs, nil)).Error("configuration reload failed", "error", err)
+		if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), secret[:7]) {
+			t.Errorf("%q: the mistyped secret reached the log:\n%s", secret, logs.String())
+		}
+		if !strings.Contains(err.Error(), "area-accept-passwords") {
+			t.Errorf("%q: the error does not name the key: %v", secret, err)
+		}
+		if !strings.Contains(err.Error(), "[]string") {
+			t.Errorf("%q: the error does not name the type mismatch: %v", secret, err)
+		}
 	}
 }

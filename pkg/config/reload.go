@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/server"
 )
 
@@ -31,6 +32,15 @@ type Changes struct {
 	// the file, which is worse than one that refuses.
 	Ignored []string
 }
+
+// ErrPartiallyApplied reports that a reload issued some of its calls before
+// the server refused one. It is the outcome that distinguishes a reload from a
+// restart: the node is then in neither configuration, since the batch has to
+// withdraw a resource before it can re-add it and nothing puts back what the
+// refusal came after. A daemon that gets this has to say so — the node is not
+// in the state the file describes, and nothing but another SIGHUP, or a
+// restart, will make it so.
+var ErrPartiallyApplied = errors.New("the node is not in the state the configuration file describes")
 
 // restartOnly names every configuration key no runtime API expresses, paired
 // with the value a reload compares. It is a table rather than a chain of ifs
@@ -59,13 +69,23 @@ var restartOnly = []struct {
 }
 
 // Diff computes what takes a daemon running old to the configuration in next.
-// It is pure: it parses and compares, and touches neither the server nor the
-// filesystem, so a reload can be reasoned about without one.
+// It changes nothing: it parses, validates and compares, so a reload can be
+// reasoned about without a server.
 //
-// An error means next is unusable (a malformed prefix, locator or metric
-// type) and nothing should be applied from it — the same validation Options
-// runs at startup, so a reload refuses the file a restart would refuse.
+// An error means next is unusable and nothing should be applied from it. The
+// first thing it does is run the validation a restart runs, because a reload
+// has no rollback: a defect Options would have caught at startup must not be
+// found out half way through the batch, with the withdrawals already issued.
 func Diff(old, next *Config) (Changes, error) {
+	// Options is the startup path's validation. Opening the circuits is its
+	// one side effect and a restart's job alone, so the probe replaces the
+	// opener rather than taking an AF_PACKET socket per interface.
+	probe := *next
+	probe.OpenCircuit = func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error) { return nil, nil, nil, nil }
+	if _, err := probe.Options(); err != nil {
+		return Changes{}, err
+	}
+
 	var ch Changes
 
 	oldAlgos, err := flexAlgoSet(old)
@@ -254,9 +274,11 @@ func flexAlgoSet(c *Config) (map[uint8]server.FlexAlgoConfig, error) {
 // not. Keeping the unapplied keys is what makes a second SIGHUP name them
 // again rather than treat a file the daemon never adopted as the truth.
 //
-// A file that will not load or will not parse leaves the daemon exactly as it
-// was, and is returned as an error rather than ending it: a typo in an edited
-// configuration must not take down a running IGP.
+// A file that will not load, will not parse or will not validate leaves the
+// daemon exactly as it was, and is returned as an error rather than ending it:
+// a typo in an edited configuration must not take down a running IGP. A call
+// the server refuses once the batch has begun is ErrPartiallyApplied, the one
+// outcome that does change the node without adopting the file.
 func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string, logger *slog.Logger) (*Config, error) {
 	next, err := Load(path)
 	if err != nil {
@@ -270,11 +292,12 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 		logger.Warn("configuration reload: this change needs a restart and was not applied", "key", key)
 	}
 	if err := ch.apply(ctx, s); err != nil {
-		// Every call is independent, so one refusal (an unroutable prefix, say)
-		// does not hold back the rest, and the running configuration advances
-		// regardless: the operator fixes the file and the next reload diffs
-		// from what it meant to apply, not from what it managed to.
-		logger.Error("configuration reload: some changes were refused", "error", err)
+		// No rollback: undoing what landed would need the inverse of every
+		// mutator, and stopping leaves a state the operator can see. What is
+		// owed instead is honesty — the baseline stays where it was, so the
+		// next SIGHUP re-diffs the whole change and reports it again, rather
+		// than recording a file the node never adopted as the truth.
+		return cur, fmt.Errorf("%w: %w", ErrPartiallyApplied, err)
 	}
 
 	running := *cur
