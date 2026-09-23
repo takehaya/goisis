@@ -42,10 +42,19 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 `CircuitConfig` carries `Name`, an injected `datalink.Transport` (use
 `datalink.OpenLinux(ifname)` on Linux, or a mock in tests), `P2P`, `Level1`/
 `Level2`, `Priority`, `Metric`, `HelloInterval`, `HoldingMultiplier`,
-`Padding`, `IPv4Addrs`/`IPv6Addrs`, `ConnectedPrefixes` (the circuit's directly
-connected subnets, withdrawn with the circuit when its addresses change), and
-the hello authentication keys (`HelloPassword`, `HelloAcceptPasswords`,
+`Padding`, `IPv4Addrs`/`IPv6Addrs` (all of the interface's addresses — see
+below), `ConnectedPrefixes` (the circuit's directly connected subnets, withdrawn
+with the circuit when its addresses change), and the hello authentication keys (`HelloPassword`, `HelloAcceptPasswords`,
 `HelloAuthAlgorithm`, `HelloKeyID`).
+
+Pass every address the interface has in `IPv4Addrs`/`IPv6Addrs`; goisis splits
+them by destination. `IPv4Addrs` and the link-local IPv6 addresses go in hellos
+(TLV 132/232), where a neighbor takes them as its next hop towards this node —
+RFC 5308 3 keeps the IIH link-local, so global IPv6 addresses are filtered out
+of it. Those are advertised in TLV 232 of this node's own LSP instead, which is
+where a peer looks for an on-link global address to point an End.X SID at (a
+link-local one would forward only a hairpin). `SetCircuitAddresses` replaces the
+same two lists at runtime.
 
 ## Reading state
 
@@ -183,9 +192,9 @@ type FIB interface {
 
 `LocalSID.Behavior` says which endpoint behavior to instantiate
 (`BehaviorEnd`, `BehaviorEndX`, `BehaviorEndDT4`/`DT6`/`DT46`); `Table` is the
-lookup table for the decapsulating ones, and `Nexthop` (the neighbor's IPv6
-address, normally link-local) and `Interface` carry the adjacency a
-`BehaviorEndX` SID forwards to. The bundled
+lookup table for the decapsulating ones, and `Nexthop` (the neighbor's global
+on-link IPv6 address) and `Interface` carry the adjacency a `BehaviorEndX` SID
+forwards to. The bundled
 `fib.Netlink` programs Linux `proto isis` routes and `seg6local` End and End.X
 SIDs. `fib.Noop` discards everything (pair it with `Subscribe` to consume
 routes yourself — see [`examples/watchroutes`](../examples/watchroutes)).

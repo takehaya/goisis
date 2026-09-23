@@ -48,8 +48,13 @@ type CircuitConfig struct {
 	HoldingMultiplier int
 	// Metric is the circuit's wide metric (used from M4 onward).
 	Metric uint32
-	// IPv4Addrs / IPv6Addrs are advertised in hellos (TLV 132 / 232). For
-	// hellos the IPv6 addresses should be link-local.
+	// IPv4Addrs / IPv6Addrs are the circuit's interface addresses. Pass all of
+	// them: they are advertised in two places, for two different jobs.
+	// IPv4Addrs and the link-local IPv6 addresses go in hellos (TLV 132 / 232),
+	// where a neighbor takes them as its next hop towards us — RFC 5308 3 keeps
+	// the IIH link-local, so the global IPv6 addresses are filtered out of it.
+	// Those instead go in TLV 232 of this node's own LSP, which is where a peer
+	// looks for an on-link global address to point an End.X SID at.
 	IPv4Addrs []netip.Addr
 	IPv6Addrs []netip.Addr
 	// ConnectedPrefixes are the circuit's directly-connected subnets. They are

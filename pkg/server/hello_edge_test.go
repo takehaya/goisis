@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -210,5 +212,84 @@ func TestLANHelloWithManyNeighborsSerializes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ipv6AddrTLVs returns the addresses of every IPv6 Interface Addresses TLV
+// (232) among tlvs, concatenated.
+func ipv6AddrTLVs(tlvs []packet.TLV) []netip.Addr {
+	var out []netip.Addr
+	for _, tlv := range tlvs {
+		if t, ok := tlv.(*packet.IPv6InterfaceAddressesTLV); ok {
+			out = append(out, t.Addresses...)
+		}
+	}
+	return out
+}
+
+// TestInterfaceAddressesSplitBetweenHelloAndLSP: a circuit's IPv6 addresses are
+// published in two places for two different jobs. TLV 232 of an IIH is what a
+// neighbor uses as an IPv6 next hop, so it carries the link-locals and only
+// those (RFC 5308 3); the non-link-local ones go in TLV 232 of the node's own
+// fragment-0 LSP, where a peer resolves an on-link End.X next hop from them
+// (see endXNexthop). IPv4 is unaffected: TLV 132 stays in the hello.
+func TestInterfaceAddressesSplitBetweenHelloAndLSP(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	sink := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
+	datalink.Link(tr, sink)
+
+	v4 := netip.MustParseAddr("10.0.0.1")
+	ll := netip.MustParseAddr("fe80::a1")
+	global := netip.MustParseAddr("2001:db8::a1")
+	cfg := CircuitConfig{Name: "a", Transport: tr, Level2: true, Padding: ptrFalse(),
+		IPv4Addrs: []netip.Addr{v4}, IPv6Addrs: []netip.Addr{ll, global}}
+	fastHello(&cfg)
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(cfg),
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	f, err := sink.Recv()
+	if err != nil {
+		t.Fatalf("receive the first hello: %v", err)
+	}
+	pdu, err := packet.DecodePDU(packet.TrimToPDULength(f.PDU))
+	if err != nil {
+		t.Fatalf("decode the first hello: %v", err)
+	}
+	h, ok := pdu.(*packet.LANHello)
+	if !ok {
+		t.Fatalf("first PDU on the circuit is %T, want a LAN hello", pdu)
+	}
+	if got := ipv6AddrTLVs(h.TLVs); !slices.Equal(got, []netip.Addr{ll}) {
+		t.Errorf("hello TLV 232 = %v, want only the link-local %s", got, ll)
+	}
+	var helloV4 []netip.Addr
+	for _, tlv := range h.TLVs {
+		if t, ok := tlv.(*packet.IPInterfaceAddressesTLV); ok {
+			helloV4 = append(helloV4, t.Addresses...)
+		}
+	}
+	if !slices.Equal(helloV4, []netip.Addr{v4}) {
+		t.Errorf("hello TLV 132 = %v, want %s", helloV4, v4)
+	}
+
+	waitFor(t, "the node LSP carries the non-link-local address", func() bool {
+		return slices.Equal(ipv6AddrTLVs(ownLSPTLVs(t, s)), []netip.Addr{global})
+	})
+}
+
+// TestHelloKeepsGlobalIPv6WhenTheCircuitHasNoLinkLocal: filtering the IIH down
+// to link-locals must never empty it. A circuit with no link-local address
+// would otherwise send no TLV 232 at all, costing the neighbor every IPv6 route
+// through this node.
+func TestHelloKeepsGlobalIPv6WhenTheCircuitHasNoLinkLocal(t *testing.T) {
+	global := netip.MustParseAddr("2001:db8::a1")
+	if got := helloIPv6Addrs([]netip.Addr{global}); !slices.Equal(got, []netip.Addr{global}) {
+		t.Errorf("hello TLV 232 = %v, want the circuit's only address %s", got, global)
 	}
 }

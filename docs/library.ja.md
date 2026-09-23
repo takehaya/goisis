@@ -42,10 +42,19 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 `CircuitConfig` は `Name`、注入する `datalink.Transport`(Linux では
 `datalink.OpenLinux(ifname)`、テストではモック)、`P2P`、`Level1`/`Level2`、
 `Priority`、`Metric`、`HelloInterval`、`HoldingMultiplier`、`Padding`、
-`IPv4Addrs`/`IPv6Addrs`、`ConnectedPrefixes`(サーキットの直結サブネット。
+`IPv4Addrs`/`IPv6Addrs`(インターフェースの全アドレス。下記参照)、
+`ConnectedPrefixes`(サーキットの直結サブネット。
 アドレス変更時にサーキットごと取り下げられる)、および hello 認証の鍵
 (`HelloPassword`、`HelloAcceptPasswords`、`HelloAuthAlgorithm`、`HelloKeyID`)
 を持ちます。
+
+`IPv4Addrs`/`IPv6Addrs` にはインターフェースの全アドレスを渡してください。goisis が
+用途ごとに振り分けます。`IPv4Addrs` とリンクローカル IPv6 アドレスは hello
+(TLV 132/232)に載り、隣接はこれを自ノード向けのネクストホップに使います。RFC 5308 3
+が IIH をリンクローカルに限るため、グローバル IPv6 アドレスは hello からは除かれ、
+自ノードの LSP の TLV 232 で広報されます。ピアが End.X SID の転送先となる on-link の
+グローバルアドレスを探すのはそこです(リンクローカルでは hairpin しか転送できません)。
+実行中の差し替えは `SetCircuitAddresses` で同じ 2 つのリストを渡します。
 
 ## 状態の参照
 
@@ -179,8 +188,8 @@ type FIB interface {
 
 `LocalSID.Behavior` はどの endpoint behavior を実体化するかを指し
 (`BehaviorEnd` / `BehaviorEndX` / `BehaviorEndDT4`・`DT6`・`DT46`)、`Table` は
-デカプセル系のルックアップテーブル、`Nexthop`(隣接の IPv6 アドレス。通常は
-リンクローカル)と `Interface` は `BehaviorEndX` SID が転送する隣接を表します。同梱の `fib.Netlink` は Linux の
+デカプセル系のルックアップテーブル、`Nexthop`(隣接のグローバルな
+on-link IPv6 アドレス)と `Interface` は `BehaviorEndX` SID が転送する隣接を表します。同梱の `fib.Netlink` は Linux の
 `proto isis` 経路と `seg6local` End / End.X SID を設定します。`fib.Noop` は全て捨てます(`Subscribe` と組み合わせて自分で経路を
 処理する — [`examples/watchroutes`](../examples/watchroutes) を参照)。
 

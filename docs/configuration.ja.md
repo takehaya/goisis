@@ -46,8 +46,11 @@
 | `hello-key-id` | uint16 | RFC 5310 の鍵 ID(SHA のみ)。 |
 
 インターフェースに設定された IPv4 アドレスとリンクローカル IPv6 アドレスは
-hello(TLV 132/232)で広報され、ネクストホップに使われます。その接続サブネットは
-自動で広報されます(カーネルの接続経路を上書きすることはありません)。
+hello(TLV 132/232)で広報され、ネクストホップに使われます。グローバル IPv6
+アドレスは hello には載せず(RFC 5308 3 が IIH をリンクローカルに限る)、自ノードの
+LSP の TLV 232 で広報します。ピアが End.X SID の転送先となる on-link アドレスを
+探すのはそこだからです。接続サブネットは自動で広報されます(カーネルの接続経路を
+上書きすることはありません)。
 
 ## 鍵のローテーション
 
@@ -79,15 +82,12 @@ SID 用にデーモンが作る dummy デバイスで、最後の SID が消え�
 その隣接向けの `seg6local` End.X 経路になります。設定項目はありません。
 
 ただし**隣接がその回線の connected subnet 内にグローバル IPv6 アドレスを持つこと**が条件です。
-アドレスは隣接の hello から取り、無ければ fragment 0 LSP の TLV 232 から取ります
-(FRR は hello に link-local しか載せません)。Linux の End.X は次ホップをパケットの入力
+アドレスは隣接の fragment 0 LSP の TLV 232 から取ります(goisis も FRR もそこに載せます)。
+hello に載せてくるピアがいればそちらも使います。Linux の End.X は次ホップをパケットの入力
 インタフェース側で解決するため、link-local を次ホップにすると hairpin 以外は落ちます。
 該当アドレスが分からない間は割り当ても広報も FIB 投入もせず、その隣接について
-`no on-link global IPv6 address for neighbor` を 1 回だけ記録します。
-
-現状このアドレスを公開するのは相手側の実装次第です。FRR は LSP に載せますが、
-`goisisd` 自身は公開しません(hello は RFC 5308 3 どおり link-local のみ、LSP に
-TLV 232 を載せない)。そのため goisis 同士のリンクには End.X SID は付きません。
+`no on-link global IPv6 address for neighbor` を 1 回だけ記録します。そのため End.X SID が
+付かないのは、リンクにリンクローカルしか無い場合だけです。
 
 Flexible Algorithm に紐づく locator はここではなく `flex-algo` 配下の `locator` で
 設定します(下記)。`srv6.locators` はアルゴリズム 0 の locator です。

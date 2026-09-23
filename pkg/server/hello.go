@@ -86,10 +86,31 @@ func addrTLVs(c *circuit) []packet.TLV {
 	if len(c.cfg.IPv4Addrs) > 0 {
 		tlvs = append(tlvs, &packet.IPInterfaceAddressesTLV{Addresses: c.cfg.IPv4Addrs})
 	}
-	if len(c.cfg.IPv6Addrs) > 0 {
-		tlvs = append(tlvs, &packet.IPv6InterfaceAddressesTLV{Addresses: c.cfg.IPv6Addrs})
+	if v6 := helloIPv6Addrs(c.cfg.IPv6Addrs); len(v6) > 0 {
+		tlvs = append(tlvs, &packet.IPv6InterfaceAddressesTLV{Addresses: v6})
 	}
 	return tlvs
+}
+
+// helloIPv6Addrs picks the addresses a hello's TLV 232 carries out of a
+// circuit's IPv6 addresses: the link-local ones, which is what RFC 5308 3
+// requires of an IIH and what a neighbor takes as its IPv6 next hop. The rest
+// are published in the node's own LSP instead (lspIPv6Addrs).
+//
+// Why not filter unconditionally: a circuit with no link-local address at all
+// would then send no TLV 232, costing the neighbor every IPv6 route through
+// us. Listing what the circuit has beats saying nothing.
+func helloIPv6Addrs(addrs []netip.Addr) []netip.Addr {
+	var ll []netip.Addr
+	for _, a := range addrs {
+		if a.IsLinkLocalUnicast() {
+			ll = append(ll, a)
+		}
+	}
+	if len(ll) == 0 {
+		return addrs
+	}
+	return ll
 }
 
 func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHello {

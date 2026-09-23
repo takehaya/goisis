@@ -8,9 +8,10 @@ import (
 	"time"
 )
 
-// SetCircuitAddresses replaces a circuit's hello source addresses (TLV 132 /
-// 232) and its directly-connected subnets, then tells the neighbors at once
-// instead of at the next scheduled hello. Only the prefixes this circuit
+// SetCircuitAddresses replaces a circuit's interface addresses (CircuitConfig
+// IPv4Addrs / IPv6Addrs — pass all of them, the hello and the LSP take the
+// parts each needs) and its directly-connected subnets, then tells the
+// neighbors at once instead of at the next scheduled hello. Only the prefixes this circuit
 // contributed are replaced: prefixes named by an option, or still connected on
 // another circuit, are left alone.
 //

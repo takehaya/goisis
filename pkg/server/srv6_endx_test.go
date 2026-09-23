@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -376,10 +377,10 @@ func TestEndXUsesGlobalOnLinkNexthopAndWithholdsWithoutOne(t *testing.T) {
 	}
 }
 
-// TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater: a neighbor that at
-// first lists only a link-local gets no End.X SID, and the hello that later
-// adds a global on-link address is itself what triggers the regeneration that
-// allocates, advertises and programs one.
+// TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater: a neighbor with only
+// a link-local address gets no End.X SID, and the address change that later
+// gives it a global on-link one is itself what triggers the regeneration that
+// allocates, advertises and programs a SID.
 func TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater(t *testing.T) {
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -422,8 +423,10 @@ func TestEndXAppearsWhenNeighborAnnouncesGlobalAddressLater(t *testing.T) {
 		t.Fatalf("advertised %d End.X SIDs towards a link-local-only neighbor, want none", len(p2p))
 	}
 
-	// Only b's hellos change: its own LSP carries neither TLV 232 nor a
-	// connected prefix, so nothing else can prompt a to re-originate.
+	// Only b's addresses change. Its hellos keep carrying just the link-local
+	// (RFC 5308 3); what reaches a is b's re-originated LSP, whose TLV 232 now
+	// names the global. b advertises no connected prefix, so nothing else about
+	// it changes.
 	if err := b.SetCircuitAddresses(ctx, "b", nil, []netip.Addr{bLL, bGlobal}, nil); err != nil {
 		t.Fatalf("SetCircuitAddresses: %v", err)
 	}
@@ -478,5 +481,81 @@ func TestEndXFollowsNeighborFragmentZeroLSP(t *testing.T) {
 	sid := netip.MustParseAddr("fc00:0:1:1::")
 	if e, ok := rf.getSID(sid); !ok || e.Nexthop != onLink {
 		t.Errorf("programmed End.X SID = %+v (present %v), want next hop %s", e, ok, onLink)
+	}
+}
+
+// TestEndXSIDsFormBetweenTwoGoisisNodes: two goisis nodes on a link with a
+// global /64 give each other an End.X SID. The hellos carry only the
+// link-locals (RFC 5308 3), so the next hop can only come from the peer's
+// fragment-0 TLV 232 — without one the pair is exactly the "no on-link global
+// IPv6 address" case endXNexthop refuses to program.
+func TestEndXSIDsFormBetweenTwoGoisisNodes(t *testing.T) {
+	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
+	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
+	datalink.Link(ta, tb)
+
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	subnet := netip.MustParsePrefix("2001:db8::/64")
+	aLL, aGlobal := netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")
+	bLL, bGlobal := netip.MustParseAddr("fe80::b2"), netip.MustParseAddr("2001:db8::b2")
+	idA, idB := packet.SystemID{0, 0, 0, 0, 0, 1}, packet.SystemID{0, 0, 0, 0, 0, 2}
+	locA := netip.MustParsePrefix("fc00:0:1::/48")
+	locB := netip.MustParsePrefix("fc00:0:2::/48")
+
+	cfgA := CircuitConfig{Name: "a", Transport: ta, P2P: true, Level2: true, Padding: ptrFalse(),
+		IPv6Addrs:         []netip.Addr{aLL, aGlobal},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, P2P: true, Level2: true, Padding: ptrFalse(),
+		IPv6Addrs:         []netip.Addr{bLL, bGlobal},
+		ConnectedPrefixes: []netip.Prefix{subnet}}
+	fastHello(&cfgA)
+	fastHello(&cfgB)
+
+	afib, bfib := newRecordFIB(), newRecordFIB()
+	a := mustServer(t, WithSystemID(idA), WithAreaAddresses(area),
+		WithCircuit(cfgA), WithSRv6Locator(locA), WithFIB(afib))
+	b := mustServer(t, WithSystemID(idB), WithAreaAddresses(area),
+		WithCircuit(cfgB), WithSRv6Locator(locB), WithFIB(bfib))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
+	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	// Function 1 of each node's own locator: function 0 is its End SID.
+	sidA := netip.MustParseAddr("fc00:0:1:1::")
+	sidB := netip.MustParseAddr("fc00:0:2:1::")
+	for _, tc := range []struct {
+		name    string
+		s       *IsisServer
+		f       *recordFIB
+		sid     netip.Addr
+		nexthop netip.Addr
+		circuit string
+	}{
+		{"a", a, afib, sidA, bGlobal, "a"},
+		{"b", b, bfib, sidB, aGlobal, "b"},
+	} {
+		waitFor(t, tc.name+" advertises and programs an End.X SID towards its peer", func() bool {
+			p2p, _ := ownEndXSubTLVs(t, tc.s)
+			if len(p2p) != 1 || p2p[0].SID != tc.sid {
+				return false
+			}
+			e, ok := tc.f.getSID(tc.sid)
+			return ok && e.Behavior == fib.BehaviorEndX && e.Nexthop == tc.nexthop && e.Interface == tc.circuit
+		})
+	}
+
+	// The hellos told each side only the link-local, so the global above came
+	// from the peer's LSP.
+	var learned []netip.Addr
+	if err := a.mgmtOperation(ctx, func() error {
+		learned = a.circuits[0].p2pAdj.neighborIPv6
+		return nil
+	}); err != nil {
+		t.Fatalf("mgmtOperation: %v", err)
+	}
+	if !slices.Equal(learned, []netip.Addr{bLL}) {
+		t.Errorf("a learned %v from b's hellos, want only the link-local %s", learned, bLL)
 	}
 }

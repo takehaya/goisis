@@ -157,9 +157,10 @@ func (s *IsisServer) syncEndXSIDs() {
 // on the circuit's own subnet resolves through that connected route from any
 // ingress interface.
 //
-// Hellos come first: goisis lists every interface address in TLV 232. A peer
-// that sends only link-locals there (FRR does) is looked up in its fragment-0
-// LSP, whose TLV 232 carries the global ones.
+// The peer's fragment-0 LSP is where the address normally comes from: TLV 232
+// of a hello carries link-locals (RFC 5308 3 — goisis and FRR both send only
+// those), TLV 232 of an LSP carries the global ones. Hellos are still consulted
+// first, for a peer that does list a global address there.
 func (s *IsisServer) endXNexthop(c *circuit, adj *adjacency) netip.Addr {
 	if a := s.onLinkAddr(c, adj.neighborIPv6); a.IsValid() {
 		return a
