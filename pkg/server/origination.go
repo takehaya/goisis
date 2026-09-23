@@ -249,6 +249,12 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	if level == packet.Level2 && s.levelCap.has(packet.Level1) {
 		for _, p := range slices.SortedFunc(maps.Keys(s.l1Export), netip.Prefix.Compare) {
 			m := min(s.l1Export[p], maxPathMetric-1)
+			// Export policy again: these entries are originated by this node
+			// too. l1ExportSet has already dropped what we advertise ourselves,
+			// so no prefix is put to the filter twice.
+			if s.advertiseFilter != nil && !s.advertiseFilter(AdvertisedPrefix{Prefix: p, Metric: m}) {
+				continue
+			}
 			if p.Addr().Is4() {
 				v4 = append(v4, packet.ExtendedIPReachEntry{Metric: m, Prefix: p})
 			} else {

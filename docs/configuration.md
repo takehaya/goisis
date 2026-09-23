@@ -142,7 +142,7 @@ policy:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236). |
+| `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236) — its own, and on an L1L2 node the Level-1 prefixes it propagates into its Level-2 LSP. |
 | `fib` | prefix-list | FIB policy: routes programmed into the forwarding plane. Rejected routes stay in the RIB — `ListRoutes` and `WatchEvent` still report them. |
 | `<list>.default` | string | `deny` (default) or `permit`, applied when no rule matches. |
 | `<list>.rules[]` | list | Ordered; the first match wins. Each rule is `permit:`/`deny:` a CIDR, with optional `ge`/`le` length bounds. |
