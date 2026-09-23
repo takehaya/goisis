@@ -22,6 +22,8 @@ func TestPrometheusRecords(t *testing.T) {
 	m.RouteCount("L2", "0", 4)
 	m.FIBError("update")
 	m.EventQueueDepth(7)
+	m.PDUTxError("eth0", "send")
+	m.PDURxError("eth0")
 
 	mfs, err := reg.Gather()
 	if err != nil {
@@ -44,6 +46,8 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_routes",
 		"goisis_fib_errors_total",
 		"goisis_event_queue_depth",
+		"goisis_pdu_tx_errors_total",
+		"goisis_pdu_rx_errors_total",
 	} {
 		if !got[want] {
 			t.Errorf("metric %q not registered/emitted", want)
@@ -81,6 +85,8 @@ func TestPrometheusRecords(t *testing.T) {
 		{"goisis_routes", 4},
 		{"goisis_fib_errors_total", 1},
 		{"goisis_event_queue_depth", 7},
+		{"goisis_pdu_tx_errors_total", 1},
+		{"goisis_pdu_rx_errors_total", 1},
 	} {
 		if v, ok := singleValue(tc.name); !ok || v != tc.want {
 			t.Errorf("%s = %v (single series %v), want %v", tc.name, v, ok, tc.want)

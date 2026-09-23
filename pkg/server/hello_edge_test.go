@@ -118,12 +118,13 @@ func TestHelloWithOwnSystemIDIsIgnoredAndWarnedOnce(t *testing.T) {
 
 	run := func(t *testing.T, cfg CircuitConfig, deliver func(s *IsisServer, c *circuit)) {
 		t.Helper()
-		// Only the Serve goroutine writes to buf, and every read below is
-		// ordered after a mgmtOperation round-trip, so no lock is needed.
-		var buf bytes.Buffer
+		// The Serve loop keeps logging (hellos, housekeeping) after the
+		// mgmtOperation round-trips below return, so the sink is locked.
+		var buf syncBuf
+		m := newCountingMetrics()
 		fastHello(&cfg)
 		s := mustServer(t, WithSystemID(sys), WithAreaAddresses(area), WithCircuit(cfg),
-			WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
+			WithMetrics(m), WithLogger(slog.New(slog.NewTextHandler(&buf, nil))))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -144,6 +145,9 @@ func TestHelloWithOwnSystemIDIsIgnoredAndWarnedOnce(t *testing.T) {
 		}
 		if len(adjs) != 0 {
 			t.Errorf("hello carrying our own system ID formed %d adjacencies, want 0", len(adjs))
+		}
+		if n := m.count("pdu_drop", cfg.Name, dropDuplicateSystemID); n != 2 {
+			t.Errorf("duplicate_system_id drops for 2 hellos = %d, want 2", n)
 		}
 		if n := strings.Count(buf.String(), "duplicate system ID"); n != 1 {
 			t.Errorf("duplicate system ID warnings for 2 hellos = %d, want 1", n)

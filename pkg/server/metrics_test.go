@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"sync"
@@ -29,6 +32,9 @@ func newCountingMetrics() *countingMetrics {
 func (m *countingMetrics) PDURx(circuit, pduType string)  { m.inc("pdu_rx", circuit, pduType) }
 func (m *countingMetrics) PDUDrop(circuit, reason string) { m.inc("pdu_drop", circuit, reason) }
 func (m *countingMetrics) FIBError(op string)             { m.inc("fib_error", op) }
+
+func (m *countingMetrics) PDUTxError(circuit, reason string) { m.inc("pdu_tx_error", circuit, reason) }
+func (m *countingMetrics) PDURxError(circuit string)         { m.inc("pdu_rx_error", circuit) }
 
 func (m *countingMetrics) FloodDrop(circuit, reason string) { m.inc("flood_drop", circuit, reason) }
 
@@ -70,25 +76,31 @@ var (
 	metricsPeerSNPA = packet.SNPA{0, 0, 0, 0, 0, 2}
 )
 
-// metricsServer is a one-circuit L2 instance that is never served: the tests
+// metricsServerWith is a one-circuit instance that is never served: the tests
 // call the loop's own methods directly, so every report they observe comes
 // from the call they made.
-func metricsServer(t *testing.T, p2p bool, opts ...ServerOption) (*IsisServer, *circuit, *countingMetrics) {
+func metricsServerWith(t *testing.T, cfg CircuitConfig, opts ...ServerOption) (*IsisServer, *circuit, *countingMetrics) {
 	t.Helper()
 	m := newCountingMetrics()
 	s := mustServer(t, append([]ServerOption{
 		WithSystemID(metricsSelfID),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
-		WithCircuit(CircuitConfig{
-			Name:      "c",
-			Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
-			Level2:    true,
-			P2P:       p2p,
-			Padding:   ptrFalse(),
-		}),
+		WithCircuit(cfg),
 		WithMetrics(m),
 	}, opts...)...)
 	return s, s.circuits[0], m
+}
+
+// metricsServer is metricsServerWith over the default L2 circuit "c".
+func metricsServer(t *testing.T, p2p bool, opts ...ServerOption) (*IsisServer, *circuit, *countingMetrics) {
+	t.Helper()
+	return metricsServerWith(t, CircuitConfig{
+		Name:      "c",
+		Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
+		Level2:    true,
+		P2P:       p2p,
+		Padding:   ptrFalse(),
+	}, opts...)
 }
 
 // addUpAdjacency attaches an Up L2 adjacency to the peer, heard just now so
@@ -142,6 +154,18 @@ func TestMetricsCountsReceivedAndDroppedPDUs(t *testing.T) {
 		}
 		if got := m.count("pdu_rx", "c", "lsp"); got != 0 {
 			t.Errorf("a PDU that never decoded was counted as received %d times", got)
+		}
+	})
+
+	t.Run("a frame that raced the link going down is dropped as link_down", func(t *testing.T) {
+		s, c, m := metricsServer(t, false)
+		c.linkDown = true
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "link_down"); got != 1 {
+			t.Errorf("link_down drops = %d, want 1", got)
+		}
+		if got := m.count("pdu_rx", "c", "lsp"); got != 0 {
+			t.Errorf("a frame on a down circuit was counted as received %d times", got)
 		}
 	})
 
@@ -252,6 +276,199 @@ func TestMetricsCountsReceivedAndDroppedPDUs(t *testing.T) {
 		s.handleRx(c, datalink.Frame{PDU: serialize(t, forged), Src: metricsPeerSNPA})
 		if got := m.count("pdu_drop", "c", "own_sysid_purge"); got != 1 {
 			t.Errorf("own_sysid_purge drops = %d, want 1", got)
+		}
+	})
+}
+
+// metricsArea is the area every hello below shares with metricsServer.
+var metricsArea = packet.AreaAddress{0x49, 0x00, 0x01}
+
+// metricsLANHello builds a LAN hello from the peer at a level, carrying area.
+func metricsLANHello(level packet.Level, holding uint16, area packet.AreaAddress) *packet.LANHello {
+	return &packet.LANHello{
+		Level:       level,
+		CircuitType: packet.CircuitTypeLevel1 | packet.CircuitTypeLevel2,
+		SourceID:    metricsPeerID,
+		HoldingTime: holding,
+		Priority:    64,
+		TLVs:        []packet.TLV{&packet.AreaAddressesTLV{Addresses: []packet.AreaAddress{area}}},
+	}
+}
+
+// metricsP2PHello builds a point-to-point hello from the peer advertising ct.
+func metricsP2PHello(ct packet.CircuitType, area packet.AreaAddress) *packet.P2PHello {
+	return &packet.P2PHello{
+		CircuitType:    ct,
+		SourceID:       metricsPeerID,
+		HoldingTime:    30,
+		LocalCircuitID: 1,
+		TLVs:           []packet.TLV{&packet.AreaAddressesTLV{Addresses: []packet.AreaAddress{area}}},
+	}
+}
+
+// TestMetricsCountsHellosTheAdjacencyFSMRefuses walks every point at which a
+// hello is thrown away before it can form an adjacency. Each one is a routine
+// "why won't this adjacency come up" cause, so each must leave a counter with
+// the reason behind: hello_invalid for a hello this circuit cannot use at all,
+// hello_mismatch for one whose area or level set does not meet ours, and
+// duplicate_system_id for one carrying our own System ID.
+func TestMetricsCountsHellosTheAdjacencyFSMRefuses(t *testing.T) {
+	lanCircuit := func(name string) CircuitConfig {
+		return CircuitConfig{Name: name, Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
+			Level1: true, Padding: ptrFalse()}
+	}
+
+	t.Run("a LAN hello on a point-to-point circuit is hello_invalid", func(t *testing.T) {
+		s, c, m := metricsServer(t, true)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsLANHello(packet.Level2, 30, metricsArea)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloInvalid); got != 1 {
+			t.Errorf("hello_invalid drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("a point-to-point hello on a LAN circuit is hello_invalid", func(t *testing.T) {
+		s, c, m := metricsServer(t, false)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsP2PHello(packet.CircuitTypeLevel2, metricsArea)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloInvalid); got != 1 {
+			t.Errorf("hello_invalid drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("a zero holding time is hello_invalid", func(t *testing.T) {
+		s, c, m := metricsServer(t, false)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsLANHello(packet.Level2, 0, metricsArea)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloInvalid); got != 1 {
+			t.Errorf("hello_invalid drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("a hello for a level the circuit does not run is hello_invalid", func(t *testing.T) {
+		s, c, m := metricsServer(t, false) // Level 2 only
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsLANHello(packet.Level1, 30, metricsArea)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloInvalid); got != 1 {
+			t.Errorf("hello_invalid drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("a Level-1 hello from another area is hello_mismatch", func(t *testing.T) {
+		s, c, m := metricsServerWith(t, lanCircuit("c"))
+		other := packet.AreaAddress{0x49, 0x00, 0x02}
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsLANHello(packet.Level1, 30, other)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloMismatch); got != 1 {
+			t.Errorf("hello_mismatch drops = %d, want 1", got)
+		}
+		if _, ok := c.adjs[packet.Level1][metricsPeerID]; ok {
+			t.Error("a Level-1 hello from another area formed an adjacency")
+		}
+	})
+
+	t.Run("a point-to-point hello with no common level is hello_mismatch", func(t *testing.T) {
+		s, c, m := metricsServer(t, true) // Level 2 only; the peer offers Level 1
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, metricsP2PHello(packet.CircuitTypeLevel1, metricsArea)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", dropHelloMismatch); got != 1 {
+			t.Errorf("hello_mismatch drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("a hello carrying our own System ID is duplicate_system_id", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			p2p  bool
+			pdu  func() packet.PDU
+		}{
+			{"lan", false, func() packet.PDU {
+				h := metricsLANHello(packet.Level2, 30, metricsArea)
+				h.SourceID = metricsSelfID
+				return h
+			}},
+			{"p2p", true, func() packet.PDU {
+				h := metricsP2PHello(packet.CircuitTypeLevel2, metricsArea)
+				h.SourceID = metricsSelfID
+				return h
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s, c, m := metricsServer(t, tc.p2p)
+				// Twice: the warning is edge-triggered, the counter is not.
+				for range 2 {
+					s.handleRx(c, datalink.Frame{PDU: serialize(t, tc.pdu()), Src: metricsPeerSNPA})
+				}
+				if got := m.count("pdu_drop", "c", dropDuplicateSystemID); got != 2 {
+					t.Errorf("duplicate_system_id drops = %d, want 2", got)
+				}
+			})
+		}
+	})
+}
+
+// failingSendTransport fails every Send, as a socket does under ENOBUFS or
+// when the interface goes away between the link-state event and the write.
+type failingSendTransport struct {
+	*datalink.MockTransport
+}
+
+func (failingSendTransport) Send(packet.SNPA, []byte) error {
+	return errors.New("datalink: send: no buffer space available")
+}
+
+// TestMetricsCountsTransmitFailures: a PDU that never reaches the wire is
+// counted per circuit with the step that failed, and logged on the edge of the
+// outage rather than once per PDU per tick. Hellos, SNPs and flooded LSPs all
+// report through the same counter: to an operator they are one fault, "this
+// circuit cannot transmit".
+func TestMetricsCountsTransmitFailures(t *testing.T) {
+	now := time.Now()
+	newServer := func(t *testing.T, logs *bytes.Buffer) (*IsisServer, *circuit, *countingMetrics) {
+		t.Helper()
+		return metricsServerWith(t, CircuitConfig{
+			Name:      "c",
+			Transport: failingSendTransport{datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500)},
+			Level2:    true,
+			Padding:   ptrFalse(),
+		}, WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	}
+
+	t.Run("a hello that cannot be sent is counted", func(t *testing.T) {
+		var logs bytes.Buffer
+		s, c, m := newServer(t, &logs)
+		s.sendHellos(c, now)
+		s.sendHellos(c, now)
+		if got := m.count("pdu_tx_error", "c", txErrSend); got != 2 {
+			t.Errorf("send errors = %d, want 2 (one per hello)", got)
+		}
+		if n := strings.Count(logs.String(), "circuit cannot transmit"); n != 1 {
+			t.Errorf("transmit-failure logs for 2 failed hellos = %d, want 1: the log is edge-triggered", n)
+		}
+	})
+
+	t.Run("an SNP that cannot be sent is counted", func(t *testing.T) {
+		var logs bytes.Buffer
+		s, c, m := newServer(t, &logs)
+		s.sendCSNP(c, packet.Level2, now)
+		if got := m.count("pdu_tx_error", "c", txErrSend); got != 1 {
+			t.Errorf("send errors = %d, want 1", got)
+		}
+	})
+
+	t.Run("an LSP that cannot be flooded is counted as a send error, not a flood drop", func(t *testing.T) {
+		var logs bytes.Buffer
+		s, c, m := newServer(t, &logs)
+		id := lspID(metricsPeerID, 0)
+		putEntry(s, id, 7, 1000, now)
+		c.setSRM(packet.Level2, id, now)
+		s.transmitSRM(c, packet.Level2, now)
+
+		if got := m.count("pdu_tx_error", "c", txErrSend); got != 1 {
+			t.Errorf("send errors = %d, want 1", got)
+		}
+		// A transient write failure is not the permanent "this LSP can never
+		// go out here" that FloodDrop reports, and the flag stays set so the
+		// next tick retries.
+		if got := m.count("flood_drop", "c", floodDropOversize); got != 0 {
+			t.Errorf("flood drops = %d, want 0: the LSP fits, the socket failed", got)
+		}
+		if _, ok := c.srm[packet.Level2][id]; !ok {
+			t.Error("the SRM flag was cleared by a transient send failure; the LSP would never be retried")
 		}
 	})
 }

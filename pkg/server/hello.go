@@ -31,18 +31,20 @@ func (s *IsisServer) sendHellos(c *circuit, now time.Time) {
 func (s *IsisServer) sendOne(c *circuit, dst packet.SNPA, pdu packet.PDU) {
 	wire, err := pdu.Serialize()
 	if err != nil {
-		s.logger.Error("serialize hello", "circuit", c.cfg.Name, "error", err)
+		s.txFailed(c, txErrSerialize, err, "pdu", pdu.PDUType())
 		return
 	}
 	if spec := c.helloSpec(); spec.on() {
 		if err := packet.PatchAuth(wire, packet.HeaderLen(pdu.PDUType()), spec.algo, spec.keyID, spec.key, false); err != nil {
-			s.logger.Error("authenticate hello", "circuit", c.cfg.Name, "error", err)
+			s.txFailed(c, txErrAuth, err, "pdu", pdu.PDUType())
 			return
 		}
 	}
 	if err := c.cfg.Transport.Send(dst, wire); err != nil {
-		s.logger.Error("send hello", "circuit", c.cfg.Name, "error", err)
+		s.txFailed(c, txErrSend, err, "pdu", pdu.PDUType())
+		return
 	}
+	s.txSucceeded(c)
 }
 
 // finalizeHello appends an HMAC-MD5 authentication TLV when a hello password is
@@ -214,6 +216,8 @@ func (s *IsisServer) handleEvent(ev event) {
 	switch e := ev.(type) {
 	case *rxEvent:
 		s.handleRx(e.circuit, e.frame)
+	case *rxErrEvent:
+		s.metrics.PDURxError(e.circuit.cfg.Name)
 	}
 }
 
@@ -223,7 +227,11 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 	// A circuit whose link is down is deaf as well as mute: acting on a frame
 	// that raced the link-down event would re-form an adjacency we no longer
 	// send hellos on, and advertise reachability over a link we cannot use.
+	// Counted rather than dropped in silence: the frame is neither received
+	// nor handled, and a link reported down while frames keep arriving is
+	// exactly the one-way state an operator needs to see.
 	if c.linkDown {
+		s.metrics.PDUDrop(c.cfg.Name, dropLinkDown)
 		return
 	}
 	// Trim any data-link padding to the declared PDU length first: authentication
@@ -274,24 +282,40 @@ func (s *IsisServer) adjacencyGate(c *circuit, pt packet.PDUType, level packet.L
 	return false
 }
 
+// dropHello counts one hello the adjacency state machine cannot use and logs
+// which branch refused it. reason is the closed set the metric label carries
+// (hello_invalid / hello_mismatch); why names the branch, which is what an
+// operator chasing an adjacency that will not come up actually needs and is
+// too fine-grained to be a label.
+func (s *IsisServer) dropHello(c *circuit, reason, why string) {
+	s.logger.Debug("drop hello", "circuit", c.cfg.Name, "reason", reason, "why", why)
+	s.metrics.PDUDrop(c.cfg.Name, reason)
+}
+
 // processLANHello runs the broadcast adjacency state machine for one hello.
 func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANHello) {
 	if c.cfg.P2P {
-		return // wrong circuit type for this PDU
+		s.dropHello(c, dropHelloInvalid, "LAN hello on a point-to-point circuit")
+		return
 	}
 	if h.HoldingTime == 0 {
-		return // a zero holding time would expire the adjacency immediately
+		// A zero holding time would expire the adjacency immediately.
+		s.dropHello(c, dropHelloInvalid, "zero holding time")
+		return
 	}
 	if s.helloFromSelf(c, h.SourceID) {
 		return
 	}
 	level := h.Level
 	if _, ok := c.adjs[level]; !ok {
-		return // level not enabled on this circuit
+		s.dropHello(c, dropHelloInvalid, "level not enabled on this circuit")
+		return
 	}
 	areas := areaAddressesOf(h.TLVs)
 	if level == packet.Level1 && !areasOverlap(s.areaAddrs, areas) {
-		return // L1 requires a common area
+		// ISO 10589 8.4.2: a Level-1 adjacency requires a common area address.
+		s.dropHello(c, dropHelloMismatch, "no area address in common")
+		return
 	}
 
 	// Three-way: we may declare Up only once the neighbor echoes our SNPA.
@@ -349,10 +373,13 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 // processP2PHello runs the point-to-point adjacency state machine (RFC 5303).
 func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PHello) {
 	if !c.cfg.P2P {
+		s.dropHello(c, dropHelloInvalid, "point-to-point hello on a LAN circuit")
 		return
 	}
 	if h.HoldingTime == 0 {
-		return // a zero holding time would expire the adjacency immediately
+		// A zero holding time would expire the adjacency immediately.
+		s.dropHello(c, dropHelloInvalid, "zero holding time")
+		return
 	}
 	if s.helloFromSelf(c, h.SourceID) {
 		return
@@ -363,7 +390,10 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		common = clearLevel(common, packet.Level1)
 	}
 	if common == 0 {
-		return // no common level
+		// Either the circuit types do not overlap, or the only level they
+		// shared was Level 1 and the areas differ (ISO 10589 8.4.2).
+		s.dropHello(c, dropHelloMismatch, "no level in common")
+		return
 	}
 
 	three := threeWayTLV(h.TLVs)
@@ -472,11 +502,13 @@ func (s *IsisServer) teardownP2PAdj(c *circuit, adj *adjacency, reason string) {
 // cloned VM); forming an adjacency "to ourselves" would corrupt DIS election
 // and SPF, so the caller drops it without touching adjacency state. Hellos
 // arrive every few seconds, so the warning is edge-triggered per circuit and
-// re-armed when the link returns (SetCircuitLinkState).
+// re-armed when the link returns (SetCircuitLinkState); the counter is not, so
+// a duplicate that outlives its one log line still shows a rate.
 func (s *IsisServer) helloFromSelf(c *circuit, src packet.SystemID) bool {
 	if src != s.systemID {
 		return false
 	}
+	s.metrics.PDUDrop(c.cfg.Name, dropDuplicateSystemID)
 	s.dupSystemIDWarned.warn(c.cfg.Name, func() {
 		s.logger.Warn("drop hello carrying our own system ID: duplicate system ID on the circuit; suppressing repeats",
 			"circuit", c.cfg.Name, "systemID", src)

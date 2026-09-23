@@ -14,3 +14,13 @@ type rxEvent struct {
 }
 
 func (*rxEvent) isEvent() {}
+
+// rxErrEvent carries a circuit's failed receive to the Serve loop. The reader
+// goroutine does not report it itself: Metrics is documented as being called
+// only from that loop, so an implementation is entitled to be unsynchronized
+// on the write side.
+type rxErrEvent struct {
+	circuit *circuit
+}
+
+func (*rxErrEvent) isEvent() {}

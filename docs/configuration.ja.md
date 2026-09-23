@@ -221,12 +221,31 @@ unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の�
 `goisis_flooding_lsp_drops_total{circuit,reason}` (reason は `oversize`) /
 `goisis_fib_pending` /
 `goisis_pdu_rx_total{circuit,type}` / `goisis_pdu_drops_total{circuit,reason}`
-(reason は `decode` / `auth` / `no_adjacency` / `checksum` / `lsdb_limit` /
-`adjacency_limit` / `unknown_purge` / `own_sysid_purge` / `own_fragment_purge` /
-`own_lsp_reclaimed` / `own_seq_wrap`) /
+(reason は `decode` / `auth` / `link_down` / `no_adjacency` / `checksum` /
+`lsdb_limit` / `adjacency_limit` / `hello_invalid` / `hello_mismatch` /
+`duplicate_system_id` / `unknown_purge` / `own_sysid_purge` /
+`own_fragment_purge` / `own_lsp_reclaimed` / `own_seq_wrap`) /
+`goisis_pdu_tx_errors_total{circuit,reason}` (reason は `serialize` / `auth` /
+`send`) / `goisis_pdu_rx_errors_total{circuit}` /
 `goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
 `remove_sid`) / `goisis_event_queue_depth`。
+
+隣接が上がらないときの drop 理由は 3 つに分かれる。`hello_invalid` はこのサーキット
+では使えない hello で、ポイントツーポイントに LAN hello が来た (逆も同様)、holding
+time が 0、そのサーキットで有効でないレベル、のいずれか。`hello_mismatch` は自分が
+属していないネットワークからの hello で、Level 1 でエリアアドレスが一致しないか、
+共通レベルがない。`duplicate_system_id` は自分と同じ System ID を使うルータがいる。
+どの分岐かは Debug レベルの `drop hello` 行に出る。
+
+送受信エラーはプロトコルの不一致ではなく、サーキットがプロトコルを運べない状態を
+示す。いずれも次の tick で再試行し、ログは障害の立ち上がりでしか出さないため、
+継続しているかどうかはレートでしか分からない:
+
+```
+rate(goisis_pdu_tx_errors_total[5m]) > 0
+rate(goisis_pdu_rx_errors_total[5m]) > 0
+```
 
 `own_*` の 4 つは「自分の System ID を持つ PDU を受けて再生成または purge した」
 記録で、破棄ではない。再起動直後に自分の古いコピーが残っている場合や DIS 交代で

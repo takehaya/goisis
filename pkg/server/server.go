@@ -69,6 +69,7 @@ type IsisServer struct {
 	oversizeWarned    edgeLog[oversizeKey]      // (circuit,LSP) that does not fit the circuit MTU
 	dupSystemIDWarned edgeLog[string]           // circuits that heard a hello carrying our own System ID
 	adjLimitWarned    edgeLog[string]           // circuits that turned a station away at their adjacency limit
+	txFailWarned      edgeLog[txFailKey]        // (circuit,step) whose transmit failure was already logged
 	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 
@@ -475,6 +476,13 @@ func (s *IsisServer) readLoop(ctx context.Context, c *circuit) {
 			warned.warn(c.cfg.Name, func() {
 				s.logger.Warn("circuit receive error, retrying", "circuit", c.cfg.Name, "error", err)
 			})
+			// Counting it on the loop, like the frames: an outage that stays
+			// inside one warning is otherwise invisible to a scraper.
+			select {
+			case s.eventCh <- &rxErrEvent{circuit: c}:
+			case <-ctx.Done():
+				return
+			}
 			select {
 			case <-time.After(readerRetryDelay):
 			case <-ctx.Done():

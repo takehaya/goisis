@@ -228,12 +228,33 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisis_flooding_lsp_drops_total{circuit,reason}` (reasons: `oversize`),
 `goisis_fib_pending`,
 `goisis_pdu_rx_total{circuit,type}`, `goisis_pdu_drops_total{circuit,reason}`
-(reasons: `decode`, `auth`, `no_adjacency`, `checksum`, `lsdb_limit`,
-`adjacency_limit`, `unknown_purge`, `own_sysid_purge`, `own_fragment_purge`,
-`own_lsp_reclaimed`, `own_seq_wrap`),
+(reasons: `decode`, `auth`, `link_down`, `no_adjacency`, `checksum`,
+`lsdb_limit`, `adjacency_limit`, `hello_invalid`, `hello_mismatch`,
+`duplicate_system_id`, `unknown_purge`, `own_sysid_purge`,
+`own_fragment_purge`, `own_lsp_reclaimed`, `own_seq_wrap`),
+`goisis_pdu_tx_errors_total{circuit,reason}` (reasons: `serialize`, `auth`,
+`send`), `goisis_pdu_rx_errors_total{circuit}`,
 `goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
 `remove_sid`) and `goisis_event_queue_depth`.
+
+An adjacency that will not come up is one of three drop reasons.
+`hello_invalid` is a hello this circuit cannot use at all — sent as LAN on a
+point-to-point circuit or the reverse, a zero holding time, or a level the
+circuit does not run. `hello_mismatch` is a hello from a network we are not
+part of: no area address in common on Level 1, or no level in common.
+`duplicate_system_id` is another router using this node's System ID. The
+branch behind each one is in the `drop hello` line at Debug level.
+
+A transmit or receive error is a circuit that cannot carry the protocol, not
+a protocol disagreement: both are retried on the next tick and both are
+logged only on the edge of the outage, so only the rate shows an outage that
+persists.
+
+```
+rate(goisis_pdu_tx_errors_total[5m]) > 0
+rate(goisis_pdu_rx_errors_total[5m]) > 0
+```
 
 The four `own_*` drop reasons are PDUs carrying this node's own System ID:
 they drove a re-origination or a purge rather than being discarded, and they
