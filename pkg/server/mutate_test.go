@@ -208,17 +208,18 @@ func ownLSPSeq(t *testing.T, s *IsisServer) uint32 {
 	return seq
 }
 
-// mutatePair returns two servers converged on one LAN at Level 2, A with an
-// IPv4 interface address so its prefixes resolve to a next hop on B.
-func mutatePair(t *testing.T) (*IsisServer, *IsisServer, context.CancelFunc) {
+// mutatePair returns two servers converged at Level 2 over one link — a LAN, or
+// point-to-point when p2p — A with an IPv4 interface address so its prefixes
+// resolve to a next hop on B.
+func mutatePair(t *testing.T, p2p bool) (*IsisServer, *IsisServer, context.CancelFunc) {
 	t.Helper()
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
 	datalink.Link(ta, tb)
 
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
-	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
-	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
+	cfgA := CircuitConfig{Name: "a", Transport: ta, P2P: p2p, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, P2P: p2p, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
 	fastHello(&cfgA)
 	fastHello(&cfgB)
 
@@ -310,7 +311,7 @@ func TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics(t *testing.T) {
 // TestAddPrefixReachesPeerRIB checks a runtime prefix floods and is installed
 // by the peer, and that deleting it withdraws the peer's route.
 func TestAddPrefixReachesPeerRIB(t *testing.T) {
-	a, b, cancel := mutatePair(t)
+	a, b, cancel := mutatePair(t, false)
 	defer cancel()
 	ctx := context.Background()
 	dst := netip.MustParsePrefix("10.9.9.0/24")
@@ -368,7 +369,7 @@ func TestSetOverload(t *testing.T) {
 }
 
 func TestClearAdjacency(t *testing.T) {
-	a, _, cancel := mutatePair(t)
+	a, _, cancel := mutatePair(t, false)
 	defer cancel()
 	ctx := context.Background()
 
@@ -405,6 +406,43 @@ func TestClearAdjacency(t *testing.T) {
 	if err := a.ClearAdjacency(ctx, "nope", nil); err == nil {
 		t.Error("expected error clearing adjacencies on an unknown circuit")
 	}
+}
+
+// TestClearAdjacencyOnP2PClearsFloodingFlagsAndReforms: clearing a
+// point-to-point adjacency is the same teardown the hold timer performs — the
+// neighbor is detached, the flooding flags aimed at it are dropped (ISO 10589
+// 7.3.17 re-arms the whole database when it comes back), and hellos re-form it
+// with no further action.
+func TestClearAdjacencyOnP2PClearsFloodingFlagsAndReforms(t *testing.T) {
+	a, _, cancel := mutatePair(t, true)
+	defer cancel()
+	ctx := context.Background()
+
+	// Arm a flag so "cleared" is distinguishable from "never set".
+	if err := a.mgmtOperation(ctx, func() error {
+		a.circuits[0].setSRM(packet.Level2, lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0), time.Now())
+		return nil
+	}); err != nil {
+		t.Fatalf("mgmtOperation: %v", err)
+	}
+
+	if err := a.ClearAdjacency(ctx, "a", nil); err != nil {
+		t.Fatalf("ClearAdjacency: %v", err)
+	}
+	if err := a.mgmtOperation(ctx, func() error {
+		c := a.circuits[0]
+		if c.p2pAdj != nil {
+			t.Errorf("p2p adjacency to %v still attached after the clear", c.p2pAdj.systemID)
+		}
+		if n := len(c.srm[packet.Level2]); n != 0 {
+			t.Errorf("%d SRM flags survived the clear, want 0", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("mgmtOperation: %v", err)
+	}
+
+	waitFor(t, "p2p adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
 }
 
 // v4ReachMetrics returns the metric of every TLV 135 entry for p — one element
@@ -506,6 +544,11 @@ func TestConfigPrefixDeletedThenConnectedIsAdvertisedOnce(t *testing.T) {
 	if err := s.SetCircuitAddresses(ctx, "c", []netip.Addr{netip.MustParseAddr("10.9.9.1")}, nil, []netip.Prefix{p}); err != nil {
 		t.Fatalf("SetCircuitAddresses: %v", err)
 	}
+	// The push asks for a re-origination rather than making one, so the LSP
+	// follows within minLSPGenInterval instead of before the RPC returns.
+	waitFor(t, "the connected subnet is advertised", func() bool {
+		return len(v4ReachMetrics(ownLSPTLVs(t, s), p)) > 0
+	})
 	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 || got[0] != 33 {
 		t.Errorf("once %s is connected: TLV 135 metrics = %v, want exactly [33] (the circuit's metric)", p, got)
 	}

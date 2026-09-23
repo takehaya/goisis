@@ -39,10 +39,8 @@ func (s *IsisServer) SetCircuitAddresses(ctx context.Context, name string, v4, v
 		c.cfg.IPv4Addrs, c.cfg.IPv6Addrs = v4, v6
 		s.setCircuitPrefixes(name, masked)
 
-		now := time.Now()
-		s.sendHellos(c, now)
-		s.regenerateLSPs(false, now)
-		s.markDirty()
+		s.sendHellos(c, time.Now())
+		s.requestLSPRegen()
 		return nil
 	})
 }

@@ -35,9 +35,6 @@ func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 		s.regenerateNodeLSP(l, forceRefresh, now)
 		s.regeneratePseudonodeLSPs(l, forceRefresh, now)
 	}
-	// A topology/adjacency change warrants an SPF recompute even when our own
-	// LSP content is unchanged (e.g. a redundant next hop was lost).
-	s.markDirty()
 }
 
 // minLSPGenInterval is ISO 10589's minimumLSPGenerationInterval: the shortest
@@ -48,11 +45,19 @@ func (s *IsisServer) regenerateLSPs(forceRefresh bool, now time.Time) {
 // pending request is drained there even when no further event arrives.
 const minLSPGenInterval = time.Second
 
-// requestLSPRegen asks for a regeneration at the next drain. Protocol events
-// go through here; an operator-driven mutation re-originates directly, since a
-// human asked and should see the answer immediately. The SPF flag is set right
-// away: an adjacency loss must withdraw routes through the dead neighbor now,
-// not when the coalesced LSP is finally built.
+// requestLSPRegen asks for a regeneration at the next drain. Every change to
+// what our own LSPs say goes through here — protocol events and operator
+// mutations alike — so minLSPGenInterval really bounds how often we
+// re-originate. Only origination itself stays direct: startup, the refresh and
+// reclaim in refreshOwnLSPs, and the startup-overload clear, none of which is a
+// content change an interval should hold back. Regenerating directly would not
+// show an operator their change any sooner: mgmtOperation replies from inside
+// the loop iteration that ran the mutation, and that iteration drains before
+// the next operation is dequeued, so the next RPC sees it — unless the
+// preceding re-origination is less than minLSPGenInterval old, which is the
+// throttle doing its job. The SPF flag is set right away: an adjacency loss
+// must withdraw routes through the dead neighbor now, not when the coalesced
+// LSP is finally built.
 func (s *IsisServer) requestLSPRegen() {
 	s.lspGenPending = true
 	s.markDirty()
