@@ -60,6 +60,7 @@ func (h *connectHandler) ListCircuits(
 			Level2:       c.Level2,
 			Priority:     uint32(c.Priority),
 			Metric:       c.Metric,
+			LinkUp:       c.LinkUp,
 		})
 	}
 	return connect.NewResponse(&goisisv1.ListCircuitsResponse{Circuits: out}), nil

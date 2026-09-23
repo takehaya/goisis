@@ -238,6 +238,13 @@ Two invariants matter beyond the codec:
   Event-driven regenerations coalesce to at most one per second
   (minimumLSPGenerationInterval), and the 900 s refresh is jittered up to
   25 % early so nodes that booted together do not refresh in lockstep.
+  A regeneration is *requested* during an iteration of the management loop and
+  *drained* at the top of the next one, so a change that only the recompute can
+  see — the Level-1 to Level-2 export set, which `updateRIB` decides after that
+  iteration's SPF check has run — reaches the wire at most
+  minimumLSPGenerationInterval plus one housekeeping tick later (~2 s). That
+  bound is the property, not the ordering of any single iteration: an idle
+  network drains on the housekeeping tick, a busy one on the next event.
   TLV sets that exceed the LSP buffer — 1492 bytes, or less when the
   circuits (or `lsp-mtu`) are narrower — are packed by serialized size into
   fragment 0 plus spill fragments 1..255; stale fragments are purged when the

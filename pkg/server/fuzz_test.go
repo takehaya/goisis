@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -24,22 +25,39 @@ var (
 	fuzzSrcMAC   = packet.SNPA{0x02, 0, 0, 0, 0, 0x02}
 )
 
+// The key the authenticated flavour of the fuzzer runs with. SHA-256 rather
+// than MD5 on purpose: the RFC 5310 Authentication TLV carries a key ID, so
+// authDigestRange's length and key-ID arithmetic — the part a hostile TLV
+// offset attacks — is only reached by the SHA family (RFC 5304's MD5 value is
+// a bare digest).
+var fuzzAuthSpec = authSpec{algo: packet.AuthSHA256, keyID: 7, key: []byte("fuzz")}
+
 // rxFuzzServer returns a fresh server with one dual-level circuit and an Up
 // adjacency from fuzzSrcMAC. Serve is deliberately not started: handleRx then
 // runs on the calling goroutine, which stays the single mutator of protocol
 // state. A fresh server per iteration keeps iterations independent, so a
-// crasher reproduces from its input alone.
-func rxFuzzServer(t *testing.T, p2p bool) (*IsisServer, *circuit) {
+// crasher reproduces from its input alone. keyed configures the same HMAC key
+// for hellos and for both levels' LSPs/SNPs, so every receive path runs its
+// verification instead of returning at !spec.on().
+func rxFuzzServer(t *testing.T, p2p, keyed bool) (*IsisServer, *circuit) {
 	t.Helper()
-	s := mustServer(t,
+	cfg := CircuitConfig{
+		Name: "c", Transport: datalink.NewMockTransport(fuzzLocalMAC, 1500),
+		P2P: p2p, Level1: true, Level2: true, Padding: ptrFalse(),
+	}
+	opts := []ServerOption{
 		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		WithSystemID(fuzzSelfID),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
-		WithCircuit(CircuitConfig{
-			Name: "c", Transport: datalink.NewMockTransport(fuzzLocalMAC, 1500),
-			P2P: p2p, Level1: true, Level2: true, Padding: ptrFalse(),
-		}),
-	)
+	}
+	if keyed {
+		auth := AuthConfig{Algorithm: fuzzAuthSpec.algo, KeyID: fuzzAuthSpec.keyID, Secret: string(fuzzAuthSpec.key)}
+		cfg.HelloPassword = auth.Secret
+		cfg.HelloAuthAlgorithm = auth.Algorithm
+		cfg.HelloKeyID = auth.KeyID
+		opts = append(opts, WithAreaAuth(auth), WithDomainAuth(auth))
+	}
+	s := mustServer(t, append(opts, WithCircuit(cfg))...)
 	c := s.circuits[0]
 	var both levelSet
 	both.add(packet.Level1)
@@ -77,28 +95,32 @@ func FuzzHandleRx(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// Broadcast and p2p take different branches in nearly every handler,
-		// so each input drives both.
+		// and an unauthenticated scope returns from pduAuthOK/helloAuthOK
+		// before authSpec.verify runs at all, so each input drives all four
+		// combinations.
 		for _, p2p := range []bool{false, true} {
-			s, c := rxFuzzServer(t, p2p)
-			s.handleRx(c, datalink.Frame{PDU: data, Src: fuzzSrcMAC})
-			now := time.Now()
-			s.floodTransmit(now)
-			s.updateRIB(now)
-			// The management API renders the LSDB into proto3 string fields,
-			// which must hold valid UTF-8: a peer-supplied hostname that does
-			// not would break GetLsdb for every operator, not just for the
-			// PDU that carried it.
-			hostnames := s.hostnameIndex(now)
-			for _, l := range []packet.Level{packet.Level1, packet.Level2} {
-				infos := s.dbs[l].snapshot(now, hostnames)
-				renderTLVs(infos)
-				for _, info := range infos {
-					if !utf8.ValidString(info.Hostname) {
-						t.Fatalf("LSP %s hostname %q is not valid UTF-8", info.LSPID, info.Hostname)
-					}
-					for _, line := range info.TLVs {
-						if !utf8.ValidString(line) {
-							t.Fatalf("LSP %s TLV line %q is not valid UTF-8", info.LSPID, line)
+			for _, keyed := range []bool{false, true} {
+				s, c := rxFuzzServer(t, p2p, keyed)
+				s.handleRx(c, datalink.Frame{PDU: data, Src: fuzzSrcMAC})
+				now := time.Now()
+				s.floodTransmit(now)
+				s.updateRIB(now)
+				// The management API renders the LSDB into proto3 string fields,
+				// which must hold valid UTF-8: a peer-supplied hostname that does
+				// not would break GetLsdb for every operator, not just for the
+				// PDU that carried it.
+				hostnames := s.hostnameIndex(now)
+				for _, l := range []packet.Level{packet.Level1, packet.Level2} {
+					infos := s.dbs[l].snapshot(now, hostnames)
+					renderTLVs(infos)
+					for _, info := range infos {
+						if !utf8.ValidString(info.Hostname) {
+							t.Fatalf("LSP %s hostname %q is not valid UTF-8", info.LSPID, info.Hostname)
+						}
+						for _, line := range info.TLVs {
+							if !utf8.ValidString(line) {
+								t.Fatalf("LSP %s TLV line %q is not valid UTF-8", info.LSPID, line)
+							}
 						}
 					}
 				}
@@ -109,6 +131,10 @@ func FuzzHandleRx(f *testing.F) {
 
 // rxFuzzSeeds are hand-built PDUs covering shapes the FRR corpus lacks: they
 // reach the corners of the update process that only a hostile peer produces.
+// Each carries a valid digest for fuzzAuthSpec, so the mutator starts from
+// inputs the keyed flavour accepts and reaches the update process through
+// authentication rather than being dropped by it; the unauthenticated flavour
+// simply ignores the extra TLV.
 func rxFuzzSeeds(f *testing.F) [][]byte {
 	f.Helper()
 	var maxID packet.LSPID
@@ -138,11 +164,48 @@ func rxFuzzSeeds(f *testing.F) [][]byte {
 	}
 	out := make([][]byte, 0, len(pdus))
 	for _, p := range pdus {
-		wire, err := p.Serialize()
+		wire, err := signSeed(p)
 		if err != nil {
-			f.Fatalf("serialize seed %T: %v", p, err)
+			f.Fatalf("seed %T: %v", p, err)
+		}
+		// A seed that does not verify would be dropped by the keyed flavour
+		// before reaching anything, and the extra flavour would silently cover
+		// nothing but the drop path.
+		_, isLSP := p.(*packet.LSP)
+		if !fuzzAuthSpec.verify(wire, packet.HeaderLen(p.PDUType()), isLSP) {
+			f.Fatalf("seed %T does not carry a valid digest", p)
 		}
 		out = append(out, wire)
 	}
 	return out
+}
+
+// signSeed appends the Authentication TLV placeholder fuzzAuthSpec expects,
+// serializes the PDU and fills the digest. An LSP goes through
+// FinalizeLSPAuth, which also repairs the Fletcher checksum the digest is
+// covered by.
+func signSeed(p packet.PDU) ([]byte, error) {
+	switch v := p.(type) {
+	case *packet.LSP:
+		v.TLVs = append(v.TLVs, authTLVPlaceholder(fuzzAuthSpec))
+	case *packet.CSNP:
+		v.TLVs = append(v.TLVs, authTLVPlaceholder(fuzzAuthSpec))
+	case *packet.LANHello:
+		v.TLVs = append(v.TLVs, authTLVPlaceholder(fuzzAuthSpec))
+	default:
+		return nil, fmt.Errorf("no auth TLV appender for %T", p)
+	}
+	wire, err := p.Serialize()
+	if err != nil {
+		return nil, fmt.Errorf("serialize: %w", err)
+	}
+	if _, isLSP := p.(*packet.LSP); isLSP {
+		err = packet.FinalizeLSPAuth(wire, fuzzAuthSpec.algo, fuzzAuthSpec.keyID, fuzzAuthSpec.key)
+	} else {
+		err = packet.PatchAuth(wire, packet.HeaderLen(p.PDUType()), fuzzAuthSpec.algo, fuzzAuthSpec.keyID, fuzzAuthSpec.key, false)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("patch auth: %w", err)
+	}
+	return wire, nil
 }

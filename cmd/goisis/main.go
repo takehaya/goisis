@@ -145,9 +145,9 @@ func newCircuitCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "INTERFACE\tTYPE\tLEVELS\tPRIORITY\tMETRIC")
+				_, _ = fmt.Fprintln(w, "INTERFACE\tTYPE\tLEVELS\tPRIORITY\tMETRIC\tLINK")
 				for _, c := range res.Msg.GetCircuits() {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n", c.GetInterface(), circuitType(c), circuitLevels(c), c.GetPriority(), c.GetMetric())
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n", c.GetInterface(), circuitType(c), circuitLevels(c), c.GetPriority(), c.GetMetric(), linkState(c))
 				}
 				return w.Flush()
 			})
@@ -160,6 +160,16 @@ func circuitType(c *goisisv1.Circuit) string {
 		return "p2p"
 	}
 	return "lan"
+}
+
+// linkState renders a circuit's link state for the table. A circuit whose link
+// is down still appears, with its configuration, because that is what tells an
+// operator why it carries nothing.
+func linkState(c *goisisv1.Circuit) string {
+	if c.GetLinkUp() {
+		return "up"
+	}
+	return "down"
 }
 
 func circuitLevels(c *goisisv1.Circuit) string {

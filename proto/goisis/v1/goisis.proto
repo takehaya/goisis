@@ -72,6 +72,9 @@ message Circuit {
   bool level2 = 4;
   uint32 priority = 5;
   uint32 metric = 6;
+  // Whether the underlying link is up. A circuit whose link is down keeps its
+  // configuration and its flooding flags but carries nothing.
+  bool link_up = 7;
 }
 
 // Adjacency is one IS-IS adjacency.

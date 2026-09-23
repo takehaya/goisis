@@ -482,3 +482,32 @@ func TestUnknownPurgeDoesNotConsumeLSDBEntryLimit(t *testing.T) {
 		t.Error("an unknown purge reached the entry-limit check instead of being discarded first")
 	}
 }
+
+// TestSendCSNPFitsANarrowCircuitMTU: the per-PDU budget is
+// min(ReceiveLSPBufferSize, MTU-3). At the 1500-octet MTU every other test
+// uses, those terms are 1492 and 1497, so the buffer always wins and no test
+// can tell a budget derived from the MTU from one that ignored it. A 1000-octet
+// circuit inverts them.
+func TestSendCSNPFitsANarrowCircuitMTU(t *testing.T) {
+	now := time.Now()
+	const mtu = 1000
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, mtu),
+			Level2: true, Padding: ptrFalse(),
+		}),
+	)
+	fillLSDB(s, 300, now)
+
+	csnps, sizes := collectCSNPs(t, s, s.circuits[0], now)
+	if len(csnps) < 2 {
+		t.Fatalf("300 LSPs at MTU %d: expected several CSNPs, got %d", mtu, len(csnps))
+	}
+	for i := range csnps {
+		if sizes[i] > mtu-3 { // 3 = LLC header
+			t.Errorf("CSNP %d is %d octets, over the %d the MTU leaves", i, sizes[i], mtu-3)
+		}
+	}
+}
