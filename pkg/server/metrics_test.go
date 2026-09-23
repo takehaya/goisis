@@ -71,10 +71,10 @@ var (
 // metricsServer is a one-circuit L2 instance that is never served: the tests
 // call the loop's own methods directly, so every report they observe comes
 // from the call they made.
-func metricsServer(t *testing.T, p2p bool) (*IsisServer, *circuit, *countingMetrics) {
+func metricsServer(t *testing.T, p2p bool, opts ...ServerOption) (*IsisServer, *circuit, *countingMetrics) {
 	t.Helper()
 	m := newCountingMetrics()
-	s := mustServer(t,
+	s := mustServer(t, append([]ServerOption{
 		WithSystemID(metricsSelfID),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{
@@ -85,7 +85,7 @@ func metricsServer(t *testing.T, p2p bool) (*IsisServer, *circuit, *countingMetr
 			Padding:   ptrFalse(),
 		}),
 		WithMetrics(m),
-	)
+	}, opts...)...)
 	return s, s.circuits[0], m
 }
 
@@ -192,6 +192,95 @@ func TestMetricsCountsReceivedAndDroppedPDUs(t *testing.T) {
 			t.Errorf("unknown_purge drops = %d, want 1", got)
 		}
 	})
+
+	t.Run("an unsigned LSP into an authenticated level is dropped as auth", func(t *testing.T) {
+		s, c, m := metricsServer(t, false, WithDomainAuth(AuthConfig{Secret: "k"}))
+		addUpAdjacency(c, now)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "auth"); got != 1 {
+			t.Errorf("auth drops = %d, want 1", got)
+		}
+		if e := s.dbs[packet.Level2].get(lspID(metricsPeerID, 0)); e != nil {
+			t.Error("an LSP that failed authentication was stored")
+		}
+	})
+
+	t.Run("an LSP beyond the entry limit is dropped as lsdb_limit", func(t *testing.T) {
+		s, c, m := metricsServer(t, false, WithLSDBEntryLimit(1))
+		addUpAdjacency(c, now)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
+		second := peerLSP(1000)
+		second.LSPID = lspID(packet.SystemID{0, 0, 0, 0, 0, 0x33}, 0)
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, second), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "lsdb_limit"); got != 1 {
+			t.Errorf("lsdb_limit drops = %d, want 1", got)
+		}
+		if n := len(s.dbs[packet.Level2].entries); n != 1 {
+			t.Errorf("database holds %d entries, want the 1 the limit allows", n)
+		}
+	})
+
+	t.Run("a copy of an LSP we originate is counted as own_lsp_reclaimed", func(t *testing.T) {
+		s, c, m := metricsServer(t, false)
+		addUpAdjacency(c, now)
+		s.regenerateLSPs(false, now)
+		id := lspID(s.systemID, 0)
+		ex := s.dbs[packet.Level2].get(id)
+		if ex == nil {
+			t.Fatal("our own LSP was not originated")
+		}
+		forged := &packet.LSP{
+			Level: packet.Level2, RemainingTime: 1000, LSPID: id,
+			SequenceNumber: ex.lsp.SequenceNumber + 5, ISType: 3,
+		}
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, forged), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "own_lsp_reclaimed"); got != 1 {
+			t.Errorf("own_lsp_reclaimed drops = %d, want 1", got)
+		}
+	})
+
+	t.Run("an LSP for a pseudonode we do not own is counted as own_sysid_purge", func(t *testing.T) {
+		s, c, m := metricsServer(t, false)
+		addUpAdjacency(c, now)
+		// Pseudonode 0x7f matches none of our circuits, so we can never be its DIS.
+		forged := &packet.LSP{
+			Level: packet.Level2, RemainingTime: 1000, LSPID: lspID(s.systemID, 0x7f),
+			SequenceNumber: 4, ISType: 2,
+		}
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, forged), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "own_sysid_purge"); got != 1 {
+			t.Errorf("own_sysid_purge drops = %d, want 1", got)
+		}
+	})
+}
+
+// TestForgedOwnSystemIDLSPsCannotGrowTheDatabasePastTheLimit pins the ordering
+// processLSP documents: the own-System-ID handling sits after the entry-limit
+// check, so an attacker flooding LSP IDs that name us cannot use the purge path
+// to push the database past the cap an operator configured.
+func TestForgedOwnSystemIDLSPsCannotGrowTheDatabasePastTheLimit(t *testing.T) {
+	now := time.Now()
+	s, c, m := metricsServer(t, false, WithLSDBEntryLimit(1))
+	addUpAdjacency(c, now)
+	s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
+
+	for pseudonode := 0x70; pseudonode < 0x78; pseudonode++ {
+		forged := &packet.LSP{
+			Level: packet.Level2, RemainingTime: 1000, LSPID: lspID(s.systemID, uint8(pseudonode)),
+			SequenceNumber: 4, ISType: 2,
+		}
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, forged), Src: metricsPeerSNPA})
+	}
+
+	if n := len(s.dbs[packet.Level2].entries); n != 1 {
+		t.Errorf("database holds %d entries, want the 1 the limit allows", n)
+	}
+	if got := m.count("pdu_drop", "c", "lsdb_limit"); got != 8 {
+		t.Errorf("lsdb_limit drops = %d, want 8 (one per forged LSP)", got)
+	}
+	if got := m.count("pdu_drop", "c", "own_sysid_purge"); got != 0 {
+		t.Errorf("own_sysid_purge drops = %d: the limit must be applied first", got)
+	}
 }
 
 // TestMetricsReportsGaugesOnHousekeeping: the adjacency gauge is reported for a

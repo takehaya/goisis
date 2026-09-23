@@ -209,3 +209,14 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
 `remove_sid`) and `goisis_event_queue_depth`.
+
+The four `own_*` drop reasons are PDUs carrying this node's own System ID:
+they drove a re-origination or a purge rather than being discarded, and they
+occur in normal operation (a restart with a stale copy of ours still in the
+area, a DIS handover). Alert on the rest, and watch those separately — a
+steady rate means another node is originating LSPs in this node's name:
+
+```
+rate(goisis_pdu_drops_total{reason!~"own_.*"}[5m]) > 0
+rate(goisis_pdu_drops_total{reason=~"own_.*"}[15m]) > 0
+```

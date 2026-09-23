@@ -31,10 +31,18 @@ type Metrics interface {
 	// pduType is a short label: "lan_hello_l1", "lan_hello_l2", "p2p_hello",
 	// "lsp", "csnp" or "psnp".
 	PDURx(circuit, pduType string)
-	// PDUDrop records one received PDU discarded on a circuit, with the reason
-	// it was discarded: "decode", "auth", "no_adjacency", "checksum",
+	// PDUDrop records one received PDU that was not installed as it arrived,
+	// with the reason: "decode", "auth", "no_adjacency", "checksum",
 	// "lsdb_limit", "unknown_purge", "own_sysid_purge", "own_fragment_purge",
 	// "own_lsp_reclaimed" or "own_seq_wrap".
+	//
+	// The four "own_*" reasons are handled rather than discarded: the PDU
+	// carried this node's own System ID, so it drove a re-origination or a
+	// purge instead of being entered as received. They occur in normal
+	// operation (a restart with a stale copy of ours still in the area, a DIS
+	// handover), so an alert on the drop rate should exclude them and watch
+	// them separately — a steady own_lsp_reclaimed, own_fragment_purge or
+	// own_seq_wrap means someone else is originating LSPs in our name.
 	PDUDrop(circuit, reason string)
 	// AdjacencyCount reports the number of Up adjacencies on a circuit at a
 	// level. Every configured circuit and level reports on every housekeeping
