@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -145,6 +146,20 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 		}
 	}
 
+	// Pass 3: ISO 10589 7.2.7 computes the paths leaving this system from the
+	// adjacency database. Our own LSP — and any pseudonode LSP we originate as
+	// DIS — is only the wire copy of it, and its regeneration is deliberately
+	// held back by minLSPGenInterval, so for up to that long after an adjacency
+	// goes down our copy still lists the dead neighbor. Believing it makes
+	// Dijkstra pick the dead path; resolveNextHops then resolves nothing and the
+	// prefix is withdrawn instead of rerouted over a live alternate.
+	for id, n := range nodes {
+		if id.SystemID() != s.systemID {
+			continue // only the LSPs we originate ourselves
+		}
+		n.edges = slices.DeleteFunc(n.edges, func(e spfEdge) bool { return !s.edgeHasAdjacency(level, e.to) })
+	}
+
 	// Add SRv6 locator prefixes a node didn't also advertise as plain IP
 	// reachability (prefer-prefix-reachability rule, RFC 9352).
 	for _, l := range locs {
@@ -153,6 +168,37 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 		}
 	}
 	return nodes
+}
+
+// edgeHasAdjacency reports whether an IS-reachability edge out of an LSP we
+// originate ourselves is still backed by a live adjacency: a real neighbor
+// needs an Up adjacency at this level, a LAN pseudonode needs the circuit that
+// elected it to still have one (which member is DIS is a separate election),
+// and the edge a pseudonode LSP has back to us is always live.
+func (s *IsisServer) edgeHasAdjacency(level packet.Level, to packet.NodeID) bool {
+	if to.PseudonodeID() != 0 {
+		for _, c := range s.circuits {
+			if !c.cfg.P2P && c.dis[level] == to && c.upAdjacencyCount(level) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if to.SystemID() == s.systemID {
+		return true
+	}
+	for _, c := range s.circuits {
+		if c.cfg.P2P {
+			if a := c.p2pAdj; a != nil && a.state == AdjUp && a.levels.has(level) && a.systemID == to.SystemID() {
+				return true
+			}
+			continue
+		}
+		if a := c.adjs[level][to.SystemID()]; a != nil && a.state == AdjUp {
+			return true
+		}
+	}
+	return false
 }
 
 // lspParticipatesInAlgo reports whether an LSP advertises the given algorithm

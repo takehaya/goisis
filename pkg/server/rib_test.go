@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -256,12 +257,66 @@ func ribServer(t *testing.T, level1 bool, extra ...ServerOption) *IsisServer {
 
 // injectLSPAt is injectLSP for an arbitrary level.
 func injectLSPAt(s *IsisServer, level packet.Level, id packet.SystemID, tlvs []packet.TLV, now time.Time) {
+	seedImpliedAdjacencies(s, level, nodeID(id, 0), tlvs)
 	lid := lspID(id, 0)
 	s.dbs[level].entries[lid] = &lspEntry{
 		lsp:      &packet.LSP{Level: level, RemainingTime: maxAgeSeconds, LSPID: lid, SequenceNumber: 1, ISType: 2, TLVs: tlvs},
 		inserted: now,
 		lifetime: maxAgeSeconds,
 	}
+}
+
+// seedImpliedAdjacencies fabricates the Up adjacencies a synthetic LSP of our
+// own implies, as a hello exchange would. SPF follows an edge out of an LSP we
+// originate only while the adjacency database still backs it (ISO 10589 7.2.7),
+// so a hand-built topology has to seed the adjacency database too. An adjacency
+// a fixture already seeded is left alone.
+func seedImpliedAdjacencies(s *IsisServer, level packet.Level, node packet.NodeID, tlvs []packet.TLV) {
+	if node.SystemID() != s.systemID || len(s.circuits) == 0 {
+		return
+	}
+	c := s.circuits[0]
+	for _, tlv := range tlvs {
+		r, ok := tlv.(*packet.ExtendedISReachabilityTLV)
+		if !ok {
+			continue
+		}
+		for _, nb := range r.Neighbors {
+			if nb.NeighborID.PseudonodeID() != 0 {
+				// We are on that LAN; when the pseudonode is a peer's, that
+				// peer is the DIS and therefore a neighbor of ours.
+				c.dis[level] = nb.NeighborID
+			}
+			if sys := nb.NeighborID.SystemID(); sys != s.systemID {
+				seedAdjacency(c, level, sys)
+			}
+		}
+	}
+}
+
+// seedAdjacency puts one Up adjacency on a circuit, with the addresses
+// resolveNextHops needs, keyed off the last octet of the system ID.
+func seedAdjacency(c *circuit, level packet.Level, id packet.SystemID) {
+	if c.cfg.P2P && c.p2pAdj != nil || !c.cfg.P2P && c.adjs[level][id] != nil {
+		return
+	}
+	var lv levelSet
+	lv.add(level)
+	adj := &adjacency{
+		systemID:     id,
+		state:        AdjUp,
+		levels:       lv,
+		neighborIPv4: []netip.Addr{netip.AddrFrom4([4]byte{10, 0, 0, id[5]})},
+		neighborIPv6: []netip.Addr{netip.MustParseAddr(fmt.Sprintf("fe80::%x", id[5]))},
+	}
+	if c.cfg.P2P {
+		c.p2pAdj = adj
+		return
+	}
+	if c.adjs[level] == nil {
+		c.adjs[level] = map[packet.SystemID]*adjacency{}
+	}
+	c.adjs[level][id] = adj
 }
 
 // TestUpdateRIBPrefersLevel1OverLevel2: the same prefix computed at both levels

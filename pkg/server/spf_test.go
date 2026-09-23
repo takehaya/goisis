@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ func installNode(s *IsisServer, id packet.NodeID, overload bool, edges []edge, p
 	if len(prefixes) > 0 {
 		tlvs = append(tlvs, &packet.ExtendedIPReachabilityTLV{Prefixes: prefixes})
 	}
+	seedImpliedAdjacencies(s, packet.Level2, id, tlvs)
 	lid := packet.LSPID(append(append([]byte{}, id[:]...), 0)) //nolint:gocritic // build 8-byte LSP ID
 	s.dbs[packet.Level2].entries[lid] = &lspEntry{
 		lsp:      &packet.LSP{Level: packet.Level2, LSPID: lid, SequenceNumber: 1, Overload: overload, TLVs: tlvs},
@@ -380,5 +382,164 @@ func TestEquidistantAttachedISsGiveECMPDefault(t *testing.T) {
 		if len(r.nextHops) != 2 || r.nextHops[0] != b || r.nextHops[1] != c {
 			t.Errorf("nextHops = %v, want [..02 ..03]", r.nextHops)
 		}
+	}
+}
+
+// ownISReach returns the IS-reachability neighbors an LSP we originate
+// currently advertises at Level 2.
+func ownISReach(t *testing.T, s *IsisServer, node packet.NodeID) []packet.NodeID {
+	t.Helper()
+	var out []packet.NodeID
+	for id, e := range s.dbs[packet.Level2].entries {
+		if id.NodeID() != node || !e.purgedAt.IsZero() {
+			continue
+		}
+		for _, tlv := range e.lsp.TLVs {
+			if r, ok := tlv.(*packet.ExtendedISReachabilityTLV); ok {
+				for _, nb := range r.Neighbors {
+					out = append(out, nb.NeighborID)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// isReachTo builds an Extended IS Reachability TLV with one edge to a node ID
+// (a pseudonode, unlike isReach/isReachMetric).
+func isReachTo(node packet.NodeID, metric uint32) packet.TLV {
+	return &packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{{NeighborID: node, Metric: metric}}}
+}
+
+// p2pMetricCircuit is a p2p Level-2 circuit with an explicit metric.
+func p2pMetricCircuit(name string, snpa byte, metric uint32) CircuitConfig {
+	return CircuitConfig{
+		Name:      name,
+		Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, snpa}, 1500),
+		P2P:       true,
+		Level2:    true,
+		Metric:    metric,
+		Padding:   ptrFalse(),
+	}
+}
+
+// Losing an adjacency inside the LSP-regeneration hold reroutes the prefix over
+// the surviving path instead of withdrawing it. ISO 10589 7.2.7 computes the
+// paths out of this system from the adjacency database; the LSP we originate is
+// only its wire copy, and drainLSPGen deliberately holds a re-origination back
+// for minLSPGenInterval. B (via c1, metric 10) and C (via c2, metric 20) both
+// advertise P; B's adjacency goes down 100 ms after a regeneration, so our own
+// LSP still lists B when SPF runs.
+func TestSPFReroutesWhenAdjacencyIsLostInsideRegenerationHold(t *testing.T) {
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peerB := packet.SystemID{0, 0, 0, 0, 0, 2}
+	peerC := packet.SystemID{0, 0, 0, 0, 0, 3}
+	p := netip.MustParsePrefix("10.7.0.0/24")
+
+	s := mustServer(t,
+		WithSystemID(self),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(p2pMetricCircuit("c1", 0x11, 10)),
+		WithCircuit(p2pMetricCircuit("c2", 0x12, 20)),
+	)
+	seedAdjacency(s.circuits[0], packet.Level2, peerB)
+	seedAdjacency(s.circuits[1], packet.Level2, peerC)
+
+	now := time.Now()
+	for _, peer := range []packet.SystemID{peerB, peerC} {
+		injectLSP(s, peer, []packet.TLV{isReach(self),
+			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{v4(p.String(), 0)}}}, now)
+	}
+
+	// Originate our own LSP from both live adjacencies; the next regeneration
+	// is now held until now+minLSPGenInterval.
+	s.requestLSPRegen()
+	s.drainLSPGen(now)
+	s.updateRIB(now)
+	if r, ok := s.rib[p]; !ok || len(r.NextHops) != 1 || r.NextHops[0].Interface != "c1" {
+		t.Fatalf("before the loss: rib[%s] = %+v, want one next hop on c1", p, r)
+	}
+
+	// B goes down inside the hold, so the regeneration is deferred.
+	s.circuits[0].p2pAdj = nil
+	s.requestLSPRegen()
+	later := now.Add(100 * time.Millisecond)
+	s.drainLSPGen(later)
+	if !slices.Contains(ownISReach(t, s, nodeID(self, 0)), nodeID(peerB, 0)) {
+		t.Fatal("our own LSP no longer lists B: the regeneration hold this test needs did not happen")
+	}
+
+	s.updateRIB(later)
+	r, ok := s.rib[p]
+	if !ok {
+		t.Fatalf("route to %s withdrawn although C still advertises it", p)
+	}
+	if len(r.NextHops) != 1 || r.NextHops[0].Interface != "c2" {
+		t.Errorf("next hops = %+v, want one on c2", r.NextHops)
+	}
+}
+
+// The same guarantee for a pseudonode LSP we originate as DIS. D keeps the LAN
+// alive, so our own node LSP legitimately still points at the pseudonode: the
+// stale edge SPF must not follow is the pseudonode's own edge to B.
+func TestSPFReroutesWhenLANAdjacencyIsLostInsideRegenerationHold(t *testing.T) {
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peerB := packet.SystemID{0, 0, 0, 0, 0, 2}
+	peerC := packet.SystemID{0, 0, 0, 0, 0, 3}
+	peerD := packet.SystemID{0, 0, 0, 0, 0, 4}
+	p := netip.MustParsePrefix("10.7.0.0/24")
+	reachP := &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{v4(p.String(), 0)}}
+
+	s := mustServer(t,
+		WithSystemID(self),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name:      "c1",
+			Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500),
+			Level2:    true,
+			Metric:    10,
+			Padding:   ptrFalse(),
+		}),
+		WithCircuit(p2pMetricCircuit("c2", 0x12, 20)),
+	)
+	lan, p2p := s.circuits[0], s.circuits[1]
+	seedAdjacency(lan, packet.Level2, peerB)
+	seedAdjacency(lan, packet.Level2, peerD)
+	seedAdjacency(p2p, packet.Level2, peerC)
+	s.electDIS(lan, packet.Level2) // we win: the seeded adjacencies have priority 0
+	pn := lan.dis[packet.Level2]
+	if pn != nodeID(self, lan.pseudonodeID) {
+		t.Fatalf("DIS = %v, want our own pseudonode", pn)
+	}
+
+	now := time.Now()
+	injectLSP(s, peerB, []packet.TLV{isReachTo(pn, 10), reachP}, now)
+	injectLSP(s, peerD, []packet.TLV{isReachTo(pn, 10)}, now)
+	injectLSP(s, peerC, []packet.TLV{isReach(self), reachP}, now)
+
+	s.requestLSPRegen()
+	s.drainLSPGen(now)
+	s.updateRIB(now)
+	if r, ok := s.rib[p]; !ok || len(r.NextHops) != 1 || r.NextHops[0].Interface != "c1" {
+		t.Fatalf("before the loss: rib[%s] = %+v, want one next hop on c1", p, r)
+	}
+
+	// B leaves the LAN inside the hold; D keeps the circuit (and the
+	// pseudonode) up, so only the pseudonode's edge to B goes stale.
+	delete(lan.adjs[packet.Level2], peerB)
+	s.requestLSPRegen()
+	later := now.Add(100 * time.Millisecond)
+	s.drainLSPGen(later)
+	if !slices.Contains(ownISReach(t, s, pn), nodeID(peerB, 0)) {
+		t.Fatal("our pseudonode LSP no longer lists B: the regeneration hold this test needs did not happen")
+	}
+
+	s.updateRIB(later)
+	r, ok := s.rib[p]
+	if !ok {
+		t.Fatalf("route to %s withdrawn although C still advertises it", p)
+	}
+	if len(r.NextHops) != 1 || r.NextHops[0].Interface != "c2" {
+		t.Errorf("next hops = %+v, want one on c2", r.NextHops)
 	}
 }

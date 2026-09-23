@@ -86,11 +86,26 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		}
 		nhs := s.resolveNextHops(p, r.nextHops)
 		if len(nhs) == 0 {
-			// No neighbor address of the prefix's family was learned from
-			// hellos (e.g. an SRv6/IPv6 locator over a link with no IPv6
-			// interface address). Surface it rather than dropping silently.
-			s.logger.Warn("route has no resolvable next hop",
-				"prefix", p, "level", r.level, "algo", r.algo, "family", addrFamily(p))
+			// Two causes, two levels. No Up adjacency to any first hop is a
+			// transient the protocol repairs itself: a peer LSP (or a LAN
+			// pseudonode we do not originate) still lists a neighbor whose
+			// adjacency is gone, and the next flooding round drops it. Warning
+			// per prefix would turn one lost neighbor into a log flood on the
+			// management loop. An adjacency that IS Up but yielded no gateway
+			// stands until an operator acts: the neighbor announced no address
+			// of this family (TLV 132/232, e.g. an SRv6/IPv6 locator over a
+			// link with no IPv6 interface address) or does not route it
+			// (TLV 129).
+			if slices.ContainsFunc(r.nextHops, func(h packet.SystemID) bool {
+				adj, _ := s.findAdjacency(h)
+				return adj != nil
+			}) {
+				s.logger.Warn("route has no resolvable next hop",
+					"prefix", p, "level", r.level, "algo", r.algo, "family", addrFamily(p))
+			} else {
+				s.logger.Debug("route first hop has no adjacency",
+					"prefix", p, "level", r.level, "algo", r.algo)
+			}
 			continue
 		}
 		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, Algorithm: r.algo, NextHops: nhs}
