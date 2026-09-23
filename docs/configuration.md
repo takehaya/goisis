@@ -23,7 +23,7 @@ options. ([日本語](configuration.ja.md))
 | `prefixes` | list | Extra prefixes to originate, each a bare CIDR (`10.1.1.1/32`, metric 10) or a mapping `{prefix: 10.1.1.1/32, metric: 20}`. Connected subnets of the circuits are advertised automatically; naming one here does not advertise it twice, it only sets the metric it is advertised at. |
 | `srv6` | object | SRv6 locators; see below. |
 | `flex-algo` | list | Flexible Algorithm definitions; see below. |
-| `policy` | object | Prefix-lists gating origination and FIB programming; see [`policy`](#policy). |
+| `policy` | object | Prefix-lists gating origination, FIB programming and L2→L1 leaking; see [`policy`](#policy). |
 
 > FRR's IS-IS authentication is HMAC-MD5 only, so the SHA variants (RFC 5310)
 > interop goisis↔goisis, not with FRR.
@@ -149,12 +149,16 @@ policy:
     rules:
       - deny: 0.0.0.0/0
         le: 32        # control-plane only: keep routes in the RIB, not the kernel
+  leak-l2-to-l1:      # which Level-2 prefixes an L1L2 node leaks into its area
+    rules:
+      - permit: 203.0.113.0/24
 ```
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236) — its own, and on an L1L2 node the Level-1 prefixes it propagates into its Level-2 LSP. |
 | `fib` | prefix-list | FIB policy: routes programmed into the forwarding plane. Rejected routes stay in the RIB — `ListRoutes` and `WatchEvent` still report them. |
+| `leak-l2-to-l1` | prefix-list | Leak policy: the Level-2 prefixes an L1L2 node originates into its Level-1 LSP, with the up/down bit set. Absent, nothing is leaked. |
 | `<list>.default` | string | `deny` (default) or `permit`, applied when no rule matches. |
 | `<list>.rules[]` | list | Ordered; the first match wins. Each rule is `permit:`/`deny:` a CIDR, with optional `ge`/`le` length bounds. |
 
@@ -162,6 +166,15 @@ A rule matches a prefix within its CIDR whose length is in `[ge, le]` (omit both
 for an exact-length match). The flooded LSDB is never affected. For per-topology
 or per-algorithm separate RIBs (the IGP analogue of multiple BGP tables), use
 Flexible Algorithm rather than a filter.
+
+`leak-l2-to-l1` both switches leaking on and decides what it covers: writing the
+section is the decision to leak, since pushing a whole Level-2 table into every
+area is not a sensible default, and a prefix the area already reaches through
+Level 1 is never leaked. It is the only gate on leaked prefixes — `advertise`
+governs the node's own prefixes and the Level-1 ones it propagates up — so an
+`advertise` allowlist of your loopbacks does not silently empty the leak too.
+The metric advertised is this node's total Level-2 path metric, which the
+receiving Level-1 node adds its own distance to us on top of.
 
 ## Reloading
 

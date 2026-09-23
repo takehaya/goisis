@@ -44,6 +44,7 @@ type IsisServer struct {
 	metrics       Metrics
 	rib           map[netip.Prefix]RouteInfo
 	l1Export      map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
+	l2Leak        map[netip.Prefix]uint32 // L2-reachable prefixes leaked down into our L1 LSP
 	connected     map[netip.Prefix]bool   // directly-connected prefixes, derived (never installed)
 	fibPending    map[netip.Prefix]bool   // routes whose last FIB write failed; retried
 	fibInstalled  map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
@@ -63,6 +64,7 @@ type IsisServer struct {
 	overloadManual    bool                      // OL bit set by hand (SetOverload), independent of the startup window
 	authKeys          map[packet.Level]authSpec // LSP/SNP authentication per level
 	advertiseFilter   AdvertiseFilter           // export policy for originated prefixes (nil = advertise all)
+	l2LeakFilter      AdvertiseFilter           // L2->L1 leak policy (nil = leak nothing; see WithL2LeakFilter)
 	fibFilter         FIBFilter                 // FIB policy for computed routes (nil = program all)
 	lsdbEntryLimit    int                       // per-level cap on stored LSPs (0 = unlimited)
 	lsdbLimitWarned   edgeLog[packet.Level]     // levels whose entry-limit drop was already logged
@@ -130,6 +132,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		overloadOnStartup: o.overloadOnStartup,
 		authKeys:          map[packet.Level]authSpec{},
 		advertiseFilter:   o.advertiseFilter,
+		l2LeakFilter:      o.l2LeakFilter,
 		fibFilter:         o.fibFilter,
 		lsdbEntryLimit:    o.lsdbEntryLimit,
 		circuitPrefixes:   map[string][]netip.Prefix{},

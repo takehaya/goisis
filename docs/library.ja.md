@@ -35,6 +35,7 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 | `WithAreaAuth` / `WithDomainAuth(AuthConfig)` | L1 / L2 の LSP・SNP の HMAC 認証。`AuthConfig.AcceptSecrets`(hello では `CircuitConfig.HelloAcceptPasswords`)は受信時のみ追加で受け付ける鍵で、署名には使わないため、鍵をノードごとにローテーションできる。`WithAreaPassword` / `WithDomainPassword(string)` は HMAC-MD5 の簡易版。 |
 | `WithFIB(fib.FIB)` | フォワーディングシンク(デフォルト `fib.Noop`)。 |
 | `WithAdvertiseFilter(func(AdvertisedPrefix) bool)` | export ポリシー:どの prefix を広報するか。 |
+| `WithL2LeakFilter(func(AdvertisedPrefix) bool)` | リークポリシー:L1L2 ノードが up/down ビット付きで Level-1 LSP に載せる Level-2 prefix。省略すると何もリークしない。 |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB ポリシー:どの経路を FIB に入れるか(拒否分は RIB に残る)。 |
 | `WithMetrics(server.Metrics)` | テレメトリシンク(デフォルト `NoopMetrics`)。 |
 | `WithLogger(*slog.Logger)` | 構造化ロガー。 |
@@ -72,10 +73,14 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 IS-IS は IGP です。エリア内の全ノードが 1 つの LSDB を共有し同じ SPF 結果に
 収束する必要があるため、フラッディングされるリンクステートに BGP 的な
 import/export ポリシーは存在しません(フィルタすると一貫性が壊れる)。ポリシーは
-境界にのみ適用でき、goisis は 2 つのフックを提供します:
+境界にのみ適用でき、goisis は 3 つのフックを提供します:
 
 - **export**(`WithAdvertiseFilter`):自ノードが LSP に載せる prefix を制御。
   フラッディングと LSDB は不変。
+- **leak**(`WithL2LeakFilter`):L1L2 ノードが up/down ビット付きで Level-1 LSP に
+  載せる Level-2 prefix を制御。このオプションを渡すことがリークの有効化で、
+  渡さなければ何もリークしない。Level-2 テーブルを丸ごとエリアへ流すのは
+  運用者の判断だから。
 - **FIB**(`WithFIBFilter`):計算経路のうちフォワーディングプレーンに入れるものを
   制御。拒否された経路も RIB には残り(`ListRoutes`/`WatchEvent` で見える)、
   watch-only の利用者が処理できる。IS-IS 版「RIB にはあるが FIB に入れない」。

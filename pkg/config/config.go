@@ -115,10 +115,12 @@ type FlexAlgoConfig struct {
 
 // PolicyConfig configures prefix-list route policy. Advertise gates which
 // prefixes are originated; FIB gates which computed routes are programmed into
-// the forwarding plane (filtered routes stay in the RIB).
+// the forwarding plane (filtered routes stay in the RIB); LeakL2ToL1 both turns
+// on Level-2 to Level-1 route leaking and gates it (absent, nothing is leaked).
 type PolicyConfig struct {
-	Advertise *PrefixListConfig `yaml:"advertise"`
-	FIB       *PrefixListConfig `yaml:"fib"`
+	Advertise  *PrefixListConfig `yaml:"advertise"`
+	FIB        *PrefixListConfig `yaml:"fib"`
+	LeakL2ToL1 *PrefixListConfig `yaml:"leak-l2-to-l1"`
 }
 
 // PrefixListConfig is an ordered prefix-list. Each rule is "permit: CIDR" or
@@ -264,6 +266,13 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 				return nil, fmt.Errorf("policy.fib: %w", err)
 			}
 			opts = append(opts, server.WithFIBFilter(pl.FIBFilter()))
+		}
+		if c.Policy.LeakL2ToL1 != nil {
+			pl, err := c.Policy.LeakL2ToL1.prefixList()
+			if err != nil {
+				return nil, fmt.Errorf("policy.leak-l2-to-l1: %w", err)
+			}
+			opts = append(opts, server.WithL2LeakFilter(pl.AdvertiseFilter()))
 		}
 	}
 	// The accept list alone reaches the server too, so it can reject a
