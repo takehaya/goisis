@@ -203,6 +203,25 @@ func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) bool {
 	return false
 }
 
+// atAdjacencyLimit reports whether admitting id as a new neighbor would take
+// the circuit past its adjacency limit. A System ID the circuit already knows
+// at some level is the same station, so it is admitted even at the cap: the
+// limit bounds how many neighbors the circuit takes on, never one it has.
+// A p2p circuit keeps a single neighbor and so cannot grow past anything.
+func (c *circuit) atAdjacencyLimit(id packet.SystemID) bool {
+	limit := c.cfg.adjacencyLimit()
+	if limit <= 0 || c.cfg.P2P {
+		return false
+	}
+	seen := map[packet.SystemID]bool{}
+	for _, l := range c.cfg.levels() {
+		for other := range c.adjs[l] {
+			seen[other] = true
+		}
+	}
+	return !seen[id] && len(seen) >= limit
+}
+
 // upAdjacencyCount returns the number of Up adjacencies at a level, counting
 // the single neighbor a p2p circuit keeps outside c.adjs.
 func (c *circuit) upAdjacencyCount(l packet.Level) int {

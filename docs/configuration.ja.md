@@ -40,6 +40,7 @@
 | `hello-interval` | duration | hello の送出間隔。例 `1s`、`500ms`(デフォルト `3s`)。 |
 | `hold-multiplier` | int | 広報する holding time は `hello-interval x hold-multiplier`(デフォルト 10)。 |
 | `padding` | bool | MTU 不一致を検出するため hello を MTU までパディングする(ISO 10589、デフォルト `true`)。 |
+| `adjacency-limit` | int | このサーキットが受け入れる隣接数の上限。上限に達すると、隣接を持たない System ID からの hello は破棄され(`adjacency_limit` として計上)、既存の隣接はそのまま維持される。デフォルト 128、`0` で上限なし。 |
 | `hello-password` | string | HMAC による hello 認証を有効化。hello はこの鍵で署名され、受信 hello は一致する digest を持たないと破棄される。 |
 | `hello-auth-algorithm` | string | `md5`(デフォルト、RFC 5304、FRR の `isis password md5`)/ HMAC-SHA 系(RFC 5310)。 |
 | `hello-accept-passwords` | string のリスト | 受信 hello で追加で受け付ける鍵。署名には使わない。[鍵のローテーション](#鍵のローテーション)を参照。 |
@@ -221,7 +222,7 @@ unspecified、リンクローカル、IPv4-mapped の prefix と、RFC 5305 の�
 `goisis_fib_pending` /
 `goisis_pdu_rx_total{circuit,type}` / `goisis_pdu_drops_total{circuit,reason}`
 (reason は `decode` / `auth` / `no_adjacency` / `checksum` / `lsdb_limit` /
-`unknown_purge` / `own_sysid_purge` / `own_fragment_purge` /
+`adjacency_limit` / `unknown_purge` / `own_sysid_purge` / `own_fragment_purge` /
 `own_lsp_reclaimed` / `own_seq_wrap`) /
 `goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /

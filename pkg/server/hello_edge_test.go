@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/packet"
@@ -291,5 +292,69 @@ func TestHelloKeepsGlobalIPv6WhenTheCircuitHasNoLinkLocal(t *testing.T) {
 	global := netip.MustParseAddr("2001:db8::a1")
 	if got := helloIPv6Addrs([]netip.Addr{global}); !slices.Equal(got, []netip.Addr{global}) {
 		t.Errorf("hello TLV 232 = %v, want the circuit's only address %s", got, global)
+	}
+}
+
+// TestAdjacencyLimitDropsNewSystemIDs: a circuit forms at most
+// AdjacencyLimit adjacencies. At the cap, a hello from a System ID the circuit
+// holds no adjacency for is dropped, counted under adjacency_limit and warned
+// about once for the circuit, while the neighbors already adjacent keep
+// refreshing. On an unauthenticated segment a station reaches Up by echoing our
+// SNPA, and each one it reaches Up as costs an End.X SID, an IS reachability
+// entry and a kernel route; the LSDB cap bounds none of that.
+func TestAdjacencyLimitDropsNewSystemIDs(t *testing.T) {
+	local := packet.SNPA{0, 0, 0, 0, 0, 0xa1}
+	limit := 2
+	var logs bytes.Buffer
+	m := newCountingMetrics()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name:      "c",
+			Transport: datalink.NewMockTransport(local, 1500),
+			Level2:    true, Padding: ptrFalse(),
+			AdjacencyLimit: &limit,
+		}),
+		WithMetrics(m),
+		WithLogger(slog.New(slog.NewTextHandler(&logs, nil))),
+	)
+	c := s.circuits[0]
+	station := func(n byte) (packet.SystemID, packet.SNPA, *packet.LANHello) {
+		id := packet.SystemID{0, 0, 0, 0, 0, n}
+		snpa := packet.SNPA{0, 0, 0, 0, 0, n}
+		return id, snpa, neighborHello(id, 64, packet.NodeID{}, local)
+	}
+
+	for _, n := range []byte{0x10, 0x11} {
+		id, snpa, h := station(n)
+		s.processLANHello(c, snpa, h)
+		if adj, ok := c.adjs[packet.Level2][id]; !ok || adj.state != AdjUp {
+			t.Fatalf("station %v below the limit of %d did not reach Up", id, limit)
+		}
+	}
+	for _, n := range []byte{0x12, 0x13} {
+		id, snpa, h := station(n)
+		s.processLANHello(c, snpa, h)
+		if _, ok := c.adjs[packet.Level2][id]; ok {
+			t.Errorf("station %v formed an adjacency past the limit of %d", id, limit)
+		}
+	}
+	if n := m.count("pdu_drop", "c", dropAdjacencyLimit); n != 2 {
+		t.Errorf("hellos dropped at the adjacency limit = %d, want 2", n)
+	}
+	if n := strings.Count(logs.String(), "adjacency limit"); n != 1 {
+		t.Errorf("adjacency-limit warnings for 2 turned-away stations = %d, want 1: the log is edge-triggered per circuit", n)
+	}
+
+	// The cap turns away new stations, never an adjacency that already formed:
+	// a neighbor at the cap keeps refreshing its holding time.
+	id, snpa, h := station(0x10)
+	adj := c.adjs[packet.Level2][id]
+	stale := time.Now().Add(-time.Minute)
+	adj.lastHeard = stale
+	s.processLANHello(c, snpa, h)
+	if !adj.lastHeard.After(stale) || adj.state != AdjUp {
+		t.Errorf("neighbor %v at the cap did not refresh: lastHeard %v, state %v", id, adj.lastHeard, adj.state)
 	}
 }

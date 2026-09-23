@@ -228,8 +228,8 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 
 // localSIDDevice resolves the output device of a local SID route, creating the
 // SRv6 dummy device when dev is empty (everything but End.X). The device is
-// ours: AddLocalSID is re-run every housekeeping tick, so one deleted or
-// brought down out-of-band is repaired on the next pass.
+// ours: AddLocalSID is re-run periodically from housekeeping, so one deleted
+// or brought down out-of-band is repaired on the next pass.
 func (n *Netlink) localSIDDevice(dev string) (int, error) {
 	if dev != "" {
 		link, err := netlink.LinkByName(dev)

@@ -153,6 +153,9 @@ type CircuitConfig struct {
 	HelloInterval  string `yaml:"hello-interval"`
 	HoldMultiplier int    `yaml:"hold-multiplier"`
 	Padding        *bool  `yaml:"padding"`
+	// AdjacencyLimit caps the neighbors this circuit takes on; omitting it
+	// selects the server default (128) and an explicit zero disables the cap.
+	AdjacencyLimit *int `yaml:"adjacency-limit"`
 	// HelloPassword enables HMAC authentication of hellos. The algorithm
 	// defaults to HMAC-MD5 (RFC 5304); hello-auth-algorithm selects an HMAC-SHA
 	// variant (RFC 5310) with hello-key-id. hello-accept-passwords are extra
@@ -381,6 +384,7 @@ func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.A
 		HelloInterval:        hello,
 		HoldingMultiplier:    cc.HoldMultiplier,
 		Padding:              cc.Padding,
+		AdjacencyLimit:       cc.AdjacencyLimit,
 		Metric:               cc.Metric,
 		IPv4Addrs:            v4,
 		IPv6Addrs:            v6,
