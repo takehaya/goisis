@@ -453,7 +453,7 @@ func TestUpdateRIBAlgoCollisionPrefersAlgo0(t *testing.T) {
 	injectLSP(s, self, []packet.TLV{partCap(), isReach(peer)}, now)
 	injectLSP(s, peer, []packet.TLV{fadCap(100), isReach(self),
 		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Metric: 5, Prefix: shared}}},
-		algoLocTLV(128, shared),
+		algoLocTLV(shared),
 	}, now)
 
 	s.updateRIB(now)

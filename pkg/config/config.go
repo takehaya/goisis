@@ -166,6 +166,11 @@ type CircuitConfig struct {
 	P2P       bool   `yaml:"p2p"`
 	Priority  *uint8 `yaml:"priority"`
 	Metric    uint32 `yaml:"metric"`
+	// AdminGroup is the circuit's link colors, one entry per 4-octet unit of
+	// the Extended Administrative Group (RFC 7308), most significant word
+	// first. They are advertised in an ASLA sub-TLV for the Flex-Algorithm
+	// application; a circuit without them is uncolored.
+	AdminGroup []uint32 `yaml:"admin-group"`
 	// HelloInterval is a Go duration (e.g. "1s", "500ms"); empty selects the
 	// server default. HoldMultiplier scales it into the advertised holding
 	// time; zero selects the default. Padding pads hellos toward the MTU;
@@ -530,6 +535,7 @@ func (cc CircuitConfig) circuit(open func(string) (datalink.Transport, []netip.A
 		Padding:              cc.Padding,
 		AdjacencyLimit:       cc.AdjacencyLimit,
 		Metric:               cc.Metric,
+		AdminGroup:           cc.AdminGroup,
 		IPv4Addrs:            v4,
 		IPv6Addrs:            v6,
 		HelloPassword:        cc.HelloPassword,

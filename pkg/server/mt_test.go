@@ -48,7 +48,7 @@ func TestMTIPv6ReachabilityProducesRoutes(t *testing.T) {
 		Prefixes: []packet.IPv6ReachEntry{{Metric: 5, Prefix: prefix}},
 	})
 
-	routes := s.computeSPF(packet.Level2, 0, now)
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)
 	r, ok := routes[prefix]
 	if !ok {
 		t.Fatalf("no route for %s learned from TLV 237; have %v", prefix, keys(routes))
@@ -81,7 +81,7 @@ func TestMTIPv6ReachabilityIgnoresOtherTopologies(t *testing.T) {
 		&packet.MTIPReachabilityTLV{MTID: 3, Prefixes: []packet.ExtendedIPReachEntry{{Metric: 5, Prefix: mtIPv4}}},
 	)
 
-	routes := s.computeSPF(packet.Level2, 0, now)
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)
 	if _, ok := routes[wanted]; !ok {
 		t.Fatalf("MT #2 prefix %s missing; the run learned nothing, so the rest proves nothing", wanted)
 	}

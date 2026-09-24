@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -471,5 +472,27 @@ circuits:
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not name %q: %v", want, err)
 		}
+	}
+}
+
+// TestLoadCircuitAdminGroup: the circuit's colors are a list of the 4-octet
+// units RFC 7308 defines an Extended Administrative Group in, written the way
+// `goisis flex-algo` prints them back — hexadecimal is how an operator reads a
+// bitmask, so it has to survive the YAML scanner.
+func TestLoadCircuitAdminGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	cfg := "net: 49.0001.0000.0000.0001.00\ncircuits:\n  - interface: eth0\n    admin-group: [0x00000005, 16]\n  - interface: eth1\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := []uint32{5, 16}; !slices.Equal(c.Circuits[0].AdminGroup, want) {
+		t.Errorf("admin-group = %v, want %v", c.Circuits[0].AdminGroup, want)
+	}
+	if c.Circuits[1].AdminGroup != nil {
+		t.Errorf("a circuit without the key got %v, want no colors", c.Circuits[1].AdminGroup)
 	}
 }

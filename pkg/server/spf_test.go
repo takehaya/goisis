@@ -64,7 +64,7 @@ func TestSPFLANPseudonode(t *testing.T) {
 	installNode(s, pn, false, []edge{{nid(1, 0), 0}, {nid(2, 0), 0}}, nil)
 	installNode(s, nid(2, 0), false, []edge{{pn, 10}}, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]
 	if !ok {
 		t.Fatalf("no route to 10.2.0.0/24; routes=%v", routes)
@@ -85,7 +85,7 @@ func TestSPFP2PChain(t *testing.T) {
 	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, nil)
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.3.0.0/24")]
 	if !ok {
 		t.Fatal("no route to 10.3.0.0/24")
@@ -105,7 +105,7 @@ func TestSPFTwoWayCheck(t *testing.T) {
 	installNode(s, nid(1, 0), false, []edge{{nid(2, 0), 10}}, nil)
 	installNode(s, nid(2, 0), false, nil, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]; ok {
 		t.Error("route installed despite failing the two-way check")
 	}
@@ -120,7 +120,7 @@ func TestSPFECMP(t *testing.T) {
 	installNode(s, nid(4, 0), false, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, nil)
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}, {nid(4, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 0)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.3.0.0/24")]
 	if !ok {
 		t.Fatal("no route to 10.3.0.0/24")
@@ -143,7 +143,7 @@ func TestSPFAnycastPrefixMergesNextHops(t *testing.T) {
 	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{anycast})
 	installNode(s, nid(3, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{anycast})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.7.0.0/24")]
 	if !ok {
 		t.Fatal("no route to anycast prefix 10.7.0.0/24")
@@ -166,7 +166,7 @@ func TestSPFAnycastPrefixPrefersCheaperAdvertiser(t *testing.T) {
 	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.7.0.0/24", 5)})
 	installNode(s, nid(3, 0), false, []edge{{nid(1, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.7.0.0/24", 50)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	r, ok := routes[netip.MustParsePrefix("10.7.0.0/24")]
 	if !ok {
 		t.Fatal("no route to anycast prefix 10.7.0.0/24")
@@ -193,7 +193,7 @@ func TestSPFNoMetricOverflow(t *testing.T) {
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 0xffffff}},
 		[]packet.ExtendedIPReachEntry{{Prefix: netip.MustParsePrefix("10.99.0.0/24"), Metric: 0xfdffffff}})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.99.0.0/24")]; ok {
 		t.Error("prefix above the reachability ceiling should be unreachable (metric overflow)")
 	}
@@ -208,7 +208,7 @@ func TestSPFOverloadNoTransit(t *testing.T) {
 	installNode(s, nid(2, 0), true, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.2.0.0/24", 5)})
 	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 5)})
 
-	routes := s.computeSPF(packet.Level2, 0, time.Now())
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
 	if _, ok := routes[netip.MustParsePrefix("10.2.0.0/24")]; !ok {
 		t.Error("overloaded node's own prefix should remain reachable")
 	}
@@ -267,7 +267,7 @@ func TestL1OnlyNodeInstallsDefaultViaNearestAttachedIS(t *testing.T) {
 	injectL1(s, b, true, false, []packet.TLV{isReach(self, c)}, now)
 	injectL1(s, c, true, false, []packet.TLV{isReach(b)}, now)
 
-	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, flexAlgoAffinity{}, now))
 	for _, r := range []route{v4r, v6r} {
 		if r.metric != 10 {
 			t.Errorf("metric = %d, want 10 (distance to the nearest attached IS)", r.metric)
@@ -294,7 +294,7 @@ func TestAttachedISWithOverloadBitIsNotUsedAsExit(t *testing.T) {
 	injectL1(s, b, true, true, []packet.TLV{isReach(self)}, now)
 	injectL1(s, c, true, false, []packet.TLV{isReach(self)}, now)
 
-	v4r, _ := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	v4r, _ := attDefaults(t, s.computeSPF(packet.Level1, 0, flexAlgoAffinity{}, now))
 	if len(v4r.nextHops) != 1 || v4r.nextHops[0] != c {
 		t.Errorf("nextHops = %v, want [..03] (the overloaded B is not an exit)", v4r.nextHops)
 	}
@@ -311,7 +311,7 @@ func TestL1L2NodeDoesNotInstallDefaultFromATT(t *testing.T) {
 	injectL1(s, self, true, false, []packet.TLV{isReach(b)}, now)
 	injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
 
-	routes := s.computeSPF(packet.Level1, 0, now)
+	routes := s.computeSPF(packet.Level1, 0, flexAlgoAffinity{}, now)
 	if r, ok := routes[defaultV4]; ok {
 		t.Errorf("L1L2 IS installed an ATT default route %v", r)
 	}
@@ -346,7 +346,7 @@ func TestAnAdvertisedDefaultIsNotDisplacedByTheATTDefault(t *testing.T) {
 			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
 				{Prefix: netip.MustParsePrefix("0.0.0.0/0"), Metric: 0, Down: down},
 			}}}, now)
-		routes := s.computeSPF(packet.Level1, 0, now)
+		routes := s.computeSPF(packet.Level1, 0, flexAlgoAffinity{}, now)
 		r, ok := routes[defaultV4]
 		if !ok {
 			t.Fatalf("no default route; routes=%v", routes)
@@ -388,7 +388,7 @@ func TestEquidistantAttachedISsGiveECMPDefault(t *testing.T) {
 	injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
 	injectL1(s, c, true, false, []packet.TLV{isReach(self)}, now)
 
-	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, now))
+	v4r, v6r := attDefaults(t, s.computeSPF(packet.Level1, 0, flexAlgoAffinity{}, now))
 	for _, r := range []route{v4r, v6r} {
 		if r.metric != 10 {
 			t.Errorf("metric = %d, want 10", r.metric)

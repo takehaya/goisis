@@ -69,9 +69,11 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 紐づく locator ならそのアルゴリズムにも参加している Up の隣接ごとに 1 つの End.X SID
 で、その隣接のシステム ID と、隣接が乗っているサーキットが付きます。
 `FlexAlgoInfo.Definition` は勝者 FAD の `Constraints`、すなわち受信したままの
-制約 sub-sub-TLV(RFC 9350 §6)を持ちます。goisis はこれで枝刈りはしませんが
-報告はするので、admin group や SRLG の制約を要求しているエリアが、何も要求して
-いないエリアと同じには見えません。
+制約 sub-sub-TLV(RFC 9350 §6)を持ちます。admin group の制約は剪定に使います
+(§13 の手順 1・3・4。色は `WithCircuit` の `AdminGroup` で広報し、対向のものは
+ASLA から読みます)。SRLG 除外など goisis が評価できないものが入っていると、その
+アルゴリズムは計算不能になり経路を投入しません。それが分かるのがこの
+`Constraints` です。
 
 ## 経路ポリシー
 

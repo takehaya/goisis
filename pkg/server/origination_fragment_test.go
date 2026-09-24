@@ -122,7 +122,7 @@ func TestSPFAggregatesAcrossFragments(t *testing.T) {
 		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{{Metric: 10, Prefix: inFrag1}}},
 	})
 
-	routes := s.computeSPF(packet.Level2, 0, now)
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)
 	if _, ok := routes[inFrag0]; !ok {
 		t.Errorf("prefix in fragment 0 (%s) not reachable", inFrag0)
 	}

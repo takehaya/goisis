@@ -244,7 +244,7 @@ func TestSRv6EndXSubTLVsIgnoredBySPF(t *testing.T) {
 		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Metric: 5, Prefix: prefix}}},
 	}, now)
 
-	routes := s.computeSPF(packet.Level2, 0, now)
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)
 	if r, ok := routes[prefix]; !ok || r.metric != 15 {
 		t.Errorf("route to %s = %+v (present %v), want metric 15", prefix, r, ok)
 	}
@@ -252,7 +252,9 @@ func TestSRv6EndXSubTLVsIgnoredBySPF(t *testing.T) {
 
 // TestSRv6EndXEntrySplitting: an adjacency with more End.X SIDs than fit one
 // IS reachability entry's 255-octet sub-TLV area is emitted as several entries
-// for the same neighbor, each serializable.
+// for the same neighbor, each serializable — and the link's own attributes
+// repeat on every one of them, so a receiver that reads an entry as one SPF
+// edge does not see an uncolored parallel link beside the colored one.
 func TestSRv6EndXEntrySplitting(t *testing.T) {
 	id := nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
 	var subs []packet.SubTLV
@@ -263,7 +265,11 @@ func TestSRv6EndXEntrySplitting(t *testing.T) {
 			Structure: &packet.SIDStructure{LocatorBlock: 32, LocatorNode: 16, Function: 16},
 		})
 	}
-	entries := appendISReach(nil, id, 10, subs)
+	asla := &packet.ASLASubTLV{
+		SABM:       []byte{packet.ASLAAppFlexAlgo},
+		SubSubTLVs: []packet.SubTLV{&packet.AdminGroupSubTLV{Groups: []uint32{0x4}}},
+	}
+	entries := appendISReach(nil, id, 10, []packet.SubTLV{asla}, subs)
 	if len(entries) < 2 {
 		t.Fatalf("got %d entries, want the sub-TLVs split across several", len(entries))
 	}
@@ -272,7 +278,10 @@ func TestSRv6EndXEntrySplitting(t *testing.T) {
 		if e.NeighborID != id || e.Metric != 10 {
 			t.Errorf("split entry lost its neighbor or metric: %+v", e)
 		}
-		total += len(e.SubTLVs)
+		if got := flexAlgoLinkColors(e.SubTLVs); !slices.Equal(got, []uint32{0x4}) {
+			t.Errorf("split entry colors = %v, want the link's 0x4 on every entry", got)
+		}
+		total += len(e.SubTLVs) - 1 // minus the repeated ASLA
 	}
 	if total != len(subs) {
 		t.Errorf("split kept %d of %d sub-TLVs", total, len(subs))
