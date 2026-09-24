@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -128,6 +129,62 @@ func TestFlexAlgoParticipantDedup(t *testing.T) {
 	fi := s.flexAlgoState(packet.Level2, now)[128]
 	if fi == nil || len(fi.Participants) != 1 {
 		t.Fatalf("participants = %+v, want exactly 1 (deduped)", fi)
+	}
+}
+
+// TestListFlexAlgosReportsElectedConstraints: ListFlexAlgos carries the
+// winning definition's constraint sub-sub-TLVs out, and only the winner's — an
+// area asking for admin-group or SRLG constraints must not read like one
+// asking for none, even though goisis does not prune on them. An algorithm
+// whose winning definition carries no constraint reports none.
+func TestListFlexAlgosReportsElectedConstraints(t *testing.T) {
+	s := electionServer(t)
+	now := time.Now()
+	// Injection is white-box, so it has to precede Serve.
+	injectLSP(s, packet.SystemID{0, 0, 0, 0, 0, 2}, []packet.TLV{
+		&packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{
+			&packet.SRAlgorithmSubTLV{Algorithms: []uint8{0, 128, 129}},
+			&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, Priority: 100, SubSubTLVs: []packet.FlexAlgoSubSubTLV{
+				{SubSubTLVType: packet.FlexAlgoSubSubExcludeAdminGroup, Value: []byte{0, 0, 0, 5}},
+				{SubSubTLVType: packet.FlexAlgoSubSubExcludeSRLG, Value: []byte{0, 0, 0, 7}},
+			}},
+			&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 129, Priority: 100},
+		}},
+	}, now)
+	injectLSP(s, packet.SystemID{0, 0, 0, 0, 0, 3}, []packet.TLV{
+		&packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{
+			&packet.SRAlgorithmSubTLV{Algorithms: []uint8{0, 128}},
+			// Loses the election, so its constraint must not be reported.
+			&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, Priority: 50, SubSubTLVs: []packet.FlexAlgoSubSubTLV{
+				{SubSubTLVType: packet.FlexAlgoSubSubDefinitionFlags, Value: []byte{packet.FlexAlgoFlagM}},
+			}},
+		}},
+	}, now)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
+
+	infos, err := s.ListFlexAlgos(ctx)
+	if err != nil {
+		t.Fatalf("ListFlexAlgos: %v", err)
+	}
+	byAlgo := map[uint8]FlexAlgoInfo{}
+	for _, fi := range infos {
+		byAlgo[fi.Algo] = fi
+	}
+	got, ok := byAlgo[128]
+	if !ok || got.Definition == nil {
+		t.Fatalf("no definition reported for algo 128: %+v", infos)
+	}
+	want := []string{"exclude-admin-group 0x00000005", "exclude-srlg 7"}
+	if lines := flexAlgoConstraintSummaries(got.Definition.Constraints); !slices.Equal(lines, want) {
+		t.Errorf("algo 128 constraints = %q, want %q", lines, want)
+	}
+	if got, ok := byAlgo[129]; !ok || got.Definition == nil {
+		t.Fatalf("no definition reported for algo 129: %+v", infos)
+	} else if len(got.Definition.Constraints) != 0 {
+		t.Errorf("algo 129 constraints = %+v, want none", got.Definition.Constraints)
 	}
 }
 

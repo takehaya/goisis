@@ -18,6 +18,13 @@ type FlexAlgoDefinition struct {
 	Priority   uint8
 	// Advertiser is the System ID of the node whose FAD won the election.
 	Advertiser packet.SystemID
+	// Constraints are the winning FAD's constraint sub-sub-TLVs (RFC 9350
+	// section 6: exclude/include admin groups, definition flags,
+	// exclude-SRLG), in wire order. goisis computes the IGP metric only and
+	// does not prune on them, but an area that asks for constraints must not
+	// read like one that asks for none. Render them with
+	// flexAlgoConstraintSummaries.
+	Constraints []packet.FlexAlgoSubSubTLV
 }
 
 // FlexAlgoInfo summarizes one Flexible Algorithm at a level: its elected
@@ -84,11 +91,12 @@ func (s *IsisServer) flexAlgoState(level packet.Level, now time.Time) map[uint8]
 					contributedFAD[st.FlexAlgo] = true
 					fi := info(st.FlexAlgo)
 					cand := &FlexAlgoDefinition{
-						Algo:       st.FlexAlgo,
-						MetricType: st.MetricType,
-						CalcType:   st.CalcType,
-						Priority:   st.Priority,
-						Advertiser: sys,
+						Algo:        st.FlexAlgo,
+						MetricType:  st.MetricType,
+						CalcType:    st.CalcType,
+						Priority:    st.Priority,
+						Advertiser:  sys,
+						Constraints: st.SubSubTLVs,
 					}
 					if winsElection(cand, fi.Definition) {
 						fi.Definition = cand

@@ -158,6 +158,11 @@ message FlexAlgoDefinition {
   uint32 priority = 3;
   // advertiser is the System ID of the node whose definition won the election.
   string advertiser = 4;
+  // constraints are the winning definition's constraint sub-sub-TLVs (RFC 9350
+  // section 6: exclude/include admin groups, definition flags, exclude-SRLG),
+  // rendered one line each in wire order. goisis reports them but does not
+  // prune on them; the computation is IGP-metric-only.
+  repeated string constraints = 5;
 }
 
 // FlexAlgo is one Flexible Algorithm's state at a level.

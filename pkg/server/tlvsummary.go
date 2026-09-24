@@ -176,6 +176,110 @@ func flexAlgoMetricName(mt uint8) string {
 	}
 }
 
+// flexAlgoConstraintSummaries renders a FAD's constraint sub-sub-TLVs for
+// `goisis flex-algo`, one line each, in wire order. It lives here and not in
+// pkg/packet for the same reason tlvSummary does: that package is a pure
+// codec. goisis does not prune on these constraints (see the Limitations
+// table), so this rendering is the only place an operator sees that the area's
+// winning definition asks for them.
+func flexAlgoConstraintSummaries(ss []packet.FlexAlgoSubSubTLV) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, flexAlgoConstraintSummary(s))
+	}
+	return out
+}
+
+// flexAlgoConstraintSummary renders one constraint sub-sub-TLV (RFC 9350
+// section 6). A value whose length RFC 9350 rules out — an admin group or an
+// SRLG list that is not a whole number of 4-octet units — falls back to type
+// and length rather than being rendered as something it is not, the way an
+// unrecognised sub-sub-TLV does.
+func flexAlgoConstraintSummary(ss packet.FlexAlgoSubSubTLV) string {
+	switch ss.SubSubTLVType {
+	case packet.FlexAlgoSubSubExcludeAdminGroup:
+		if s, ok := adminGroupSummary("exclude-admin-group", ss.Value); ok {
+			return s
+		}
+	case packet.FlexAlgoSubSubIncludeAnyAdminGroup:
+		if s, ok := adminGroupSummary("include-any-admin-group", ss.Value); ok {
+			return s
+		}
+	case packet.FlexAlgoSubSubIncludeAllAdminGroup:
+		if s, ok := adminGroupSummary("include-all-admin-group", ss.Value); ok {
+			return s
+		}
+	case packet.FlexAlgoSubSubDefinitionFlags:
+		// The flags length is a plain octet count, not a multiple of 4, so
+		// nothing here can be malformed.
+		return "flags " + flexAlgoFlagNames(ss.Value)
+	case packet.FlexAlgoSubSubExcludeSRLG:
+		if words, ok := flexAlgoWords(ss.Value); ok {
+			srlgs := make([]string, 0, len(words))
+			for _, w := range words {
+				srlgs = append(srlgs, strconv.FormatUint(uint64(w), 10))
+			}
+			return "exclude-srlg " + strings.Join(srlgs, ",")
+		}
+	}
+	return fmt.Sprintf("sub-sub-TLV %d: %d octets", ss.SubSubTLVType, len(ss.Value))
+}
+
+// adminGroupSummary renders an Extended Admin Group (RFC 7308) in the 4-octet
+// units it is defined in. The value is a bitmask of colors, not a number, and
+// RFC 7308 numbers the bits per unit; printing the mask keeps the output the
+// same shape as the operator's configuration instead of committing this node
+// to one reading of that numbering.
+func adminGroupSummary(name string, v []byte) (string, bool) {
+	words, ok := flexAlgoWords(v)
+	if !ok {
+		return "", false
+	}
+	groups := make([]string, 0, len(words))
+	for _, w := range words {
+		groups = append(groups, fmt.Sprintf("0x%08x", w))
+	}
+	return name + " " + strings.Join(groups, ","), true
+}
+
+// flexAlgoWords splits a constraint value into the 4-octet units RFC 9350
+// section 6 requires of an admin group and an SRLG list. It reports false for
+// any other length so the caller falls back to type and length.
+func flexAlgoWords(v []byte) ([]uint32, bool) {
+	if len(v) == 0 || len(v)%4 != 0 {
+		return nil, false
+	}
+	out := make([]uint32, 0, len(v)/4)
+	for i := 0; i < len(v); i += 4 {
+		out = append(out, binary.BigEndian.Uint32(v[i:i+4]))
+	}
+	return out, true
+}
+
+// flexAlgoFlagNames renders the definition flags (RFC 9350 section 6.4). Bit 0
+// is the M-flag; the rest are unassigned and are named by position, because
+// the RFC makes an unsupported bit a reason to stop participating — an
+// operator chasing that needs to see the bit, not a blank.
+func flexAlgoFlagNames(v []byte) string {
+	var names []string
+	for i, b := range v {
+		for bit := 0; bit < 8; bit++ {
+			mask := byte(0x80) >> bit
+			switch {
+			case b&mask == 0:
+			case i == 0 && mask == packet.FlexAlgoFlagM:
+				names = append(names, "M")
+			default:
+				names = append(names, fmt.Sprintf("bit %d", i*8+bit))
+			}
+		}
+	}
+	if len(names) == 0 {
+		return "none"
+	}
+	return strings.Join(names, ",")
+}
+
 // authSummary names the scheme only: the TLV value is a digest or, for
 // cleartext authentication, the password itself, and neither belongs in
 // operator-facing output.

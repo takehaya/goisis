@@ -270,6 +270,12 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
 の行の下にその TLV を並べるので、パケットキャプチャなしで対向の広告内容を読めます。
 
+`goisis flex-algo` の `CONSTRAINTS` 列には、選出された定義の制約 sub-sub-TLV
+(RFC 9350 §6)が並びます。exclude / include の admin group は RFC 7308 が定める
+4 オクテット単位のまま、ほかに定義フラグと除外 SRLG です。goisis はこれらを報告
+しますが枝刈りには使いません。計算は IGP メトリックのみなので、制約付きの定義
+でも得られる経路は素の IGP メトリック最短路です。
+
 `database` の `LIFETIME` 列は生成元の値ではなく、このノード自身の値です。受信した
 LSP は、MaxAge 未満で届いた場合 MaxAge からエージングされる(RFC 7987、
 [メトリクス](#メトリクス)参照)ため、この列が示すのは「このノードがあと何秒
