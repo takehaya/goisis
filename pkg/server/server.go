@@ -572,28 +572,45 @@ func (s *IsisServer) housekeeping(now time.Time) {
 // mgmtOperation runs f on the Serve loop and waits for its result. State
 // owned by the loop must only be touched from inside f.
 func (s *IsisServer) mgmtOperation(ctx context.Context, f func() error) error {
+	_, err := s.mgmtOperationQueued(ctx, f)
+	return err
+}
+
+// mgmtOperationQueued is mgmtOperation plus whether f reached the loop at all.
+// The context bounds the caller's wait and not the operation: once f is on
+// mgmtCh the loop runs it whatever the caller does next, so a call that hands
+// a resource over cannot read its own error as the operation not having
+// happened. AddCircuit is the one caller that has to tell the two apart, and
+// closing the transport an operation still queued is about to run a circuit on
+// is what it exists for.
+//
+// A queued operation that never runs is possible in exactly one way: shutdown
+// drains mgmtCh and answers ErrServerStopped without calling f. That is what
+// makes ErrServerStopped, and not the flag, the answer to "did f run" once the
+// instance is stopping.
+func (s *IsisServer) mgmtOperationQueued(ctx context.Context, f func() error) (queued bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	errCh := make(chan error, 1)
 	select {
 	case s.mgmtCh <- &mgmtOp{f: f, errCh: errCh}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	case <-s.done:
-		return ErrServerStopped
+		return false, ErrServerStopped
 	}
 	select {
 	case err := <-errCh:
-		return err
+		return true, err
 	case <-ctx.Done():
-		return ctx.Err()
+		return true, ctx.Err()
 	case <-s.done:
 		select {
 		case err := <-errCh:
-			return err
+			return true, err
 		default:
-			return ErrServerStopped
+			return true, ErrServerStopped
 		}
 	}
 }

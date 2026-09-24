@@ -475,9 +475,12 @@ func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 // tries this one again -- which is what makes "that NIC comes up in a minute"
 // resolve itself.
 //
-// AddCircuit takes ownership of the transport only when it accepts it, so a
-// refusal is this function's to close: nothing else holds it, and without this
-// every retry over an already-added circuit would leak an AF_PACKET socket.
+// AddCircuit takes ownership of the transport on every path, refusals
+// included, so there is nothing to close here -- and nothing that may be
+// closed here. A management operation's context bounds the caller's wait and
+// not the operation, so an addition still queued when applyTimeout expires
+// runs afterwards: closing on that error would hand the server a circuit on a
+// socket this reload had already closed.
 func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc CircuitConfig) error {
 	open := ch.open
 	if open == nil {
@@ -488,11 +491,5 @@ func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc Circu
 		return err
 	}
 	cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
-	if err := s.AddCircuit(ctx, cfg); err != nil {
-		if cerr := cfg.Transport.Close(); cerr != nil {
-			return errors.Join(err, cerr)
-		}
-		return err
-	}
-	return nil
+	return s.AddCircuit(ctx, cfg)
 }

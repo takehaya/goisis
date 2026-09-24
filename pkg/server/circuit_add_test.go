@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,30 +167,208 @@ func TestAddCircuitStartsALevelThatHadNoCircuit(t *testing.T) {
 	}
 }
 
-// TestAddCircuitRefusesADuplicateName guarantees that a name already configured
-// is refused and not replaced — replacing would drop the running circuit with
-// its transport open and its reader goroutine still on it — and that the
-// refusal leaves the caller's transport for the caller to close, which is the
-// contract AddCircuit states and the only thing that closes it.
-func TestAddCircuitRefusesADuplicateName(t *testing.T) {
+// dupFixture returns a stopped server running one broadcast circuit named "a",
+// with this node's LSPs originated — the node a second addition of "a" meets.
+func dupFixture(t *testing.T) *IsisServer {
+	t.Helper()
 	s := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(lanCircuit("a", 0xa1, 1500)),
 	)
-	now := time.Now()
-	s.regenerateLSPs(false, now)
-	running := s.circuitNamed("a")
+	s.regenerateLSPs(false, time.Now())
+	return s
+}
 
-	dup := lanCircuit("a", 0xa2, 1500)
-	if err := s.addCircuit(dup, now); err == nil {
-		t.Fatal("a second circuit named a was accepted; the running one is now unreachable with its transport open")
+// TestAddCircuitAcceptsAnIdenticalDuplicateAsAlreadyInState guarantees that
+// adding a circuit the node already runs, in the configuration it already
+// runs, is refused as ErrAlreadyInState — the one refusal a configuration
+// reload counts as the call having succeeded, so a batch re-issued after some
+// other call was refused can still be adopted (pkg/config.Reload).
+//
+// Identical is read after applyDefaults on both sides, in either direction:
+// the running circuit stores the timers and the metric it was given, which are
+// the defaults it never named, and a caller writing those defaults out is
+// asking for that same circuit rather than for a different one.
+func TestAddCircuitAcceptsAnIdenticalDuplicateAsAlreadyInState(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		edit func(*CircuitConfig)
+	}{
+		{"the defaults left unset", func(*CircuitConfig) {}},
+		{"the defaults written out", func(c *CircuitConfig) {
+			c.HelloInterval, c.HoldingMultiplier, c.Metric = DefaultHelloInterval, DefaultHoldingMultiplier, DefaultMetric
+		}},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			s := dupFixture(t)
+			running := s.circuitNamed("a")
+
+			dup := lanCircuit("a", 0xa2, 1500)
+			tc.edit(&dup)
+			if err := s.addCircuit(dup, time.Now()); !errors.Is(err, ErrAlreadyInState) {
+				t.Errorf("re-adding the circuit the node runs = %v, want ErrAlreadyInState: a reload that re-issues its batch can never adopt the file", err)
+			}
+			if len(s.circuits) != 1 || s.circuitNamed("a") != running {
+				t.Errorf("circuits after the refused addition = %d, want the one that was already running", len(s.circuits))
+			}
+		})
 	}
-	if len(s.circuits) != 1 || s.circuitNamed("a") != running {
-		t.Errorf("circuits after the refused addition = %d, want the one that was already running", len(s.circuits))
+}
+
+// TestAddCircuitRefusesADuplicateThatDiffersAndNamesTheField guarantees that a
+// name already configured, carrying any other configuration than the one the
+// node runs, is a hard error that names the fields it differs in — and never
+// ErrAlreadyInState, which a reload reads as the call having succeeded: the
+// circuit would keep its old hello key and its old level while the reload
+// reports applied and adopts the file, with no command able to show it
+// (ErrAlreadyInState's own doc rules that out).
+//
+// The names and never the values: half these fields are HMAC keys and this
+// error reaches the daemon log. The circuit is not replaced either — replacing
+// would drop the running one with its transport open and its reader goroutine
+// still on it.
+func TestAddCircuitRefusesADuplicateThatDiffersAndNamesTheField(t *testing.T) {
+	const secret = "ROTATED-KEY"
+	for _, tc := range []struct {
+		what  string
+		edit  func(*CircuitConfig)
+		field string
+	}{
+		{"hello password", func(c *CircuitConfig) { c.HelloPassword = secret }, "HelloPassword"},
+		{"accept passwords", func(c *CircuitConfig) { c.HelloPassword, c.HelloAcceptPasswords = secret, []string{secret + "-OLD"} }, "HelloAcceptPasswords"},
+		{"level", func(c *CircuitConfig) { c.Level1 = true }, "Level1"},
+		{"priority", func(c *CircuitConfig) { p := uint8(100); c.Priority = &p }, "Priority"},
+		{"metric", func(c *CircuitConfig) { c.Metric = 55 }, "Metric"},
+		{"padding", func(c *CircuitConfig) { c.Padding = nil }, "Padding"},
+		{"hello interval", func(c *CircuitConfig) { c.HelloInterval = time.Second }, "HelloInterval"},
+		{"point-to-point procedures", func(c *CircuitConfig) { c.P2P = true }, "P2P"},
+		{"connected subnets", func(c *CircuitConfig) {
+			c.ConnectedPrefixes = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}
+		}, "ConnectedPrefixes"},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			s := dupFixture(t)
+			running := s.circuitNamed("a")
+
+			dup := lanCircuit("a", 0xa2, 1500)
+			tc.edit(&dup)
+			err := s.addCircuit(dup, time.Now())
+			if err == nil {
+				t.Fatal("a second circuit named a was accepted; the running one is now unreachable with its transport open")
+			}
+			if errors.Is(err, ErrAlreadyInState) {
+				t.Fatalf("adding a circuit that differs in %s = ErrAlreadyInState: a reload reports that as applied and the circuit keeps the configuration the operator replaced", tc.field)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error = %q, want it to name %s: which field differs is the operator's next question", err, tc.field)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("error = %q: it carries the key itself, and this error is logged", err)
+			}
+			if len(s.circuits) != 1 || s.circuitNamed("a") != running {
+				t.Errorf("circuits after the refused addition = %d, want the one that was already running", len(s.circuits))
+			}
+		})
 	}
-	if err := dup.Transport.Send(packet.SNPA{}, []byte{0x83}); errors.Is(err, datalink.ErrClosed) {
-		t.Errorf("the refused addition closed the caller's transport")
+}
+
+// recvClosed reports whether a transport has been closed, read the way the
+// delete's tests read it — Recv on a closed transport reports ErrClosed. It
+// runs off the test goroutine because Recv on one that is still open parks
+// until a frame arrives, which would hang a regression instead of failing it.
+func recvClosed(t *testing.T, tr datalink.Transport) bool {
+	t.Helper()
+	got := make(chan error, 1)
+	go func() {
+		_, err := tr.Recv()
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		return errors.Is(err, datalink.ErrClosed)
+	case <-time.After(2 * time.Second):
+		return false
+	}
+}
+
+// TestAddCircuitClosesEveryTransportItDoesNotAdd guarantees that a transport
+// AddCircuit is handed and does not run a circuit on is closed by AddCircuit —
+// on the refusal, on the ErrAlreadyInState sentinel, and on a context that
+// never reached the loop at all.
+//
+// The caller cannot be the one to close it: a management operation whose
+// caller's context expires while it is queued still runs (mgmtOperation
+// abandons the wait, not the operation), so a caller closing on error would be
+// closing the socket the instance had just taken. Ownership passes on every
+// path, which leaves every path that does not add a circuit owing the close.
+func TestAddCircuitClosesEveryTransportItDoesNotAdd(t *testing.T) {
+	s := dupFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	same := lanCircuit("a", 0xa2, 1500)
+	if err := s.AddCircuit(ctx, same); !errors.Is(err, ErrAlreadyInState) {
+		t.Fatalf("AddCircuit over the circuit the node runs = %v, want ErrAlreadyInState", err)
+	}
+	if !recvClosed(t, same.Transport) {
+		t.Error("the sentinel left the transport open: the call did not use it and the caller is told not to close it, so every retry over a circuit the node has leaks a socket")
+	}
+
+	differs := lanCircuit("a", 0xa3, 1500)
+	differs.Metric = 55
+	if err := s.AddCircuit(ctx, differs); err == nil || errors.Is(err, ErrAlreadyInState) {
+		t.Fatalf("AddCircuit over a circuit that differs = %v, want a hard error", err)
+	}
+	if !recvClosed(t, differs.Transport) {
+		t.Error("the refusal left the transport open")
+	}
+
+	dead, cancelDead := context.WithCancel(context.Background())
+	cancelDead()
+	never := lanCircuit("b", 0xb1, 1500)
+	if err := s.AddCircuit(dead, never); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AddCircuit on a cancelled context = %v, want context.Canceled", err)
+	}
+	if !recvClosed(t, never.Transport) {
+		t.Error("an addition that never reached the loop left the transport open: nothing on the loop will ever close it")
+	}
+}
+
+// TestAddCircuitKeepsTheTransportOfACircuitTheLoopStillAdded guarantees the
+// other half of that ownership rule. A context bounds the caller's wait and
+// not the operation: an addition already queued runs whatever the caller does
+// afterwards, so a call that returned a deadline error may still have added
+// the circuit — and the transport it is now running on must be open.
+//
+// Closing it leaves a circuit goisis reports up that can never transmit a
+// hello or flood a fragment, for the life of the process.
+func TestAddCircuitKeepsTheTransportOfACircuitTheLoopStillAdded(t *testing.T) {
+	s := dupFixture(t)
+	// Not serving yet: the operation sits in mgmtCh exactly as it does behind
+	// a loop too busy to reach it, and the caller's deadline expires on it.
+	late := lanCircuit("b", 0xb1, 1500)
+	addCtx, cancelAdd := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelAdd()
+	if err := s.AddCircuit(addCtx, late); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AddCircuit against a loop that never answers = %v, want a deadline error", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	waitFor(t, "the queued addition to run", func() bool { return len(s.mgmtCh) == 0 })
+	circuits, err := s.ListCircuits(ctx)
+	if err != nil {
+		t.Fatalf("ListCircuits: %v", err)
+	}
+	if len(circuits) != 2 {
+		t.Fatalf("circuits = %+v, want the queued addition to have landed: this test is asserting nothing otherwise", circuits)
+	}
+	if recvClosed(t, late.Transport) {
+		t.Error("the circuit the loop added is running on a closed transport: it can never send a hello or flood a fragment")
 	}
 }
 

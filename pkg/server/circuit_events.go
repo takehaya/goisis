@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
+	"reflect"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -89,13 +92,13 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 //
 // A name that is already configured is refused rather than replaced -- that
 // would orphan the running circuit's transport with its reader goroutine still
-// on it -- and refused as ErrAlreadyInState, because to a caller replaying a
-// batch the name is the whole of a circuit's identity: a reload keys its
-// circuit difference on the interface name and turns every other change into a
-// delete and an add (pkg/config.Diff), so the only way one reaches this is the
-// retry of a batch whose add already landed. Whether the running circuit
-// matches in every field is not checked and cannot be, since its transport is
-// an open socket and never equal to the fresh one this call carries.
+// on it. Refused as ErrAlreadyInState when the running circuit is the one this
+// call asks for, so a caller replaying a batch can tell the retry of an
+// addition that already landed from a refusal; refused with an error naming
+// the fields that differ when it is not, because then the caller is asking for
+// a circuit the node does not have and a reload would report applied over the
+// old hello key and the old level (see ErrAlreadyInState, and
+// circuitDifferences for what identity is).
 //
 // The caller opens the transport and puts it in cfg (applyDefaults refuses a
 // nil one). It is deliberately not opened here: net.InterfaceByName, a
@@ -103,11 +106,42 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 // goroutine, where every other circuit's hellos and the LSP aging would wait
 // behind them.
 //
-// If this returns an error — ErrAlreadyInState included — the transport is
-// still the caller's and the caller must close it, because nothing else will.
-// On success the instance owns it, and DeleteCircuit or Serve's exit closes it.
+// The transport is this instance's from the moment it is handed over, on every
+// path: a circuit that is added runs on it until DeleteCircuit or Serve's exit
+// closes it, and one that is not has it closed here. The caller must not close
+// it, and cannot -- a management operation's context bounds the caller's wait
+// and not the operation (mgmtOperationQueued), so an addition whose caller
+// gave up may still be queued, and a caller closing on that error would close
+// the socket this instance is about to run a circuit on: goisis circuit would
+// report it up and it could never transmit, for the life of the process.
 func (s *IsisServer) AddCircuit(ctx context.Context, cfg CircuitConfig) error {
-	return s.mgmtOperation(ctx, func() error { return s.addCircuit(cfg, time.Now()) })
+	queued, err := s.mgmtOperationQueued(ctx, func() error {
+		err := s.addCircuit(cfg, time.Now())
+		if err != nil {
+			closeUnaddedTransport(s.logger, cfg)
+		}
+		return err
+	})
+	// What the loop never ran is the loop's to close only if it will run it,
+	// so the two cases where it never will are this call's: an operation that
+	// was not queued at all, and one a stopping instance answered without
+	// running (both in mgmtOperationQueued).
+	if !queued || errors.Is(err, ErrServerStopped) {
+		closeUnaddedTransport(s.logger, cfg)
+	}
+	return err
+}
+
+// closeUnaddedTransport closes a transport AddCircuit was handed and did not
+// run a circuit on. It reads no state the Serve loop owns, so AddCircuit can
+// call it from either goroutine.
+func closeUnaddedTransport(logger *slog.Logger, cfg CircuitConfig) {
+	if cfg.Transport == nil { // applyDefaults refuses one, before anything has been taken
+		return
+	}
+	if err := cfg.Transport.Close(); err != nil {
+		logger.Warn("close the transport of a circuit that was not added", "circuit", cfg.Name, "error", err)
+	}
 }
 
 // addCircuit is AddCircuit's body, on the Serve goroutine.
@@ -120,7 +154,19 @@ func (s *IsisServer) addCircuit(cfg CircuitConfig, now time.Time) error {
 	if err := cfg.applyDefaults(); err != nil {
 		return err
 	}
-	if s.circuitNamed(cfg.Name) != nil {
+	if cur := s.circuitNamed(cfg.Name); cur != nil {
+		// The connected subnets are taken from the running set and not from
+		// cur.cfg, which nothing writes after the addition: SetCircuitAddresses
+		// replaces s.circuitPrefixes instead, so cur.cfg's copy is the one the
+		// circuit was added with and would read as a difference for good.
+		running := cur.cfg
+		running.ConnectedPrefixes = s.circuitPrefixes[cfg.Name]
+		if diffs := circuitDifferences(running, cfg); len(diffs) > 0 {
+			// The fields and never their values: several of them are HMAC keys
+			// and this reaches the daemon's log (pkg/config.Reload).
+			return fmt.Errorf("goisis: circuit %s is already configured and differs in %s; delete it before adding it again",
+				cfg.Name, strings.Join(diffs, ", "))
+		}
 		return fmt.Errorf("goisis: circuit %s is already configured: %w", cfg.Name, ErrAlreadyInState)
 	}
 	// setLSPBufferSize only ever lowers the size, and the size is at or above
@@ -171,6 +217,42 @@ func (s *IsisServer) addCircuit(cfg CircuitConfig, now time.Time) error {
 	// absorb.
 	s.regenerateLSPs(false, now)
 	return nil
+}
+
+// circuitDifferences names the CircuitConfig fields two configurations differ
+// in, in declaration order, and returns none when they are identical -- the
+// "present and identical in every field" ErrAlreadyInState promises. Both
+// sides must have been through applyDefaults, so a field a caller left unset
+// reads as the value the circuit runs with rather than as a difference.
+//
+// The fields are walked rather than listed because what this is for is a field
+// nobody compared: the name-only check it replaced was exactly that, and a
+// field added to CircuitConfig later is compared here without anyone having to
+// remember this. Transport is skipped, and skipped by name rather than by
+// being absent from a list: it is an open socket, so the one a call carries is
+// never the one the running circuit was opened on, and no comparison of the
+// two says anything about whether the circuits match. The addresses and
+// subnets are compared in the canonical form the server keeps them in
+// (SetCircuitAddresses), so the kernel handing the same addresses back in
+// another order is not a difference either.
+func circuitDifferences(a, b CircuitConfig) []string {
+	canonical := func(c CircuitConfig) CircuitConfig {
+		c.IPv4Addrs, c.IPv6Addrs = sortedSet(c.IPv4Addrs), sortedSet(c.IPv6Addrs)
+		c.ConnectedPrefixes = maskedSet(c.ConnectedPrefixes)
+		return c
+	}
+	av, bv := reflect.ValueOf(canonical(a)), reflect.ValueOf(canonical(b))
+	var diffs []string
+	for i, t := 0, av.Type(); i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Name == "Transport" {
+			continue
+		}
+		if !reflect.DeepEqual(av.Field(i).Interface(), bv.Field(i).Interface()) {
+			diffs = append(diffs, f.Name)
+		}
+	}
+	return diffs
 }
 
 // allocCircuitIDs reserves the two identifiers a circuit needs. Both come off

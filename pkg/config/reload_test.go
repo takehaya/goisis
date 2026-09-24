@@ -1365,8 +1365,8 @@ func closedTransport(tr *datalink.MockTransport) bool {
 // The reload is then ErrPartiallyApplied and keeps its baseline, so the next
 // signal re-diffs the whole change and tries the refused one again. That retry
 // re-issues the addition that already landed, which the server answers as
-// ErrAlreadyInState -- handing back the transport it did not take, which the
-// reload must close or every further signal leaks a socket.
+// ErrAlreadyInState -- and closes the socket it did not take, or every further
+// signal leaks one.
 func TestReloadAddsACircuitAndRetriesTheOneThatCannotOpen(t *testing.T) {
 	const initial = `net: 49.0001.1921.6800.1001.00
 circuits:
@@ -1497,5 +1497,149 @@ circuits:
 		t.Fatalf("Diff: %v", err)
 	} else if !reflect.DeepEqual(again, Changes{}) {
 		t.Errorf("a further signal still diffs %+v", again)
+	}
+}
+
+// TestReloadDoesNotReportSuccessOverACircuitThatDiffers is what a reload owes
+// an operator rotating a circuit's hello key, in the shape they meet it: a
+// baseline that lags the node. Diff is file against file, so a circuit the
+// node runs but the baseline does not name is an addition rather than a
+// rebuild -- and an addition the server answered as ErrAlreadyInState would be
+// counted as this call having succeeded. The reload would report applied and
+// adopt the file, leaving the circuit on the key and the level the operator
+// replaced: no later signal diffs the two again, and no command shows a
+// circuit's key.
+func TestReloadDoesNotReportSuccessOverACircuitThatDiffers(t *testing.T) {
+	const running = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+  - interface: mock1
+    level: "2"
+    hello-password: OLD-KEY
+`
+	// The file the daemon carries as its baseline: an earlier one, still there
+	// because the reload that added mock1 was refused on another call and kept
+	// it (TestReloadKeepsItsBaselineWhenAnApplyIsRefused).
+	const baseline = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	const next = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+  - interface: mock1
+    level: "1"
+    hello-password: NEW-KEY
+`
+	o := &circuitOpener{}
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	if err := os.WriteFile(path, []byte(running), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	live, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	live.OpenCircuit = o.open
+	opts, err := live.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	ctx := t.Context()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	cur := loadConfig(t, baseline)
+	cur.OpenCircuit = o.open
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Reload(ctx, s, cur, path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want ErrPartiallyApplied: the file asks for a circuit the node does not have, and reporting that applied is a rotation the operator is told happened and did not", err)
+	}
+	for _, field := range []string{"mock1", "HelloPassword", "Level1", "Level2"} {
+		if !strings.Contains(err.Error(), field) {
+			t.Errorf("Reload error = %q, want it to name %s", err, field)
+		}
+	}
+	for _, secret := range []string{"OLD-KEY", "NEW-KEY"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("Reload error = %q: it carries a key, and this is logged", err)
+		}
+	}
+	if got := circuitNames(t, s); !slices.Equal(got, []string{"mock0", "mock1"}) {
+		t.Errorf("circuits = %v, want both still running: a refused addition costs only the call it refuses", got)
+	}
+	if mock1 := o.opened["mock1"]; len(mock1) != 2 {
+		t.Fatalf("mock1 was opened %d times, want 2 (the startup and the reload)", len(mock1))
+	} else if !closedTransport(mock1[1]) {
+		t.Error("the transport the server refused was left open: every signal over a circuit the file cannot rebuild leaks a socket")
+	}
+}
+
+// TestReloadDoesNotLeaveTheServerACircuitOnAClosedTransport pins who owns a
+// transport against the case the ownership rule exists for. A context bounds
+// the caller's wait and not the operation: an addition already queued when the
+// reload's deadline expires still runs, so the reload is told it failed and
+// the circuit is added anyway. A reload that closed the transport on that
+// error would leave the node reporting a circuit up that can never send a
+// hello or flood a fragment, for the life of the process, and the next signal
+// would report applied over it.
+func TestReloadDoesNotLeaveTheServerACircuitOnAClosedTransport(t *testing.T) {
+	shortTimeouts(t, 20*time.Millisecond, 20*time.Millisecond)
+	const initial = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	const next = initial + `  - interface: mock1
+    level: "2"
+`
+	o := &circuitOpener{}
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = o.open
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	// Not served yet: the addition parks in the management channel exactly as
+	// it does behind a loop wedged on a slow sink, and the apply deadline
+	// expires on it.
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if _, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil))); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want ErrPartiallyApplied from the expired apply deadline", err)
+	}
+
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+	// ListCircuits queues behind the addition the loop has still to run, so
+	// the answer is the one taken after it.
+	if got := circuitNames(t, s); !slices.Equal(got, []string{"mock0", "mock1"}) {
+		t.Fatalf("circuits = %v, want the queued addition to have landed: this test is asserting nothing otherwise", got)
+	}
+	if mock1 := o.opened["mock1"]; len(mock1) != 1 {
+		t.Fatalf("mock1 was opened %d times, want 1", len(mock1))
+	} else if closedTransport(mock1[0]) {
+		t.Error("the circuit the loop added is running on a closed transport: goisis reports it up and it can never transmit")
 	}
 }
