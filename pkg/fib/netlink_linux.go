@@ -28,6 +28,12 @@ const rtprotoISIS = unix.RTPROT_ISIS
 // else installs the SID address, and RemoveLocalSID must keep matching them.
 const routePriority = 115
 
+// seg6LocalActionEndDT46 is SEG6_LOCAL_ACTION_END_DT46 (RFC 8986 End.DT46).
+// The netlink library's action list stops at END_BPF, but it encodes the
+// action as a bare uint32 with no bound against that list, so the number is
+// all the kernel needs.
+const seg6LocalActionEndDT46 = 16
+
 // srv6DummyDev is the dummy interface every non-End.X local SID is installed
 // on. It cannot be the loopback: Linux 6.12 drops the lwtunnel state of a
 // seg6local route whose output device is `lo` (the route reads back with no
@@ -199,17 +205,29 @@ func (n *Netlink) localSIDRoute(sid LocalSID) (*netlink.Route, error) {
 		if sid.Interface != "" {
 			dev = sid.Interface
 		}
-	case BehaviorEndDT4:
-		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT4
-		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
-		enc.Table = sid.Table
 	case BehaviorEndDT6:
+		// The one decapsulating behavior that takes a plain table: the kernel
+		// looks the packet up in it directly.
 		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT6
 		enc.Flags[nl.SEG6_LOCAL_TABLE] = true
 		enc.Table = sid.Table
-	case BehaviorEndDT46:
-		// The vendored netlink library predates SEG6_LOCAL_ACTION_END_DT46.
-		return nil, fmt.Errorf("fib: End.DT46 is not yet programmable by the netlink FIB")
+	case BehaviorEndDT4, BehaviorEndDT46:
+		// These two name a VRF, not a table. SEG6_LOCAL_TABLE is refused with
+		// EINVAL for both; the kernel wants SEG6_LOCAL_VRFTABLE, resolves it
+		// through the l3mdev, and additionally refuses the route unless
+		// net.vrf.strict_mode is set and a VRF device is bound to that table.
+		// Both prerequisites are the operator's, which is why the error a
+		// caller sees for them comes from the kernel rather than from here.
+		enc.Action = nl.SEG6_LOCAL_ACTION_END_DT4
+		if sid.Behavior == BehaviorEndDT46 {
+			// Not in the netlink library's action list, which stops at
+			// END_BPF. The wire value is all the kernel reads: Encode writes
+			// the action as a bare uint32 with no bound against the list, so
+			// naming the number here costs nothing and forks nothing.
+			enc.Action = seg6LocalActionEndDT46
+		}
+		enc.Flags[nl.SEG6_LOCAL_VRFTABLE] = true
+		enc.VrfTable = sid.Table
 	default:
 		return nil, fmt.Errorf("fib: unsupported SID behavior %d", sid.Behavior)
 	}
