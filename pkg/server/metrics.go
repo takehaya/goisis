@@ -87,12 +87,19 @@ type Metrics interface {
 	ConfigReload(outcome string)
 	// LSPLifetimeFloored records one received LSP whose remaining lifetime the
 	// RFC 7987 floor raised to MaxAge, on the circuit it arrived on. The floor
-	// is what removed the symptom a corrupted lifetime used to produce (a
-	// premature purge, and the originator's re-origination behind it), so this
-	// is the only remaining sign of the field being rewritten in flight. A
-	// single event is normal — a re-flood from a mid-area node carries an aged
-	// value — so what diagnoses a link is the rate on one circuit against its
-	// neighbors, which is why this is counted rather than logged.
+	// removed the symptom a corrupted lifetime used to produce (a premature
+	// purge, and the originator's re-origination behind it), and this count is
+	// what stands in for it.
+	//
+	// It does not separate corruption from ordinary aging: every LSP that has
+	// aged since it left its originator is floored too, so the baseline is the
+	// circuit's LSP arrival rate — an ordinary re-flood, a refresh, and the
+	// whole-database resync behind a new adjacency all count. Separating them
+	// needs how long the receiving adjacency has been Up (RFC 7987 §3.2's
+	// false-positive filter), which the update process does not carry down to
+	// the LSP it is installing. So no absolute value means anything and this is
+	// counted rather than logged: it is read as one circuit's rate against the
+	// other circuits of the node. See docs/configuration.md.
 	LSPLifetimeFloored(circuit string)
 	// InterLevelPrefixes reports the number of prefixes this node originates
 	// because of the level boundary, by direction: "l2_to_l1" is the leak and

@@ -102,8 +102,8 @@ LSP-ID                HOSTNAME  LEVEL  SEQ         LIFETIME  CHECKSUM  OWN
 $ sudo ip netns exec ns1 goisis database --detail   # 各 LSP の TLV を行の下に表示
 
 $ sudo ip netns exec ns1 goisis route
-PREFIX       LEVEL  ALGO  METRIC  NEXT-HOPS
-10.2.2.2/32  L2     0     20      10.0.0.2 (veth1)
+PREFIX       LEVEL  ALGO  PREF  METRIC  NEXT-HOPS
+10.2.2.2/32  L2     0     2     20      10.0.0.2 (veth1)
 
 $ sudo ip netns exec ns1 ip route show proto isis
 10.2.2.2 via 10.0.0.2 dev veth1
@@ -112,6 +112,14 @@ $ sudo ip netns exec ns1 ping -c2 10.2.2.2
 64 bytes from 10.2.2.2: icmp_seq=1 ttl=64 time=0.027 ms
 64 bytes from 10.2.2.2: icmp_seq=2 ttl=64 time=0.020 ms
 ```
+
+`PREF` は、その経路が選ばれた RFC 5302 §3.2 の preference class です。小さいほど
+優先され、1 は Level-1 のエリア内、2 は Level-2、3 は up/down ビット付きで
+Level 2 から降りてきたプレフィックスです。クラスはメトリックより先に比較されるため、
+最小のメトリックではない経路が選ばれている理由を説明するのがこの列です。L1 のみの
+ノードが ATT ビットから入れるデフォルト経路もクラス 3 です。自身のメトリックを
+持たないフォールバックなので、広報されたデフォルト経路には必ず負けます
+(RFC 5302 §1.1)。`-o json` では同じ値が `preference` に入ります。
 
 `goisis monitor` は隣接・経路の変化をストリーミングします(別端末で `veth1` を
 フラップさせながら見ると分かりやすい)。

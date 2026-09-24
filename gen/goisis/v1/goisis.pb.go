@@ -584,7 +584,14 @@ type Route struct {
 	NextHops []*NextHop             `protobuf:"bytes,4,rep,name=next_hops,json=nextHops,proto3" json:"next_hops,omitempty"`
 	// algorithm is the IGP algorithm the route was computed under: 0 = normal
 	// SPF, 128-255 = Flexible Algorithm (RFC 9350).
-	Algorithm     uint32 `protobuf:"varint,5,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	Algorithm uint32 `protobuf:"varint,5,opt,name=algorithm,proto3" json:"algorithm,omitempty"`
+	// preference is the RFC 5302 section 3.2 route preference class this route
+	// was selected on, lowest preferred: 1 = Level-1 intra-area, 2 = Level-2,
+	// 3 = Level-2-to-Level-1 inter-area (the up/down bit), and the ATT-derived
+	// default route, which is a fallback with no metric of its own. The class is
+	// compared before the metric, so a route with the worse metric can be the
+	// one installed.
+	Preference    uint32 `protobuf:"varint,6,opt,name=preference,proto3" json:"preference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -650,6 +657,13 @@ func (x *Route) GetNextHops() []*NextHop {
 func (x *Route) GetAlgorithm() uint32 {
 	if x != nil {
 		return x.Algorithm
+	}
+	return 0
+}
+
+func (x *Route) GetPreference() uint32 {
+	if x != nil {
+		return x.Preference
 	}
 	return 0
 }
@@ -2417,13 +2431,16 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x04tlvs\x18\b \x03(\tR\x04tlvs\"A\n" +
 	"\aNextHop\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12\x18\n" +
-	"\agateway\x18\x02 \x01(\tR\agateway\"\xae\x01\n" +
+	"\agateway\x18\x02 \x01(\tR\agateway\"\xce\x01\n" +
 	"\x05Route\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x16\n" +
 	"\x06metric\x18\x02 \x01(\rR\x06metric\x12&\n" +
 	"\x05level\x18\x03 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12/\n" +
 	"\tnext_hops\x18\x04 \x03(\v2\x12.goisis.v1.NextHopR\bnextHops\x12\x1c\n" +
-	"\talgorithm\x18\x05 \x01(\rR\talgorithm\"\x8a\x01\n" +
+	"\talgorithm\x18\x05 \x01(\rR\talgorithm\x12\x1e\n" +
+	"\n" +
+	"preference\x18\x06 \x01(\rR\n" +
+	"preference\"\x8a\x01\n" +
 	"\aLocator\x12\x16\n" +
 	"\x06prefix\x18\x01 \x01(\tR\x06prefix\x12\x1c\n" +
 	"\talgorithm\x18\x02 \x01(\rR\talgorithm\x12\x17\n" +

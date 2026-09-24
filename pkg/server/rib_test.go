@@ -383,6 +383,62 @@ func TestUpdateRIBPrefersLevel1OverLevel2(t *testing.T) {
 	}
 }
 
+// TestTheRIBReportsThePreferenceClassARouteWasSelectedOn: the class is ranked
+// ahead of the metric (RFC 5302 §3.2), so the RIB can hold the route with the
+// worse metric; the class travels with it, through ListRoutes' copy and out of
+// routeToProto, so the operator can see what the metric alone does not explain.
+func TestTheRIBReportsThePreferenceClassARouteWasSelectedOn(t *testing.T) {
+	p := netip.MustParsePrefix("10.77.0.0/24")
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	up := packet.SystemID{0, 0, 0, 0, 0, 2}
+	dn := packet.SystemID{0, 0, 0, 0, 0, 3}
+
+	// dn leaks p down from Level 2 at metric 0, five times closer than up's
+	// intra-area advertisement of the same prefix at metric 50.
+	reach := func(metric uint32, down bool) []packet.TLV {
+		return []packet.TLV{isReach(self), &packet.ExtendedIPReachabilityTLV{
+			Prefixes: []packet.ExtendedIPReachEntry{{Prefix: p, Metric: metric, Down: down}},
+		}}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		intraArea  bool // does up advertise p as well?
+		wantPref   uint32
+		wantMetric uint32
+	}{
+		{"the intra-area copy wins on class, at five times the metric", true, 1, 60},
+		{"with no intra-area copy the leaked one is installed, as class 3", false, 3, 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ribServer(t, true)
+			now := time.Now()
+			injectLSPAt(s, packet.Level1, self, []packet.TLV{isReach(up, dn)}, now)
+			injectLSPAt(s, packet.Level1, dn, reach(0, true), now)
+			if tc.intraArea {
+				injectLSPAt(s, packet.Level1, up, reach(50, false), now)
+			} else {
+				injectLSPAt(s, packet.Level1, up, []packet.TLV{isReach(self)}, now)
+			}
+
+			s.updateRIB(now)
+			r, ok := s.rib[p]
+			if !ok {
+				t.Fatalf("no RIB route for %s", p)
+			}
+			if r.Metric != tc.wantMetric {
+				t.Errorf("metric = %d, want %d", r.Metric, tc.wantMetric)
+			}
+			if uint32(r.Preference) != tc.wantPref {
+				t.Errorf("RouteInfo.Preference = %d, want %d", r.Preference, tc.wantPref)
+			}
+			if got := routeToProto(r).GetPreference(); got != tc.wantPref {
+				t.Errorf("Route.preference over the API = %d, want %d", got, tc.wantPref)
+			}
+		})
+	}
+}
+
 // TestUpdateRIBAlgoCollisionPrefersAlgo0: a shared prefix claimed by algorithm
 // 0 (plain IPv6 reachability) and by a Flex-Algo SRv6 locator at the same level
 // resolves to algorithm 0 (plain reachability wins deterministically).

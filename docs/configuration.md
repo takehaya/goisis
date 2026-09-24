@@ -399,9 +399,28 @@ increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
 lifetime RFC 7987 raised to MaxAge. That field sits outside the checksum and
 outside the authentication hash, and the floor is what stops a corrupted one
 from purging the LSP early — which also removed the only symptom the corruption
-used to produce. A single event is ordinary, since any re-flood from a
-mid-area node carries an aged value, so what says a link is rewriting the field
-is the rate on one circuit against its neighbours.
+used to produce.
+
+The counter does not separate that corruption from ordinary aging, and no
+absolute value of it means anything. Every LSP that has aged since it left its
+originator is floored the same way, so the baseline is the circuit's LSP arrival
+rate: an ordinary re-flood, a refresh, and the whole-database resync a new
+adjacency triggers all count, the resync as one burst. The clean separation
+would need how long the receiving adjacency has been Up (RFC 7987 §3.2's
+false-positive filter), and the update process does not carry that down to the
+LSP it is installing, so there is no threshold to alert on — including "greater
+than zero".
+
+Read it comparatively instead: one circuit's rate against the other circuits of
+the same node, over a window with no adjacency change in it, allowing for how
+much flooding each carries (a LAN with more neighbours receives more copies of
+the same LSP than a point-to-point link does). A circuit that stands out and
+stays out is the one to take a capture on; a spike that lines up with an
+adjacency coming up is the resync.
+
+```
+rate(goisis_lsp_lifetime_floored_total[1h])   # compare circuits, not a threshold
+```
 
 `goisis_inter_level_prefixes` is what this node injects across the level
 boundary, where `goisis_routes` is what it learned. It is the gauge a

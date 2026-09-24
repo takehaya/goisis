@@ -102,8 +102,8 @@ LSP-ID                HOSTNAME  LEVEL  SEQ         LIFETIME  CHECKSUM  OWN
 $ sudo ip netns exec ns1 goisis database --detail   # each LSP's TLVs under its row
 
 $ sudo ip netns exec ns1 goisis route
-PREFIX       LEVEL  ALGO  METRIC  NEXT-HOPS
-10.2.2.2/32  L2     0     20      10.0.0.2 (veth1)
+PREFIX       LEVEL  ALGO  PREF  METRIC  NEXT-HOPS
+10.2.2.2/32  L2     0     2     20      10.0.0.2 (veth1)
 
 $ sudo ip netns exec ns1 ip route show proto isis
 10.2.2.2 via 10.0.0.2 dev veth1
@@ -112,6 +112,14 @@ $ sudo ip netns exec ns1 ping -c2 10.2.2.2
 64 bytes from 10.2.2.2: icmp_seq=1 ttl=64 time=0.027 ms
 64 bytes from 10.2.2.2: icmp_seq=2 ttl=64 time=0.020 ms
 ```
+
+`PREF` is the RFC 5302 §3.2 preference class the route was selected on, lowest
+preferred: 1 is Level-1 intra-area, 2 is Level-2, and 3 is a prefix leaked down
+from Level 2 with the up/down bit. The class is compared ahead of the metric, so
+`PREF` is the column that explains a route whose metric is not the lowest on
+offer. The default route an L1-only node derives from the ATT bit is class 3 as
+well — it carries no metric of its own, so any advertised default outranks it
+(RFC 5302 §1.1). The same value is `preference` under `-o json`.
 
 `goisis monitor` streams adjacency and route changes as they happen (handy in a
 second terminal while you flap `veth1`).

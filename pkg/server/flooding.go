@@ -172,8 +172,8 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 	lifetime := receivedLifetime(lsp.RemainingTime)
 	if lifetime != lsp.RemainingTime {
 		// RFC 7987 raised it. Counted, never logged: an aged value is what a
-		// re-flood from a mid-area node legitimately carries, so the signal is
-		// the rate on one circuit, not the event.
+		// re-flood from a mid-area node legitimately carries, so no single
+		// event means anything — only one circuit's rate against the others.
 		s.metrics.LSPLifetimeFloored(c.cfg.Name)
 	}
 	db.entries[id] = &lspEntry{

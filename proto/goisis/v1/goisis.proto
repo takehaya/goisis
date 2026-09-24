@@ -125,6 +125,13 @@ message Route {
   // algorithm is the IGP algorithm the route was computed under: 0 = normal
   // SPF, 128-255 = Flexible Algorithm (RFC 9350).
   uint32 algorithm = 5;
+  // preference is the RFC 5302 section 3.2 route preference class this route
+  // was selected on, lowest preferred: 1 = Level-1 intra-area, 2 = Level-2,
+  // 3 = Level-2-to-Level-1 inter-area (the up/down bit), and the ATT-derived
+  // default route, which is a fallback with no metric of its own. The class is
+  // compared before the metric, so a route with the worse metric can be the
+  // one installed.
+  uint32 preference = 6;
 }
 
 // Locator is an SRv6 locator advertised by this node.
