@@ -978,7 +978,7 @@ func TestAFlexAlgoOnlyIntraAreaPrefixDoesNotSuppressTheLeak(t *testing.T) {
 	s.updateRIB(now)
 	s.drainLSPGen(now)
 
-	if r, ok := s.computeSPF(packet.Level1, 128, now)[flexLoc]; !ok || r.algo != 128 {
+	if r, ok := s.computeSPF(packet.Level1, 128, flexAlgoAffinity{}, now)[flexLoc]; !ok || r.algo != 128 {
 		t.Fatalf("%s is not an algorithm-128 Level-1 route; the topology under test is wrong", flexLoc)
 	}
 	got := ownIPReach(t, s, packet.Level1)

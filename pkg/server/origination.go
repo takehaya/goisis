@@ -74,29 +74,48 @@ func (s *IsisServer) drainLSPGen(now time.Time) {
 	s.nextLSPGen = now.Add(minLSPGenInterval)
 }
 
-// maxSubTLVArea is the sub-TLV area of one Extended IS Reachability entry: a
-// single length octet.
-const maxSubTLVArea = 255
+// maxSubTLVArea is the sub-TLV area appendISReach fills in one Extended IS
+// Reachability entry. The entry's own length octet would allow 255, but the
+// entry also has to fit inside a TLV whole — tlvChunks cannot split one entry
+// across two — so the ceiling is the 255-octet TLV value less the 11 octets of
+// entry header in front of the area (neighbor ID, metric, the length octet).
+// At a flat 255 an entry filled with End.X SIDs serializes to 261 octets,
+// which tlvChunks emits alone and Serialize then rejects: the node originates
+// nothing at all.
+const maxSubTLVArea = 255 - 11
 
 // appendISReach appends one Extended IS Reachability entry for a neighbor,
 // splitting it into several entries when its sub-TLVs overflow the sub-TLV
 // area (many locators times many LAN neighbors). RFC 5305 §3 lets a neighbor
 // appear in more than one entry, and receivers merge them; tlvChunks then
 // packs the entries into TLVs.
-func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metric uint32, subs []packet.SubTLV) []packet.ExtendedISReachEntry {
+//
+// attrs are the link's own attributes and repeat on every entry the split
+// produces, while subs are distributed across them. The merge RFC 5305 §3
+// asks of a receiver makes the two equivalent, but a receiver that does not
+// merge — goisis included, which takes one SPF edge per entry — would read a
+// split-off entry as an uncolored parallel link and walk it around an exclude
+// rule.
+func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metric uint32, attrs, subs []packet.SubTLV) []packet.ExtendedISReachEntry {
+	fixed := 0
+	for _, a := range attrs {
+		fixed += subTLVLen(a)
+	}
 	for {
 		e := packet.ExtendedISReachEntry{NeighborID: id, Metric: metric}
-		size := 0
+		e.SubTLVs = append(e.SubTLVs, attrs...)
+		size, taken := fixed, 0
 		for _, sub := range subs {
 			n := subTLVLen(sub)
-			if size+n > maxSubTLVArea && len(e.SubTLVs) > 0 {
+			if size+n > maxSubTLVArea && taken > 0 {
 				break
 			}
 			e.SubTLVs = append(e.SubTLVs, sub)
 			size += n
+			taken++
 		}
 		entries = append(entries, e)
-		subs = subs[len(e.SubTLVs):]
+		subs = subs[taken:]
 		if len(subs) == 0 {
 			return entries
 		}
@@ -206,7 +225,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			// previous incarnation cannot be reached through us.
 			if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) && !adj.suppressed {
 				neighbors = appendISReach(neighbors, nodeID(adj.systemID, 0), c.cfg.Metric,
-					s.endXSubTLVs(c, adj))
+					c.aslaSubTLVs(), s.endXSubTLVs(c, adj))
 			}
 			continue
 		}
@@ -217,7 +236,10 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		if dis == (packet.NodeID{}) || len(c.advertisedAdjacencies(level)) == 0 {
 			continue // no usable pseudonode yet
 		}
-		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, s.lanEndXSubTLVs(c, level))
+		// RFC 9350 §13 reads the colors of a LAN from the member's edge to the
+		// pseudonode, which is this one; the pseudonode LSP we originate as
+		// DIS carries none.
+		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, c.aslaSubTLVs(), s.lanEndXSubTLVs(c, level))
 	}
 	variable = append(variable, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
 		return &packet.ExtendedISReachabilityTLV{Neighbors: n}

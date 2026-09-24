@@ -250,9 +250,10 @@ func isReach(neighbors ...packet.SystemID) packet.TLV {
 	return &packet.ExtendedISReachabilityTLV{Neighbors: nbs}
 }
 
-// algoLocTLV builds an SRv6 Locator TLV with one locator bound to algo.
-func algoLocTLV(algo uint8, p netip.Prefix) packet.TLV {
-	return &packet.SRv6LocatorTLV{Locators: []packet.SRv6Locator{{Algorithm: algo, Locator: p}}}
+// algoLocTLV builds an SRv6 Locator TLV with one locator bound to algo 128,
+// the algorithm partCap advertises participation in.
+func algoLocTLV(p netip.Prefix) packet.TLV {
+	return &packet.SRv6LocatorTLV{Locators: []packet.SRv6Locator{{Algorithm: 128, Locator: p}}}
 }
 
 // TestFlexAlgoSPFIsolatesAlgo: a flex-algo locator is reachable under its
@@ -266,12 +267,12 @@ func TestFlexAlgoSPFIsolatesAlgo(t *testing.T) {
 	loc := netip.MustParsePrefix("fc00:128:2::/48")
 
 	injectLSP(s, self, []packet.TLV{partCap(), isReach(peer)}, now)
-	injectLSP(s, peer, []packet.TLV{partCap(), isReach(self), algoLocTLV(128, loc)}, now)
+	injectLSP(s, peer, []packet.TLV{partCap(), isReach(self), algoLocTLV(loc)}, now)
 
-	if _, ok := s.computeSPF(packet.Level2, 128, now)[loc]; !ok {
+	if _, ok := s.computeSPF(packet.Level2, 128, flexAlgoAffinity{}, now)[loc]; !ok {
 		t.Error("algo 128 did not reach the flex-algo locator")
 	}
-	if _, ok := s.computeSPF(packet.Level2, 0, now)[loc]; ok {
+	if _, ok := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)[loc]; ok {
 		t.Error("algorithm-0 SPF leaked a flex-algo locator")
 	}
 }
@@ -288,17 +289,17 @@ func TestFlexAlgoSPFPrunesNonParticipant(t *testing.T) {
 	loc := netip.MustParsePrefix("fc00:128:3::/48")
 
 	injectLSP(s, self, []packet.TLV{partCap(), isReach(mid)}, now)
-	injectLSP(s, far, []packet.TLV{partCap(), isReach(mid), algoLocTLV(128, loc)}, now)
+	injectLSP(s, far, []packet.TLV{partCap(), isReach(mid), algoLocTLV(loc)}, now)
 
 	// mid does NOT participate: far is behind it, so unreachable in algo 128.
 	injectLSP(s, mid, []packet.TLV{isReach(self, far)}, now)
-	if _, ok := s.computeSPF(packet.Level2, 128, now)[loc]; ok {
+	if _, ok := s.computeSPF(packet.Level2, 128, flexAlgoAffinity{}, now)[loc]; ok {
 		t.Error("flex-algo route leaked through a non-participating transit node")
 	}
 
 	// mid now participates: the path becomes valid.
 	injectLSP(s, mid, []packet.TLV{partCap(), isReach(self, far)}, now)
-	if _, ok := s.computeSPF(packet.Level2, 128, now)[loc]; !ok {
+	if _, ok := s.computeSPF(packet.Level2, 128, flexAlgoAffinity{}, now)[loc]; !ok {
 		t.Error("flex-algo route not found once the transit node participates")
 	}
 }

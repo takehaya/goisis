@@ -21,6 +21,11 @@ const (
 	SubTLVContextIPReachability
 	// SubTLVContextRouterCapability covers TLV 242.
 	SubTLVContextRouterCapability
+	// SubTLVContextASLA covers the link attributes nested inside an
+	// Application-Specific Link Attributes sub-TLV (RFC 8919 §4.2). Its code
+	// points are the neighbor TLVs' own, but one level further down, so they
+	// cannot share that registry.
+	SubTLVContextASLA
 )
 
 // SubTLV is a decoded sub-TLV.

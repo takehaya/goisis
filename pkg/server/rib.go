@@ -62,6 +62,7 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		}
 		var state map[uint8]*FlexAlgoInfo
 		for _, algo := range algos {
+			var aff flexAlgoAffinity
 			if algo != 0 {
 				if state == nil {
 					state = s.flexAlgoState(level, now)
@@ -85,9 +86,21 @@ func (s *IsisServer) updateRIB(now time.Time) {
 					})
 					continue
 				}
+				// The same refusal for a constraint that cannot be evaluated:
+				// admin groups are pruned on, an SRLG or an unknown
+				// sub-sub-TLV is not, and computing the algorithm anyway would
+				// install paths over links the definition excluded.
+				var err error
+				if aff, err = flexAlgoAffinityOf(fi.Definition); err != nil {
+					s.algoWarned.warn(algoKey{level: level, algo: algo}, func() {
+						s.logger.Warn("flex-algo constraint unsupported; not computing routes",
+							"algo", algo, "level", level, "error", err)
+					})
+					continue
+				}
 				s.algoWarned.clear(algoKey{level: level, algo: algo}) // re-arm
 			}
-			computed := s.computeSPF(level, algo, now)
+			computed := s.computeSPF(level, algo, aff, now)
 			if level == packet.Level2 && algo == 0 {
 				l2Reach = computed
 			}

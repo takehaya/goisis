@@ -69,9 +69,11 @@ SID and its `EndXSIDs` — one End.X SID per Up adjacency that has a global
 on-link neighbor address and, for a locator bound to a Flexible Algorithm,
 participates in that algorithm; each carries the neighbor's System ID and the
 circuit it sits on. Each `FlexAlgoInfo.Definition` carries the winning FAD's
-`Constraints` — its constraint sub-sub-TLVs (RFC 9350 §6) as received. goisis
-does not prune on them, but it reports them, so an area asking for admin-group
-or SRLG constraints does not read like one asking for none.
+`Constraints` — its constraint sub-sub-TLVs (RFC 9350 §6) as received. The
+admin-group ones are pruned on (§13 steps 1, 3 and 4, over the colors
+`WithCircuit`'s `AdminGroup` advertises and a peer's ASLA carries); an SRLG
+exclusion or anything else goisis cannot evaluate makes the algorithm
+uncomputable, so it installs no routes and `Constraints` is where that shows.
 
 ## Route policy
 

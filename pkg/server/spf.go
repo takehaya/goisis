@@ -54,11 +54,12 @@ type route struct {
 // For algorithm 0 (normal SPF) every node is included and the prefixes are the
 // node's IP reachability (TLV 135/236) plus its algorithm-0 SRv6 locators. For
 // a Flexible Algorithm (RFC 9350) only participating real nodes are kept
-// (pseudonodes are transit and always kept), and the only prefixes are SRv6
+// (pseudonodes are transit and always kept), the only prefixes are SRv6
 // locators advertised for that algorithm — there is no fallback to plain IP
-// reachability. Constraint-based link pruning (admin groups, SRLG) needs ASLA
-// link attributes and is deferred; only node participation is enforced here.
-func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time) map[packet.NodeID]*spfNode {
+// reachability — and aff prunes links by admin group. SRLG exclusion and the
+// non-IGP metric-types are not evaluated; updateRIB refuses a definition that
+// asks for them rather than computing a looser topology than it was given.
+func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoAffinity, now time.Time) map[packet.NodeID]*spfNode {
 	db := s.dbs[level]
 	if db == nil {
 		return nil
@@ -116,9 +117,21 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 			switch t := tlv.(type) {
 			case *packet.ExtendedISReachabilityTLV:
 				for _, nb := range t.Neighbors {
-					if nb.Metric < maxPathMetric {
-						n.edges = append(n.edges, spfEdge{to: nb.NeighborID, metric: nb.Metric})
+					if nb.Metric >= maxPathMetric {
+						continue
 					}
+					// RFC 9350 §13 colors the member's edge to the
+					// pseudonode, and only that one: a LAN pseudonode LSP is
+					// originated by the DIS and carries no link attributes
+					// ever, so pruning its uncolored edges back to the members
+					// would take a whole colored LAN dark under any include
+					// rule. Pruning one direction is enough anyway — twoWay
+					// requires the reverse edge, so the member's own colors
+					// already decide the LAN.
+					if nid.PseudonodeID() == 0 && aff.prunesLink(nb.SubTLVs) {
+						continue
+					}
+					n.edges = append(n.edges, spfEdge{to: nb.NeighborID, metric: nb.Metric})
 				}
 			case *packet.ExtendedIPReachabilityTLV:
 				if algo != 0 {
@@ -277,14 +290,14 @@ type tentEntry struct {
 // an algorithm and returns prefix routes keyed by prefix. The two-way
 // connectivity check, the overload bit (no transit through an overloaded node),
 // and ECMP are honored.
-func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) map[netip.Prefix]route {
+func (s *IsisServer) computeSPF(level packet.Level, algo uint8, aff flexAlgoAffinity, now time.Time) map[netip.Prefix]route {
 	// The wall clock, not s.clock: this is a stopwatch over the computation
 	// itself, and what it reports has to stay the real cost of the run even
 	// when the caller drives the server's own time (see Clock). now, which
 	// the topology is read against, is the server's.
 	t0 := time.Now()
 	defer func() { s.metrics.SPFRun(levelLabel(level), time.Since(t0)) }()
-	nodes := s.buildTopology(level, algo, now)
+	nodes := s.buildTopology(level, algo, aff, now)
 	self := nodeID(s.systemID, 0)
 	if nodes[self] == nil {
 		return nil

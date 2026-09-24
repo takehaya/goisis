@@ -79,7 +79,7 @@ func BenchmarkComputeSPF(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				s.computeSPF(packet.Level2, 0, now)
+				s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)
 			}
 		})
 	}

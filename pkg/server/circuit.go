@@ -150,6 +150,29 @@ func (c *circuit) isDIS(level packet.Level, self packet.SystemID) bool {
 	return !c.cfg.P2P && c.dis[level].SystemID() == self && c.dis[level].PseudonodeID() != 0
 }
 
+// aslaSubTLVs returns the circuit's Application-Specific Link Attributes
+// sub-TLV (RFC 8919 §4.2) naming the Flex-Algorithm application, or nil when
+// no admin group is configured.
+//
+// A node that prunes on its peers' colors while advertising none of its own is
+// incoherent: RFC 9350 §12 lets a Flex-Algorithm read colors from ASLA only,
+// so under an include rule every link goisis owns would fail the test and the
+// algorithm would go dark on exactly those links. The L-flag stays clear —
+// goisis originates no legacy link attributes to send a receiver to.
+func (c *circuit) aslaSubTLVs() []packet.SubTLV {
+	if len(c.cfg.AdminGroup) == 0 {
+		return nil
+	}
+	// RFC 9350 §12 takes either encoding. Colors that fit the single 32-bit
+	// word of RFC 5305 §3.1 go out in it, because a receiver that predates RFC
+	// 7308's extended group still reads that one.
+	g := &packet.AdminGroupSubTLV{Extended: len(c.cfg.AdminGroup) > 1, Groups: c.cfg.AdminGroup}
+	return []packet.SubTLV{&packet.ASLASubTLV{
+		SABM:       []byte{packet.ASLAAppFlexAlgo},
+		SubSubTLVs: []packet.SubTLV{g},
+	}}
+}
+
 // CircuitInfo is an exported snapshot of a circuit's configuration.
 type CircuitInfo struct {
 	Interface string

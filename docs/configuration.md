@@ -49,6 +49,7 @@ the top of the file is not a second document and still loads.
 | `p2p` | bool | Point-to-point procedures (RFC 5303 three-way) instead of broadcast/DIS. |
 | `priority` | uint8 | DIS election priority on a LAN, 0–127 (default 64). |
 | `metric` | uint32 | Circuit wide metric (default 10). |
+| `admin-group` | list of uint32 | The link's colors, one entry per 4-octet unit of the Extended Administrative Group (RFC 7308), most significant word first — e.g. `[0x00000005]` for colors 0 and 2 of the first word. Advertised in an ASLA sub-TLV for the Flex-Algorithm application (RFC 8919 §4.2, RFC 9350 §12); one word goes out in the RFC 5305 administrative group, more than one in the extended encoding. A circuit without it is uncolored, which an exclude rule leaves alone and any include rule prunes. |
 | `hello-interval` | duration | Time between hellos, e.g. `1s`, `500ms` (default `3s`). |
 | `hold-multiplier` | int | Advertised holding time is `hello-interval x hold-multiplier` (default 10). |
 | `padding` | bool | Pad hellos toward the MTU to detect MTU mismatches, per ISO 10589 (default `true`). |
@@ -125,7 +126,7 @@ flex-algo:
 | Key | Type | Description |
 |-----|------|-------------|
 | `algo` | uint8 (required) | Flexible Algorithm number, 128–255. |
-| `metric-type` | string | `igp` (default), `delay`, or `te`. goisis computes the IGP metric only; others are advertised so the definition and election match peers. |
+| `metric-type` | string | `igp` (default), `delay`, or `te`. goisis computes the IGP metric only; others are advertised so the definition and election match peers, and an algorithm whose elected definition names one is not computed. |
 | `priority` | uint8 | Election priority (higher wins; ties broken by higher System ID). |
 | `advertise` | bool | Originate the definition (FAD), not just participate. At least one node in the area must advertise it. |
 | `locator` | CIDR | Optional SRv6 locator bound to this algorithm; its route is computed over the algorithm's pruned topology. |
@@ -328,9 +329,11 @@ packet capture.
 `goisis flex-algo`'s `CONSTRAINTS` column lists the elected definition's
 constraint sub-sub-TLVs (RFC 9350 §6) — exclude and include admin groups as the
 4-octet units RFC 7308 defines them in, the definition flags, excluded SRLGs.
-goisis reports them but does not prune on them: the computation is
-IGP-metric-only, so a constrained definition still yields a plain IGP-metric
-path.
+The admin groups are pruned on (§13 steps 1, 3 and 4). Anything else in that
+column — an excluded SRLG, a definition flag goisis does not implement — makes
+the algorithm uncomputable: no route is installed for it and the daemon warns
+once, rather than returning a path that ignores the constraint. The same goes
+for a `metric-type` other than `igp`.
 
 `database`'s `LIFETIME` column is this node's own view, not the originator's: a
 received LSP is aged from MaxAge whenever it arrived with less (RFC 7987, see

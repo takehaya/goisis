@@ -49,6 +49,12 @@ type CircuitConfig struct {
 	HoldingMultiplier int
 	// Metric is the circuit's wide metric (used from M4 onward).
 	Metric uint32
+	// AdminGroup is the circuit's link colors, as the 4-octet units RFC 7308
+	// defines an Extended Administrative Group in, most significant word
+	// first. They go out in an ASLA sub-TLV for the Flex-Algorithm
+	// application (RFC 8919 §4.2, RFC 9350 §12); empty advertises none, which
+	// leaves this link uncolored and so pruned by any include rule.
+	AdminGroup []uint32
 	// IPv4Addrs / IPv6Addrs are the circuit's interface addresses. Pass all of
 	// them: they are advertised in two places, for two different jobs.
 	// IPv4Addrs and the link-local IPv6 addresses go in hellos (TLV 132 / 232),

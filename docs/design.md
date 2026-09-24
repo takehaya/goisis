@@ -291,12 +291,21 @@ Two invariants matter beyond the codec:
   `goisis_fib_errors_total{op="add_sid"}`; the daemon starts and routes anyway.
 - **Flex-Algo (RFC 9350).** Definition election follows priority / system-ID;
   participation prunes the topology per algorithm — and, because an End.X SID
-  carries its locator's algorithm (RFC 9352 §8.1), it also gates which
-  adjacencies a Flex-Algo locator hands an End.X SID to, on the same predicate
-  SPF prunes with. Only the IGP metric is computed today; the winning
-  definition's constraint sub-sub-TLVs are preserved on the wire for a later
-  ASLA-aware computation, and reported by `ListFlexAlgos` and `goisis
-  flex-algo`, so a constrained area is visible as one.
+  carries its locator's algorithm (RFC 9352 §8.1), that participation also
+  gates which adjacencies a Flex-Algo locator hands an End.X SID to. Links are
+  pruned by admin group — §13's steps 1, 3 and 4 (exclude, include-any,
+  include-all). A link's colors are read from its ASLA advertisement (RFC 8919
+  §4.2) as §12 requires, the legacy sub-TLVs of TLV 22 only behind an ASLA
+  that sets the L-flag, and a circuit advertises its own through
+  `admin-group`. §13 colors the member's edge towards a LAN pseudonode, never
+  the pseudonode's edges back, which carry no link attributes at all; coloring
+  one direction is enough because the two-way check already requires the
+  reverse edge. What is *not* evaluated — an excluded SRLG, a metric-type
+  other than IGP, a definition flag or sub-sub-TLV goisis does not implement —
+  makes the algorithm uncomputable rather than loosely computed: `updateRIB`
+  installs nothing for it and warns once. Color does not gate End.X: a SID on
+  a link the algorithm prunes is unused rather than wrong, and the rule that
+  prunes it is the area's, not the circuit's.
 
 ## Security posture
 
@@ -337,7 +346,7 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No BFD | Failure detection is hello-based (hold time). |
 | No runtime System ID, area or authentication key | Prefixes, locators, Flex-Algos, the overload bit, adjacency resets and the circuits themselves change at runtime, and a circuit's addresses and carrier are followed live (`SetCircuitAddresses` / `SetCircuitLinkState`). `AddCircuit` opens a circuit the caller has already given a transport — opening one on the management loop would stall every other circuit behind three syscalls — and `DeleteCircuit` takes its adjacencies down, purges the pseudonode LSPs it owned, withdraws the subnets it contributed and closes its transport. `SIGHUP` issues both from the configuration file: a circuit whose definition changed is removed and added again, warned about by name because its adjacencies drop, and an interface that cannot be opened leaves the reload partially applied for the next signal to retry. What still needs a restart is the System ID, the area and an authentication key; accept lists (`*-accept-passwords`) make a key change a rolling restart rather than a flag day. |
 | Sequence-number exhaustion costs an outage of that LSP ID | Natural refreshes never reach 2³²−1 (~120k years at the 900s rate), but one forged LSP does it in a packet, so the ISO 10589 7.3.16.1 procedure is implemented (`exhaustSeq`): flood a purge at 2³²−1 — which supersedes the live copy at equal sequence under 7.3.16.2, so no higher number is needed — then hold the ID down for ZeroAgeLifetime plus a margin until every node has dropped that purge, and re-originate it from 1. That hold-down is an area-wide outage of that one LSP ID; authentication is what keeps the forgery off the wire. |
-| Flex-Algo computes IGP metric only | FAD constraints (admin groups, SRLG, delay) are preserved on the wire and reported — the elected definition's constraint sub-sub-TLVs come out of `ListFlexAlgos` and `goisis flex-algo` — but never evaluated: nothing is pruned on them. |
+| Flex-Algo prunes on admin groups only | A definition whose constraints are admin groups is computed exactly (RFC 9350 §13 steps 1, 3 and 4). A definition that also asks for an excluded SRLG, a non-IGP metric-type, or any sub-sub-TLV or definition flag goisis does not implement is refused whole — no route is installed for that algorithm — rather than computed with the constraint left out. Every constraint is still preserved on the wire and reported by `ListFlexAlgos` and `goisis flex-algo`. goisis does not *originate* a definition's constraints: an area normally has one FAD advertiser and goisis need not be it. |
 | Synchronous egress/FIB on the loop | See [Sink contracts](#sink-contracts): non-blocking is a contract on implementations, not enforced by structure. |
 | No RFC 8405 LONG_WAIT | SPF back-off is two-state (recompute immediately, then coalesce for 200 ms). The escalation to a long wait under sustained churn is deliberately omitted: a second threshold would only delay convergence further at MVP scale. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. `BenchmarkComputeSPF` on a ring with one random chord per node measures one recompute at 117 µs for 50 nodes, 470 µs for 200 and 9.1 ms for 1000. `updateRIB` runs one per `(level, algo)`, so the realistic worst case — two levels, algorithm 0 plus one Flexible Algorithm each — is four of those against a 200 ms back-off window and a one-second housekeeping tick. What dominates at 1000 nodes is `buildTopology`'s map work, not the shortest-path search, so incremental SPF would not be the first thing to reach for: it trades several hundred lines of dependency state that must stay exactly consistent with the full path for a saving in the half that is already cheaper. |

@@ -224,9 +224,9 @@ func flexAlgoMetricName(mt uint8) string {
 // flexAlgoConstraintSummaries renders a FAD's constraint sub-sub-TLVs for
 // `goisis flex-algo`, one line each, in wire order. It lives here and not in
 // pkg/packet for the same reason tlvSummary does: that package is a pure
-// codec. goisis does not prune on these constraints (see the Limitations
-// table), so this rendering is the only place an operator sees that the area's
-// winning definition asks for them.
+// codec. The admin-group constraints are pruned on (flexAlgoAffinityOf); the
+// rest make the algorithm uncomputable, and this rendering is where an
+// operator sees which of the two the area's winning definition asks for.
 func flexAlgoConstraintSummaries(ss []packet.FlexAlgoSubSubTLV) []string {
 	out := make([]string, 0, len(ss))
 	for _, s := range ss {

@@ -49,6 +49,7 @@
 | `p2p` | bool | ブロードキャスト/DIS の代わりにポイントツーポイント手順(RFC 5303 three-way)。 |
 | `priority` | uint8 | LAN での DIS 選出プライオリティ、0–127(デフォルト 64)。 |
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
+| `admin-group` | uint32 のリスト | このリンクの色。Extended Administrative Group(RFC 7308)の 4 オクテット単位ごとに 1 要素、上位ワードから並べる。例えば `[0x00000005]` は第 1 ワードの色 0 と 2。Flex-Algorithm アプリケーション向けの ASLA sub-TLV で広報する(RFC 8919 §4.2、RFC 9350 §12)。1 ワードなら RFC 5305 の administrative group、2 ワード以上なら拡張エンコーディングで出す。指定しないサーキットは無色で、exclude ルールには引っかからないが include ルールでは必ず剪定される。 |
 | `hello-interval` | duration | hello の送出間隔。例 `1s`、`500ms`(デフォルト `3s`)。 |
 | `hold-multiplier` | int | 広報する holding time は `hello-interval x hold-multiplier`(デフォルト 10)。 |
 | `padding` | bool | MTU 不一致を検出するため hello を MTU までパディングする(ISO 10589、デフォルト `true`)。 |
@@ -120,7 +121,7 @@ flex-algo:
 | キー | 型 | 説明 |
 |-----|------|-------------|
 | `algo` | uint8(必須) | Flexible Algorithm 番号、128–255。 |
-| `metric-type` | string | `igp`(デフォルト)/ `delay` / `te`。goisis は IGP メトリックのみ計算し、他はピアと定義・選出を合わせるために広報のみ。 |
+| `metric-type` | string | `igp`(デフォルト)/ `delay` / `te`。goisis は IGP メトリックのみ計算し、他はピアと定義・選出を合わせるために広報するだけで、選出された定義が他を指定しているアルゴリズムは計算しない。 |
 | `priority` | uint8 | 選出プライオリティ(大きいほど勝ち、同値はシステム ID が大きい方)。 |
 | `advertise` | bool | 参加だけでなく定義(FAD)も広報する。エリア内の少なくとも 1 ノードが広報する必要がある。 |
 | `locator` | CIDR | このアルゴリズムに紐づく SRv6 locator(任意)。経路はそのアルゴリズムの prune 済みトポロジで計算される。 |
@@ -310,9 +311,11 @@ JSON で出力します(スクリプトや `jq` 向け)。`goisis database --det
 
 `goisis flex-algo` の `CONSTRAINTS` 列には、選出された定義の制約 sub-sub-TLV
 (RFC 9350 §6)が並びます。exclude / include の admin group は RFC 7308 が定める
-4 オクテット単位のまま、ほかに定義フラグと除外 SRLG です。goisis はこれらを報告
-しますが枝刈りには使いません。計算は IGP メトリックのみなので、制約付きの定義
-でも得られる経路は素の IGP メトリック最短路です。
+4 オクテット単位のまま、ほかに定義フラグと除外 SRLG です。admin group は剪定に
+使います(§13 の手順 1・3・4)。この列に並ぶそれ以外 — 除外 SRLG や goisis が
+実装していない定義フラグ — があると、そのアルゴリズムは計算不能になります。制約
+を無視した経路を返すのではなく、経路を一切投入せず警告を 1 回出します。`igp`
+以外の `metric-type` も同じ扱いです。
 
 `database` の `LIFETIME` 列は生成元の値ではなく、このノード自身の値です。受信した
 LSP は、MaxAge 未満で届いた場合 MaxAge からエージングされる(RFC 7987、
