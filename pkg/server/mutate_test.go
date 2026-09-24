@@ -278,6 +278,10 @@ func TestAddDeletePrefix(t *testing.T) {
 // originated, and neither is a metric SPF would treat as unreachable. The
 // default route is not unroutable — default-information origination is
 // legitimate, and suppressing it is policy.advertise's job.
+//
+// The configuration path owes the LSDB exactly the same, and is asserted on
+// the same table: a prefix only the mutator refused made a file the daemon
+// starts on a file it cannot reload (config.Diff).
 func TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics(t *testing.T) {
 	s, _, cancel := mutateServer(t)
 	defer cancel()
@@ -301,9 +305,12 @@ func TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics(t *testing.T) {
 		{"::/0", 10, true},                       // default-information origination
 		{"fc00:1::/64", 0, true},                 // an ordinary ULA prefix
 	} {
-		err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: netip.MustParsePrefix(tc.prefix), Metric: tc.metric})
-		if (err == nil) != tc.ok {
+		p := AdvertisedPrefix{Prefix: netip.MustParsePrefix(tc.prefix), Metric: tc.metric}
+		if err := s.AddPrefix(ctx, p); (err == nil) != tc.ok {
 			t.Errorf("AddPrefix(%s, metric %d) err = %v, want ok=%v", tc.prefix, tc.metric, err, tc.ok)
+		}
+		if err := ValidateOptions(WithAdvertisedPrefix(p.Prefix, p.Metric)); (err == nil) != tc.ok {
+			t.Errorf("configured prefix %s, metric %d: err = %v, want ok=%v", tc.prefix, tc.metric, err, tc.ok)
 		}
 	}
 }
