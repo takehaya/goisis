@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/takehaya/goisis/pkg/datalink"
+	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
 	"github.com/takehaya/goisis/pkg/server"
 )
@@ -456,9 +457,13 @@ circuits:
 	// What can still reach apply is state the file cannot describe: Diff
 	// validates the file against the file a restart would run, never against
 	// the node. Here the operator advertised a prefix through the management
-	// API and then wrote that same prefix into the file -- a file a restart
-	// would run perfectly -- so the swap comes out as a withdrawal that lands
-	// and an addition the server refuses as already advertised.
+	// API at metric 20 and then wrote that same prefix into the file without a
+	// metric, which is metric 10 -- a file a restart would run perfectly -- so
+	// the swap comes out as a withdrawal that lands and an addition the server
+	// refuses, because the file asks for a value the node does not have. That
+	// disagreement is a refusal and not an ErrAlreadyInState: silently keeping
+	// metric 20 while reporting the file applied is the outcome this whole
+	// path exists to rule out.
 	next := strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 198.51.100.0/24\n", 1)
 	const runtimePrefix = "198.51.100.0/24"
 
@@ -487,7 +492,7 @@ circuits:
 	}
 	ctx := t.Context()
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
-	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix(runtimePrefix), Metric: 10}); err != nil {
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix(runtimePrefix), Metric: 20}); err != nil {
 		t.Fatalf("AddPrefix: %v", err)
 	}
 
@@ -517,6 +522,185 @@ circuits:
 	}
 	if !reflect.DeepEqual(again, want) {
 		t.Errorf("the next SIGHUP diffs\n got %+v\nwant %+v: the refused change is no longer retried", again, want)
+	}
+}
+
+// TestReloadAdoptsACorrectedFileOnTheNextSignal is the other half of the
+// baseline rule above, and the reason the baseline can be kept at all. Keeping
+// it means the next SIGHUP re-issues the whole batch, including the calls the
+// refused attempt already landed -- so unless those calls succeed the second
+// time, the recovery the daemon prints ("fix the file and send SIGHUP again")
+// is an instruction to signal forever. The file is authoritative for what it
+// names, so a call that asks for the state the node is already in is this
+// reload succeeding at it: one signal after the correction, the node is running
+// the file and nothing is left to retry.
+func TestReloadAdoptsACorrectedFileOnTheNextSignal(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	cfg, s, path := runningServer(t, initial)
+	ctx := t.Context()
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// The operator advertised a prefix with `goisis` at metric 20, then wrote
+	// it into the file so it survives a restart -- and left the metric out,
+	// which is metric 10.
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Metric: 20}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	write(strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 198.51.100.0/24\n", 1))
+	running, err := Reload(ctx, s, cfg, path, logger)
+	if !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("the first reload is %v, want ErrPartiallyApplied: this fixture no longer reaches a refused apply", err)
+	}
+	waitFor(t, "the withdrawn prefix to leave our own LSP", func() bool { return !ownLSPHas(t, s, "192.0.2.0/24") })
+
+	// The correction. Everything this file asks for is already true of the
+	// node: the prefix it drops is gone, and the one it names is advertised at
+	// exactly the metric it now gives.
+	write(strings.Replace(initial, "  - 192.0.2.0/24\n", "  - {prefix: 198.51.100.0/24, metric: 20}\n", 1))
+	running, err = Reload(ctx, s, running, path, logger)
+	if err != nil {
+		t.Fatalf("the corrected file was refused again: %v", err)
+	}
+	if !ownLSPHas(t, s, "198.51.100.0/24") {
+		t.Error("the adopted file's prefix is not in our own LSP")
+	}
+	// The baseline moved: a further signal has nothing left to do, which is
+	// what distinguishes adoption from a reload that merely stopped erroring.
+	again, err := Diff(running, loadConfigFile(t, path))
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !reflect.DeepEqual(again, Changes{}) {
+		t.Errorf("the next SIGHUP still diffs %+v: the baseline never advanced", again)
+	}
+}
+
+// TestReloadAdoptsAPrefixTheManagementAPIAlreadyAdvertises is the ordinary way
+// an operator makes a runtime change permanent: add it with `goisis`, then
+// write it into the file so a restart keeps it. The file and the node then say
+// the same thing, and a reload that refused it would make the documented
+// workflow unusable -- and, with the baseline rule above, unrepairable.
+func TestReloadAdoptsAPrefixTheManagementAPIAlreadyAdvertises(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	cfg, s, path := runningServer(t, initial)
+	ctx := t.Context()
+	const added = "198.51.100.0/24"
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix(added), Metric: server.DefaultMetric}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	next := strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 192.0.2.0/24\n  - "+added+"\n", 1)
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if !ownLSPHas(t, s, added) {
+		t.Errorf("%s left our own LSP: the reload was supposed to find it already there", added)
+	}
+}
+
+// sidRecorder counts the local SID writes a reload causes. It embeds fib.Noop
+// so only the two SID methods need an implementation, and guards its counters
+// because they are written on the management goroutine and read from the test's.
+type sidRecorder struct {
+	fib.Noop
+	mu      sync.Mutex
+	removed map[netip.Addr]int
+}
+
+func (r *sidRecorder) RemoveLocalSID(sid netip.Addr) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.removed == nil {
+		r.removed = map[netip.Addr]int{}
+	}
+	r.removed[sid]++
+	return nil
+}
+
+func (r *sidRecorder) removals(sid netip.Addr) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.removed[sid]
+}
+
+// TestReloadDoesNotChurnAnEndSIDTheFileStillNames is the dataplane cost of a
+// reload that cannot be adopted. A Flexible Algorithm has no runtime update, so
+// a changed definition withdraws the locator bound to it and advertises it
+// again -- one unprogram and reprogram of that locator's End SID, which the
+// change genuinely calls for. What must not happen is that cost repeating: a
+// reload the node has already satisfied but which is reported refused keeps its
+// baseline, so every further signal re-issues the same withdrawal and tears
+// down forwarding state the file has never stopped naming.
+func TestReloadDoesNotChurnAnEndSIDTheFileStillNames(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+flex-algo:
+  - algo: 128
+    priority: 100
+    advertise: true
+    locator: fc00:128:1::/48
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	rec := &sidRecorder{}
+	cfg, s, path := runningServer(t, initial, server.WithFIB(rec))
+	ctx := t.Context()
+	// The same file-versus-node disagreement as above, on a key that has
+	// nothing to do with the locator: the reload's refusal comes after the
+	// locator work, and the retry redoes all of it.
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Metric: server.DefaultMetric}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	next := strings.Replace(initial, "priority: 100", "priority: 200", 1)
+	next = strings.Replace(next, "  - 192.0.2.0/24\n", "  - 192.0.2.0/24\n  - 198.51.100.0/24\n", 1)
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two signals: the one that changes the definition, and the one an
+	// operator sends after it. The second has nothing to apply.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for i := range 2 {
+		running, err := Reload(ctx, s, cfg, path, logger)
+		if err != nil {
+			t.Errorf("reload %d: %v", i+1, err)
+		}
+		cfg = running
+	}
+
+	endSID := netip.MustParseAddr("fc00:128:1::")
+	if got := rec.removals(endSID); got != 1 {
+		t.Errorf("End SID %s was unprogrammed %d times, want 1: the file never stopped naming it", endSID, got)
+	}
+	locators, err := s.ListLocators(ctx)
+	if err != nil {
+		t.Fatalf("ListLocators: %v", err)
+	}
+	if !slices.ContainsFunc(locators, func(l server.LocatorInfo) bool { return l.Prefix == netip.MustParsePrefix("fc00:128:1::/48") }) {
+		t.Errorf("the locator the file still names is gone: %v", locators)
 	}
 }
 
@@ -617,10 +801,15 @@ circuits:
 		t.Errorf("refused reloads = %d, want 1", got)
 	}
 
-	// A call the running server refuses, which after validation can only be
-	// one the file cannot foresee: the prefix the reload above already
-	// advertised is written into the file, so of the two additions one lands
-	// and one is refused as redundant.
+	// A call the running server refuses, which after validation can only be one
+	// the file cannot foresee: the node's own state. Of the two additions below
+	// one is the prefix the reload above already advertised, which the node
+	// satisfies and so is not a refusal at all; the other is advertised through
+	// the management API at a metric the file contradicts, which no repetition
+	// of the signal can settle.
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix("203.0.113.0/24"), Metric: 20}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
 	write(strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 198.51.100.0/24\n  - 203.0.113.0/24\n", 1))
 	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
 		t.Fatalf("Reload error = %v, want an ErrPartiallyApplied", err)
@@ -703,7 +892,9 @@ func TestChangesAreOrderedDeterministically(t *testing.T) {
 // runningServer writes yaml to a file, builds a server from it over a mock
 // transport and starts its management loop. It returns the three things Reload
 // takes: the configuration the daemon is running, the server, and the path.
-func runningServer(t *testing.T, yaml string) (*Config, *server.IsisServer, string) {
+// extra is appended to the file's own options, for a test that has to watch a
+// sink the file cannot name.
+func runningServer(t *testing.T, yaml string, extra ...server.ServerOption) (*Config, *server.IsisServer, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "goisisd.yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
@@ -720,7 +911,7 @@ func runningServer(t *testing.T, yaml string) (*Config, *server.IsisServer, stri
 	if err != nil {
 		t.Fatalf("Options: %v", err)
 	}
-	s, err := server.NewIsisServer(opts...)
+	s, err := server.NewIsisServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("NewIsisServer: %v", err)
 	}

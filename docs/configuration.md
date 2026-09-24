@@ -223,10 +223,19 @@ on` sets it at runtime.
 
 What validation cannot foresee is the node's own state: the file is compared
 with the file the daemon is running, never with the node, so a prefix or a
-locator added with `goisis` at runtime is invisible to it and the server can
-still refuse the call that collides with it. A reload has no rollback — undoing
-it needs the inverse of every call — so it stops where the refusal left it and
-says so, rather than recording the file as applied:
+locator added with `goisis` at runtime is invisible to it. Where both name the
+same thing, the file wins, and naming something the node already has with the
+same values is the reload succeeding at it rather than a collision. That is how
+a runtime change is made permanent: add it with `goisis`, write the same thing
+into the file, and the next `SIGHUP` adopts the file without touching what is
+already there. Naming it with *different* values is refused — the file asks for
+something the node does not have, and neither the reload nor the runtime API has
+an update for a prefix, a locator or a Flexible Algorithm. Withdraw it with
+`goisis`, or write the running value into the file, and signal again.
+
+A reload has no rollback — undoing it needs the inverse of every call — so it
+stops where the refusal left it and says so, rather than recording the file as
+applied:
 
 ```console
 ERROR configuration reload was refused part way; the node is not in the state the file describes; fix the file and send SIGHUP again
@@ -235,10 +244,12 @@ ERROR configuration reload was refused part way; the node is not in the state th
 Changing a Flexible Algorithm or a locator is a withdrawal followed by a
 re-advertisement, so a refusal there can leave the resource withdrawn. The
 reload keeps the baseline it had, so the next `SIGHUP` re-issues the whole
-change instead of treating a file the node never adopted as what it runs.
-Repeat the signal until it stops reporting a refusal: a call an earlier attempt
-already landed is refused as redundant, which costs one more reload before the
-file is adopted.
+change instead of treating a file the node never adopted as what it runs. That
+retry is the repair: the calls an earlier attempt already landed are satisfied
+rather than refused a second time, so one signal after the file is corrected the
+node is running it. A `SIGHUP` that still reports a refusal is naming something
+the correction has not reached — the error names the resource — and repeating
+the signal on its own will not settle it.
 
 The file is read again on every `SIGHUP`, so its ownership and mode are access
 control for live routing state, not just for the next restart: whoever can

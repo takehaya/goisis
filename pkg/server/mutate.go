@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -9,6 +10,24 @@ import (
 	"github.com/takehaya/goisis/pkg/fib"
 	"github.com/takehaya/goisis/pkg/packet"
 )
+
+// ErrAlreadyInState classifies the refusal a mutator returns when the node is
+// already in the state the call asks for: the entry it would add is present and
+// identical in every field, or the entry it would delete is gone. The call is
+// still refused — an operator who types one twice is told so, and no mutator's
+// contract changes — but a caller replaying a batch can tell this refusal from
+// one that left the node somewhere else.
+//
+// That distinction is what makes a configuration reload repairable. config.Diff
+// compares the file with the previous file, never with the node, so a reload
+// refused part way is retried by re-issuing every call, including the ones that
+// already landed; without this, the retry is refused identically and the file
+// can never be adopted.
+//
+// An entry that is present but differs in any field is deliberately not this:
+// the caller asked for a value the node does not have, and reporting success
+// while keeping the old one would be the lie the sentinel exists to avoid.
+var ErrAlreadyInState = errors.New("the node is already in the state this call asks for")
 
 // participatesInAlgo reports whether this node computes paths for the given
 // algorithm: algorithm 0 (normal SPF) is always computed, and a Flexible
@@ -29,7 +48,8 @@ func (s *IsisServer) participatesInAlgo(algo uint8) bool {
 // validation NewIsisServer applies (IPv6 only, and a non-zero algorithm
 // requires participation in that Flex-Algo), installs the local End SID, and
 // re-originates this node's LSPs. Adding a locator whose prefix is already
-// advertised is rejected.
+// advertised is rejected, as ErrAlreadyInState when the advertised one is
+// identical.
 func (s *IsisServer) AddLocator(ctx context.Context, cfg SRv6LocatorConfig) error {
 	return s.mgmtOperation(ctx, func() error {
 		if a := cfg.Prefix.Addr(); !a.Is6() || a.Is4In6() {
@@ -40,9 +60,13 @@ func (s *IsisServer) AddLocator(ctx context.Context, cfg SRv6LocatorConfig) erro
 		}
 		want := cfg.Prefix.Masked()
 		for _, lc := range s.locators {
-			if lc.Prefix.Masked() == want {
-				return fmt.Errorf("goisis: SRv6 locator %s is already advertised", want)
+			if lc.Prefix.Masked() != want {
+				continue
 			}
+			if lc.Algo == cfg.Algo {
+				return fmt.Errorf("goisis: SRv6 locator %s is already advertised: %w", want, ErrAlreadyInState)
+			}
+			return fmt.Errorf("goisis: SRv6 locator %s is already advertised for algorithm %d", want, lc.Algo)
 		}
 		s.locators = append(s.locators, cfg)
 		s.programSID(fib.LocalSID{SID: cfg.endSID(), Behavior: fib.BehaviorEnd})
@@ -64,7 +88,7 @@ func (s *IsisServer) DeleteLocator(ctx context.Context, prefix netip.Prefix) err
 			}
 		}
 		if idx < 0 {
-			return fmt.Errorf("goisis: SRv6 locator %s is not advertised", want)
+			return fmt.Errorf("goisis: SRv6 locator %s is not advertised: %w", want, ErrAlreadyInState)
 		}
 		removed := s.locators[idx]
 		s.locators = append(s.locators[:idx], s.locators[idx+1:]...)
@@ -76,14 +100,23 @@ func (s *IsisServer) DeleteLocator(ctx context.Context, prefix netip.Prefix) err
 
 // AddFlexAlgo makes this node participate in a Flexible Algorithm at runtime
 // (and advertise its definition when configured). The algorithm number must be
-// in the Flex-Algo range (128-255) and not already configured.
+// in the Flex-Algo range (128-255) and not already configured; re-adding the
+// identical definition is rejected as ErrAlreadyInState.
 func (s *IsisServer) AddFlexAlgo(ctx context.Context, cfg FlexAlgoConfig) error {
 	return s.mgmtOperation(ctx, func() error {
 		if cfg.Algo < 128 {
 			return fmt.Errorf("goisis: Flex-Algo %d is reserved; use 128-255", cfg.Algo)
 		}
-		if s.participatesInAlgo(cfg.Algo) {
-			return fmt.Errorf("goisis: Flex-Algo %d is already configured", cfg.Algo)
+		for _, fa := range s.flexAlgos {
+			if fa.Algo != cfg.Algo {
+				continue
+			}
+			if fa == cfg {
+				return fmt.Errorf("goisis: Flex-Algo %d is already configured: %w", cfg.Algo, ErrAlreadyInState)
+			}
+			// A definition has no runtime update: delete it and add it back,
+			// which is what config.Diff proposes for a changed one.
+			return fmt.Errorf("goisis: Flex-Algo %d is already configured with a different definition", cfg.Algo)
 		}
 		s.flexAlgos = append(s.flexAlgos, cfg)
 		s.requestLSPRegen()
@@ -105,7 +138,7 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 			}
 		}
 		if idx < 0 {
-			return fmt.Errorf("goisis: Flex-Algo %d is not configured", algo)
+			return fmt.Errorf("goisis: Flex-Algo %d is not configured: %w", algo, ErrAlreadyInState)
 		}
 		for _, lc := range s.locators {
 			if lc.Algo == algo {
@@ -126,7 +159,8 @@ func (s *IsisServer) DeleteFlexAlgo(ctx context.Context, algo uint8) error {
 // AddPrefix originates a new prefix in this node's LSP (TLV 135/236) at
 // runtime. The prefix must be valid, routable, and not already named by the
 // configuration or an earlier AddPrefix (matched on its masked form, the key
-// the RIB and FIB agree on). A subnet a circuit already has connected may be
+// the RIB and FIB agree on); re-adding it at the same metric is rejected as
+// ErrAlreadyInState. A subnet a circuit already has connected may be
 // named here: the prefix is still advertised once, at the metric given here.
 func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error {
 	return s.mgmtOperation(ctx, func() error {
@@ -134,8 +168,11 @@ func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error 
 			return err
 		}
 		want := cfg.Prefix.Masked()
-		if _, ok := s.optionPrefixes[want]; ok {
-			return fmt.Errorf("goisis: prefix %s is already advertised", want)
+		if cur, ok := s.optionPrefixes[want]; ok {
+			if cur.Metric == cfg.Metric {
+				return fmt.Errorf("goisis: prefix %s is already advertised: %w", want, ErrAlreadyInState)
+			}
+			return fmt.Errorf("goisis: prefix %s is already advertised at metric %d", want, cur.Metric)
 		}
 		s.optionPrefixes[want] = AdvertisedPrefix{Prefix: want, Metric: cfg.Metric}
 		s.requestLSPRegen()
@@ -146,7 +183,8 @@ func (s *IsisServer) AddPrefix(ctx context.Context, cfg AdvertisedPrefix) error 
 // DeletePrefix withdraws a prefix the configuration or AddPrefix named (matched
 // on its masked prefix). A circuit that has the same subnet connected keeps
 // originating it at the circuit's metric, and a subnet only a circuit
-// contributes is refused: withdrawing it here would last until that circuit's
+// contributes is refused — and not as ErrAlreadyInState, since the prefix is
+// still advertised: withdrawing it here would last until that circuit's
 // next address event, and suppressing an advertisement is the export policy's
 // job (WithAdvertiseFilter / policy.advertise). Either way the subnet stays
 // marked directly connected, so goisis never programs over the kernel's own
@@ -160,7 +198,7 @@ func (s *IsisServer) DeletePrefix(ctx context.Context, prefix netip.Prefix) erro
 					return fmt.Errorf("goisis: %s is connected on %s; remove the address or use policy.advertise", want, c.cfg.Name)
 				}
 			}
-			return fmt.Errorf("goisis: prefix %s is not advertised", want)
+			return fmt.Errorf("goisis: prefix %s is not advertised: %w", want, ErrAlreadyInState)
 		}
 		delete(s.optionPrefixes, want)
 		s.requestLSPRegen()
