@@ -165,10 +165,21 @@ rather than at MaxAge, stops its subnets being directly connected, and closes
 its transport — the instance owns that transport from `Serve` on. It does not
 wait for the circuit's reader goroutine, which ends on its own within a second;
 the frames that goroutine has already queued are discarded. Deleting a circuit
-that is not configured is an error. There is no `AddCircuit`: a circuit is still
-named at construction (`WithCircuit`), so adding one needs a restart.
+that is not configured is an error.
+
+`AddCircuit` is the other half. You open the transport and pass it in the
+`CircuitConfig`, because opening it on the management loop would stall every
+other circuit's hellos and LSP aging behind the syscalls; if the call returns an
+error the transport is still yours to close, and nothing else will. The circuit
+joins at the end of the set — that order is what assigns End.X SID function
+values, so an addition never renumbers the SIDs of links that did not change —
+sends its first hello at once, and re-originates before returning, so a circuit
+with a smaller MTU has re-fragmented this node's LSPs and a level no circuit was
+at before has its node LSP by the time you get control back. A name that is
+already configured is refused rather than replaced.
 
 ```go
+s.AddCircuit(ctx, server.CircuitConfig{Name: "eth1", Transport: tr, Level2: true})
 s.DeleteCircuit(ctx, "eth0")
 ```
 
