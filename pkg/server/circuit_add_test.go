@@ -433,3 +433,170 @@ func TestDeleteThenAddCircuitLeavesANodeThatCouldHaveStarted(t *testing.T) {
 		}
 	}
 }
+
+// TestAddCircuitFormsAnAdjacencyOnARunningInstance guarantees that a circuit
+// added to an instance that is already serving hears its segment: the addition
+// starts the reader goroutine Serve would have started for it at boot.
+//
+// Nothing else in the suite reaches that. A circuit added without a reader is
+// added in every other respect — it sends hellos, it joins the flooding set,
+// its reachability goes into this node's LSPs — so ListCircuits reports it and
+// the daemon logs it, while it advertises a segment it can never hear an answer
+// on and forms no adjacency for the life of the process.
+func TestAddCircuitFormsAnAdjacencyOnARunningInstance(t *testing.T) {
+	s := dupFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+
+	added := lanCircuit("b", 0xb1, 1500)
+	peer := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xee}, 1500)
+	datalink.Link(added.Transport.(*datalink.MockTransport), peer)
+	if err := s.AddCircuit(ctx, added); err != nil {
+		t.Fatalf("AddCircuit: %v", err)
+	}
+
+	nbr := packet.SystemID{0, 0, 0, 0, 0, 0xee}
+	// One hello, echoing the added circuit's own address: a receiver that reads
+	// it completes the three-way handshake on it alone, so the assertion waits
+	// on the reader and not on a hello timer.
+	raw, err := neighborHello(nbr, 10, nodeID(nbr, 5), added.Transport.LocalSNPA()).Serialize()
+	if err != nil {
+		t.Fatalf("serialize the neighbor's hello: %v", err)
+	}
+	if err := peer.Send(datalink.AllL2ISs, raw); err != nil {
+		t.Fatalf("send the neighbor's hello: %v", err)
+	}
+
+	waitFor(t, "the added circuit to report its neighbor Up", func() bool {
+		adjs, err := s.ListAdjacencies(ctx)
+		if err != nil {
+			return false
+		}
+		for _, a := range adjs {
+			if a.Interface == "b" && a.SystemID == nbr && a.State == AdjUp {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// TestAddCircuitSendsItsFirstHelloBeforeReturning guarantees that an added
+// circuit greets its segment as part of the addition rather than at the next
+// housekeeping tick.
+//
+// The wait is otherwise a whole hello interval, ten seconds by default, and it
+// is paid twice: the neighbor cannot reach Init until it has heard from us, so
+// the adjacency an operator is waiting on is held up by our silence and then by
+// the neighbor's own timer.
+func TestAddCircuitSendsItsFirstHelloBeforeReturning(t *testing.T) {
+	s := dupFixture(t)
+	cfg := lanCircuit("b", 0xb1, 1500)
+	rec := &sendRecorder{MockTransport: cfg.Transport.(*datalink.MockTransport)}
+	cfg.Transport = rec
+	if err := s.addCircuit(cfg, time.Now()); err != nil {
+		t.Fatalf("addCircuit: %v", err)
+	}
+	for _, pdu := range rec.pdus(t) {
+		if h, ok := pdu.(*packet.LANHello); ok && h.SourceID == s.systemID {
+			return
+		}
+	}
+	t.Errorf("the added circuit sent %d PDUs and none of them a hello: the segment hears nothing from us until the next tick", len(rec.sent))
+}
+
+// TestAddCircuitMarksItsSubnetsDirectlyConnected is the mirror of
+// TestDeleteCircuitStopsMarkingItsSubnetsConnected. The connected set is what
+// pickGateway resolves a next hop against and what endXNexthop hands an
+// adjacency an End.X SID for, so a circuit added without its subnets carries
+// adjacencies that resolve no next hop and neighbors that get no SID — and its
+// prefixes lose the never-install guard that keeps a remote advertiser of our
+// own subnet out of the RIB.
+func TestAddCircuitMarksItsSubnetsDirectlyConnected(t *testing.T) {
+	s := dupFixture(t)
+	subnet := netip.MustParsePrefix("10.0.0.0/24")
+	cfg := lanCircuit("b", 0xb1, 1500)
+	cfg.ConnectedPrefixes = []netip.Prefix{subnet}
+	if err := s.addCircuit(cfg, time.Now()); err != nil {
+		t.Fatalf("addCircuit: %v", err)
+	}
+	if !s.connected[subnet] {
+		t.Errorf("%s is not directly connected after the circuit carrying it was added", subnet)
+	}
+}
+
+// TestAddCircuitRefusesAnMTUBelowTheLSPMinimum guarantees that a circuit too
+// narrow to carry a 512-octet LSP is refused rather than admitted.
+//
+// This is the one check a running instance owes that NewIsisServer cannot make
+// for it — the transport is the caller's — and a reload reaches it from an
+// operator-edited file. Admitting the circuit holds every other circuit's LSPs
+// to that MTU too, under the floor ISO 10589 sets for the whole area.
+func TestAddCircuitRefusesAnMTUBelowTheLSPMinimum(t *testing.T) {
+	s := dupFixture(t)
+	before := s.lspBufferSize
+	if err := s.addCircuit(lanCircuit("tiny", 0x78, minLSPMTU), time.Now()); err == nil {
+		t.Fatalf("a circuit holding this node's LSPs to %d octets was accepted", minLSPMTU-3)
+	}
+	if len(s.circuits) != 1 {
+		t.Errorf("circuits after the refusal = %d, want the one that was already running", len(s.circuits))
+	}
+	if s.lspBufferSize != before {
+		t.Errorf("LSP buffer size after the refusal = %d, want %d: the refused circuit took every other one under the floor with it",
+			s.lspBufferSize, before)
+	}
+}
+
+// TestAddCircuitNeverHandsOutAnExtendedCircuitIDTwice guarantees that no two
+// circuits of this node's ever share an extended circuit ID, and that a removal
+// renumbers neither identifier of a circuit that stays.
+//
+// An adjacency comes Up the moment a hello echoes our system ID and our
+// extended circuit ID (RFC 5303 3.2), so a hello still in flight from a circuit
+// that is gone would complete the handshake of whichever circuit inherited the
+// number. Deriving either identifier from the index in s.circuits is the way
+// that happens, and it is the tidier-looking of the two.
+func TestAddCircuitNeverHandsOutAnExtendedCircuitIDTwice(t *testing.T) {
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(lanCircuit("a", 0xa1, 1500)),
+		WithCircuit(lanCircuit("b", 0xb1, 1500)),
+		WithCircuit(lanCircuit("c", 0xc1, 1500)),
+	)
+	now := time.Now()
+	type ids struct {
+		ext        uint32
+		pseudonode uint8
+	}
+	handedOut := map[uint32]string{}
+	was := map[string]ids{}
+	for _, c := range s.circuits {
+		if other, dup := handedOut[c.extCircID]; dup {
+			t.Fatalf("circuits %s and %s both start on extended circuit ID %d", other, c.cfg.Name, c.extCircID)
+		}
+		handedOut[c.extCircID] = c.cfg.Name
+		was[c.cfg.Name] = ids{c.extCircID, c.pseudonodeID}
+	}
+
+	if err := s.deleteCircuit("b", now); err != nil {
+		t.Fatalf("deleteCircuit: %v", err)
+	}
+	if err := s.addCircuit(lanCircuit("d", 0xd1, 1500), now); err != nil {
+		t.Fatalf("addCircuit: %v", err)
+	}
+
+	for _, c := range s.circuits {
+		if c.cfg.Name == "d" {
+			if other, dup := handedOut[c.extCircID]; dup {
+				t.Errorf("the added circuit took extended circuit ID %d, which circuit %s already had: a hello still in flight for %s completes this circuit's handshake",
+					c.extCircID, other, other)
+			}
+			continue
+		}
+		if got, want := (ids{c.extCircID, c.pseudonodeID}), was[c.cfg.Name]; got != want {
+			t.Errorf("circuit %s was renumbered from %+v to %+v by a removal and an addition it was not part of", c.cfg.Name, want, got)
+		}
+	}
+}

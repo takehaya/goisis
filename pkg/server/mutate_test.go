@@ -621,6 +621,11 @@ func TestARedundantMutationReportsErrAlreadyInState(t *testing.T) {
 			return s.DeleteLocator(ctx, netip.MustParsePrefix("fc00:8::/48"))
 		}, true},
 		{"a Flex-Algo that is not configured", func() error { return s.DeleteFlexAlgo(ctx, 129) }, true},
+		// The deletions half of the same recovery: a batch retried after one of
+		// its calls was refused re-issues the deletions that already landed, so
+		// a removal of a circuit the node does not have has to read as the node
+		// being in the state asked for rather than as a fault.
+		{"a circuit that is not configured", func() error { return s.DeleteCircuit(ctx, "gone") }, true},
 	} {
 		err := tc.call()
 		if err == nil {
