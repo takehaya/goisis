@@ -6,7 +6,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -239,12 +241,15 @@ func TestPrintResponseOutputFlag(t *testing.T) {
 		Tlvs:     []string{"Dynamic Hostname: r1"},
 	}}}
 
-	run := func(t *testing.T, args ...string) (string, error) {
+	// Two buffers, not one: the point of the JSON format is that it can be
+	// piped, so which stream it lands on is the assertion. Sharing a buffer
+	// hid that it was going to stderr.
+	run := func(t *testing.T, args ...string) (stdout, stderr string, err error) {
 		t.Helper()
-		var buf bytes.Buffer
+		var out, errBuf bytes.Buffer
 		root := newRootCmd()
-		root.SetOut(&buf)
-		root.SetErr(&buf)
+		root.SetOut(&out)
+		root.SetErr(&errBuf)
 		root.AddCommand(&cobra.Command{
 			Use: "probe",
 			RunE: func(cmd *cobra.Command, _ []string) error {
@@ -255,12 +260,12 @@ func TestPrintResponseOutputFlag(t *testing.T) {
 			},
 		})
 		root.SetArgs(args)
-		err := root.Execute()
-		return buf.String(), err
+		err = root.Execute()
+		return out.String(), errBuf.String(), err
 	}
 
 	t.Run("json", func(t *testing.T) {
-		out, err := run(t, "probe", "-o", "json")
+		out, _, err := run(t, "probe", "-o", "json")
 		if err != nil {
 			t.Fatalf("probe -o json: %v", err)
 		}
@@ -282,7 +287,7 @@ func TestPrintResponseOutputFlag(t *testing.T) {
 	})
 
 	t.Run("table by default", func(t *testing.T) {
-		out, err := run(t, "probe")
+		out, _, err := run(t, "probe")
 		if err != nil {
 			t.Fatalf("probe: %v", err)
 		}
@@ -291,9 +296,64 @@ func TestPrintResponseOutputFlag(t *testing.T) {
 		}
 	})
 
+	// The stream, not the bytes. cobra's Print writes to OutOrStderr, and a
+	// command whose out writer is unset -- which is every invocation of the
+	// real binary -- gets os.Stderr from it. So the one format that exists to
+	// be piped into jq was going to the one stream a pipe does not carry, and
+	// a test that points both writers at one buffer cannot see it. Leaving the
+	// out writer unset is what reproduces the binary.
+	t.Run("json goes to stdout, which is what a pipe carries", func(t *testing.T) {
+		var errBuf bytes.Buffer
+		root := newRootCmd()
+		root.SetErr(&errBuf)
+		root.AddCommand(&cobra.Command{
+			Use: "probe",
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				return printResponse(cmd, msg, func() error { return nil })
+			},
+		})
+		root.SetArgs([]string{"probe", "-o", "json"})
+		stdout := captureStdout(t, func() {
+			if err := root.Execute(); err != nil {
+				t.Fatalf("probe -o json: %v", err)
+			}
+		})
+		if errBuf.Len() != 0 {
+			t.Errorf("stderr = %q, want nothing there", errBuf.String())
+		}
+		if !strings.Contains(stdout, `"hostname"`) {
+			t.Errorf("stdout = %q, want the JSON response", stdout)
+		}
+	})
+
 	t.Run("unknown format", func(t *testing.T) {
-		if _, err := run(t, "probe", "-o", "yaml"); err == nil {
+		if _, _, err := run(t, "probe", "-o", "yaml"); err == nil {
 			t.Error("-o yaml was accepted, want an error")
 		}
 	})
+}
+
+// captureStdout runs fn with os.Stdout replaced by a pipe and returns what was
+// written to it. The JSON output format's whole point is the stream it lands
+// on, and cobra only falls back to os.Stdout when no out writer is set.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	fn()
+	os.Stdout = orig
+	_ = w.Close()
+	out := <-done
+	_ = r.Close()
+	return out
 }
