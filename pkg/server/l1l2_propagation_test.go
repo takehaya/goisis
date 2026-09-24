@@ -730,12 +730,12 @@ func TestOurOwnPrefixIsNotLeakedBackIntoOurLevel1LSP(t *testing.T) {
 	}
 }
 
-// The up/down bit is only defined for a Level-1 advertisement (RFC 5305 §4.1),
-// so a Level-2 LSP carrying it is malformed or hostile. Leaking such a prefix
-// down would produce an entry indistinguishable from someone else's leak, which
-// is exactly what the bit exists to let a border router recognise and not
-// propagate.
-func TestADownMarkedLevel2PrefixIsNotLeaked(t *testing.T) {
+// RFC 5302 §3.3 RECOMMENDS that the up/down bit be ignored in a Level-2 LSP and
+// the prefix accepted either way, because the bit is defined for a Level-1
+// advertisement (RFC 5305 §4.1) and says nothing at Level 2 until IS-IS grows a
+// third level. So a down-marked Level-2 prefix is leaked like any other, and our
+// own copy of it carries the bit because every leak does.
+func TestTheUpDownBitIsIgnoredInALevel2Advertisement(t *testing.T) {
 	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
 	now := time.Now()
 	injectB(s, now)
@@ -751,8 +751,94 @@ func TestADownMarkedLevel2PrefixIsNotLeaked(t *testing.T) {
 	if _, ok := got[leakDeniedV4]; !ok {
 		t.Fatalf("the ordinary %s was not leaked; the topology under test is wrong", leakDeniedV4)
 	}
+	// 10 (the circuit metric to B) + 5 (B's metric for the prefix).
+	if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(got[leakV4], want) {
+		t.Errorf("L1 LSP entries for the down-marked Level-2 %s = %v, want %v", leakV4, got[leakV4], want)
+	}
+}
+
+// The bit removed above was not what stopped a leak from being leaked again;
+// two other things do, and this is the near one. A leak lands in a Level-1 LSP,
+// so a prefix the area has only as another border's leak is neither in the
+// Level-2 route table the candidates come from nor outside "reachability the
+// area already has" -- it fails both tests, not the up/down one. The far one,
+// and the loop that actually matters, is that the leaked copy never travels
+// back up to Level 2 where it would become a candidate again:
+// TestALeakedPrefixIsNotPropagatedBackIntoLevel2 pins that.
+func TestAnotherBordersLeakIsNotLeakedAgain(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	// B carries a sibling's leak of leakV4 at Level 1 -- down-marked, and with
+	// no Level-2 route behind it here -- plus an ordinary Level-2 prefix, so the
+	// leak is demonstrably working.
+	injectB(s, now, &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+		{Prefix: leakV4, Metric: 5, Down: true},
+	}})
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+		{Prefix: leakDeniedV4, Metric: 5},
+	}})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	if r := s.rib[leakV4]; r.Level != packet.Level1 {
+		t.Fatalf("%s = level %v, want Level 1; the topology under test is wrong", leakV4, r.Level)
+	}
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakDeniedV4]; !ok {
+		t.Fatalf("the Level-2 %s was not leaked; the topology under test is wrong", leakDeniedV4)
+	}
 	if e, ok := got[leakV4]; ok {
-		t.Errorf("the down-marked Level-2 %s was leaked into the area as %v", leakV4, e)
+		t.Errorf("the Level-1-only %s was leaked into the area as %v", leakV4, e)
+	}
+}
+
+// flexLoc is advertised inside the area as an algorithm-128 SRv6 locator only.
+var flexLoc = netip.MustParsePrefix("2001:db8:128::/64")
+
+// Reachability the area already has means algorithm-0 reachability. A
+// Flex-Algo prefix is reachable only for the nodes participating in that
+// algorithm and only over its constrained path (RFC 9350 §14.2), and an area
+// can be partitioned for a Flex-Algorithm while the base algorithm still has
+// continuity (RFC 9350 §13.1) -- so a locator the area reaches only under
+// algorithm 128 gives it no plain path, and the Level-2 prefix is still leaked.
+func TestAFlexAlgoOnlyIntraAreaPrefixDoesNotSuppressTheLeak(t *testing.T) {
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()), WithFlexAlgo(FlexAlgoConfig{Algo: 128}))
+	now := time.Now()
+	// B advertises flexLoc inside the area for algorithm 128 only, and leakV6
+	// as ordinary algorithm-0 Level-1 reachability.
+	injectB(s, now, fadCap(128),
+		&packet.SRv6LocatorTLV{Locators: []packet.SRv6Locator{{Algorithm: 128, Locator: flexLoc}}},
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Prefix: leakV6, Metric: 5}}})
+	// At Level 2 all three are plain reachability: flexLoc and leakV6 shared
+	// with the area, leakDeniedV4 reachable through Level 2 alone.
+	injectBL2(s, now,
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{
+			{Prefix: flexLoc, Metric: 5},
+			{Prefix: leakV6, Metric: 5},
+		}},
+		&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+			{Prefix: leakDeniedV4, Metric: 5},
+		}},
+	)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	if r, ok := s.computeSPF(packet.Level1, 128, now)[flexLoc]; !ok || r.algo != 128 {
+		t.Fatalf("%s is not an algorithm-128 Level-1 route; the topology under test is wrong", flexLoc)
+	}
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakDeniedV4]; !ok {
+		t.Fatalf("the Level-2-only %s was not leaked; the topology under test is wrong", leakDeniedV4)
+	}
+	// 10 (the circuit metric to B) + 5 (B's Level-2 metric for the prefix).
+	if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(got[flexLoc], want) {
+		t.Errorf("L1 LSP entries for the Flex-Algo-only %s = %v, want %v", flexLoc, got[flexLoc], want)
+	}
+	// The control: algorithm-0 reachability inside the area does suppress it.
+	if e, ok := got[leakV6]; ok {
+		t.Errorf("the intra-area %s was leaked into Level 1 as %v", leakV6, e)
 	}
 }
 

@@ -199,6 +199,17 @@ func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix
 // policy: pushing a whole Level-2 table into an area is a decision, not a
 // default. l2 holds only algorithm-0 Level-2 routes, so there is no algorithm
 // to test here.
+//
+// The up/down bit of the Level-2 advertisement is not tested either: RFC 5302
+// §3.3 RECOMMENDS ignoring it in a Level-2 LSP and accepting the prefix
+// whichever way it is set, because the bit is defined for a Level-1
+// advertisement (RFC 5305 §4.1) and means nothing at Level 2 until IS-IS grows
+// a third level. No loop prevention is lost with it, because the bit was never
+// doing any: a leak lands in a Level-1 LSP, so a leaked prefix is neither in
+// the Level-2 route table the candidates come from nor outside the "already
+// has" test below. What cuts this direction's loop is that the leaked copy
+// never travels back up to Level 2, where it would become a candidate again --
+// l1ExportSet drops a down-marked route, per the same §4.1.
 func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Prefix]uint32 {
 	if s.l2LeakFilter == nil || !s.levelCap.has(packet.Level1) || !s.levelCap.has(packet.Level2) {
 		return nil
@@ -207,8 +218,6 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 	var leak map[netip.Prefix]uint32
 	for p, r := range l2 {
 		switch {
-		case r.down:
-			continue // already leaked down once; leaking it again would loop
 		case p == defaultV4 || p == defaultV6:
 			continue // a default is not reachability to leak; the ATT bit carries that
 		case own[p]:
@@ -221,6 +230,14 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 		// exception here: p is reachable at Level 2, so a leaked Level-1 copy
 		// of it is preference class 3 against that route's class 2 and never
 		// won merged in the first place.
+		//
+		// "Already has" means algorithm 0, which is what a leaked prefix
+		// competes with. A Flex-Algo prefix is reachable only for the nodes
+		// participating in that algorithm and only over its constrained path
+		// (RFC 9350 §14.2), and an area can be partitioned for a Flex-Algorithm
+		// while the base algorithm still has continuity (RFC 9350 §13.1): a
+		// locator the area reaches under algorithm 128 alone gives it no plain
+		// path, so it must not suppress the leak that would.
 		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 {
 			continue
 		}
