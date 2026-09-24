@@ -171,17 +171,21 @@ replaying a batch can tell it from a refusal that left the node elsewhere.
 
 `AddCircuit` is the other half. You open the transport and pass it in the
 `CircuitConfig`, because opening it on the management loop would stall every
-other circuit's hellos and LSP aging behind the syscalls; if the call returns an
-error the transport is still yours to close, and nothing else will. The circuit
-joins at the end of the set — that order is what assigns End.X SID function
-values, so an addition never renumbers the SIDs of links that did not change —
-sends its first hello at once, and re-originates before returning, so a circuit
-with a smaller MTU has re-fragmented this node's LSPs and a level no circuit was
-at before has its node LSP by the time you get control back. A name that is
-already configured is refused rather than replaced, also as
-`server.ErrAlreadyInState`: the running circuit's transport is an open socket
-and can never equal the one you are passing, so the name is all that is
-compared.
+other circuit's hellos and LSP aging behind the syscalls; from there the
+transport is the instance's on every path — the circuit runs on it, or the call
+closes it — and never yours to close, because a call whose context expired may
+still be queued and about to run a circuit on it. The circuit joins at the end
+of the set — that order is what assigns End.X SID function values, so an
+addition never renumbers the SIDs of links that did not change — sends its
+first hello at once, and re-originates before returning, so a circuit with a
+smaller MTU has re-fragmented this node's LSPs and a level no circuit was at
+before has its node LSP by the time you get control back. A name that is
+already configured is refused rather than replaced: as
+`server.ErrAlreadyInState` when the running circuit is the one you are asking
+for, and otherwise with an error naming the fields that differ, so a reload
+cannot report success over a circuit still running its old hello key. Every
+field but the transport is compared, that one being an open socket that can
+never equal the one you are passing.
 
 ```go
 s.AddCircuit(ctx, server.CircuitConfig{Name: "eth1", Transport: tr, Level2: true})
