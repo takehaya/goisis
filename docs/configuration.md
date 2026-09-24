@@ -287,12 +287,20 @@ the signal on its own will not settle it.
 
 The file is read again on every `SIGHUP`, so its ownership and mode are access
 control for live routing state, not just for the next restart: whoever can
-write it can make this node originate a default route area-wide, and the
-shipped unit's `ExecReload=` reaches the same path through `systemctl reload
-goisisd`, which polkit can grant without granting root. Ship it root-owned and
-`0640` at most. What that does not reach is authentication: every `area-*` and
-`domain-*` key needs a restart, so a writable file buys the reachability this
-node advertises, never the ability to turn HMAC off.
+write it can attach this node's IGP to any interface on the box — the added
+circuit begins sending hellos under the configured area password, behind one
+`INFO` line — or detach it from one, which purges that circuit's pseudonode
+LSPs area-wide and drops every adjacency on it. The shipped unit's
+`ExecReload=` reaches the same path through `systemctl reload goisisd`, which
+polkit can grant without granting root. Ship it root-owned and `0640` at most.
+
+Authentication is only half out of that reach. The hello keys are per-circuit
+settings and a circuit whose settings change is a removal plus an addition, so
+a file that drops `hello-password` rebuilds the circuit with hello HMAC off and
+reports the reload applied; through 0.5.0 that took a restart, which is at
+least an event an operator can see. What a reload still cannot reach is the LSP
+and SNP keys: every `area-*` and `domain-*` key is declined and left for the
+next restart.
 
 ## Capabilities
 
@@ -430,12 +438,22 @@ increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
 of the reload: how many differences the last one left in it, and so what a
 restart would meet (see [Reloading](#reloading)) — the keys it would adopt, and
 the calls it would fail on, such as a circuit whose interface is not there. It
-is set on every reload, so a divergence an operator has resolved reads as zero
-rather than as its last value.
+is set on every reload that got as far as comparing the two files, so a
+divergence an operator has resolved reads as zero rather than as its last
+value. A file that fails to load or fails validation is refused before the
+comparison and leaves the gauge alone; the reload counter above is what moves
+then.
 
 ```
 goisis_config_reload_unapplied > 0
 ```
+
+It carries no label for *which* key is armed, and deliberately: the question it
+answers is whether the running configuration is this file, and the answer is
+the same however many keys are behind it. Each declined key is named in its own
+`WARN` line and each refused call in the error the reload returns, which is
+where an operator who needs to know which one goes — a label would repeat those
+names in a time series nobody alerts on one at a time.
 
 `goisis_lsp_lifetime_floored_total` counts received LSPs whose remaining
 lifetime RFC 7987 raised to MaxAge. That field sits outside the checksum and

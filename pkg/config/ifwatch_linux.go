@@ -219,6 +219,18 @@ func applyLinkEvent(ctx context.Context, s circuitSetter, name string, up bool, 
 // filter on which interfaces are ours, so its refusal of an unknown circuit is
 // this watcher's "not mine": netlink reports every interface on the box, and at
 // Warn each one of them would be an alarm about a working daemon.
+//
+// That filter used to be a map lookup here, and asking the server instead is a
+// deliberate trade. The cost is a management-loop round trip per netlink event
+// — measured at 4 µs on a free loop, and as long as the loop is busy when it is
+// not — for every interface on the box, the ones goisis does not run included.
+// The map was not merely cheaper, it was wrong: snapshotted once, it went stale
+// against the interfaces that matter the moment a reload changed the circuits
+// (see circuitSetter), and being right about those is what this watcher is for.
+// Against that, microseconds on events this rare do not show. What would change
+// the answer is a host with continuous veth churn, where the events stop being
+// rare: the fix there is to cache the slice resyncAll already reads every 30 s
+// and use it as a negative filter — not to snapshot at startup again.
 func logPush(logger *slog.Logger, what, name string, err error) {
 	switch {
 	case err == nil:

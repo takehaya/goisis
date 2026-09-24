@@ -15,6 +15,13 @@
 * A circuit can be added or removed with `SIGHUP`. A circuit whose settings
   change is rebuilt rather than mutated, so **its adjacency drops and re-forms**;
   the reload warns by name before it happens.
+* `goisis route` prints a `PREF` column, between `ALGO` and `METRIC`, naming
+  the preference class the route was selected on. Everything from `METRIC`
+  rightwards moves one column, so a script reading the table by position reads
+  the wrong field. `-o json` is the form that does not move.
+* `goisis flex-algo` prints a `CONSTRAINTS` column, before `PARTICIPANTS`,
+  carrying the elected definition's constraint sub-TLVs. `PARTICIPANTS` moves
+  one column for the same reason, and `-o json` is again the form that does not.
 
 ### Compatibility notes for Go embedders
 

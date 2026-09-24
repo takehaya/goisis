@@ -250,10 +250,22 @@ func (o *options) validate() error {
 	if len(o.circuits) > 255 {
 		return fmt.Errorf("goisis: %d circuits exceed the 255 pseudonode octets available", len(o.circuits))
 	}
+	// A name is a circuit's identity everywhere after this: s.circuitNamed,
+	// s.circuitPrefixes, the metric series Metrics.ForgetCircuit retires, the
+	// once-per-circuit warnings, and config.Diff's own circuit set. AddCircuit
+	// refuses a name it already runs, so a file naming one twice is a file the
+	// node can only reach by starting on it -- and a single DeleteCircuit then
+	// half-applies to the pair, taking one twin away and leaving the other
+	// running without its prefixes or its counters.
+	seen := make(map[string]bool, len(o.circuits))
 	for i := range o.circuits {
 		if err := o.circuits[i].validate(); err != nil {
 			return err
 		}
+		if seen[o.circuits[i].Name] {
+			return fmt.Errorf("goisis: circuit %q is configured twice", o.circuits[i].Name)
+		}
+		seen[o.circuits[i].Name] = true
 	}
 	return nil
 }
