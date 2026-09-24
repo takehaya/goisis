@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -60,6 +61,52 @@ func TestCircuitLimit(t *testing.T) {
 	}
 	if _, err := NewIsisServer(opts...); err == nil {
 		t.Error("256 circuits should exceed the pseudonode limit")
+	}
+}
+
+// TestValidateOptionsRunsEveryCircuitCheckThatNeedsNoTransport pins the line
+// ValidateOptions' doc draws. A reload validates through it and opens no
+// socket (pkg/config.Diff), and it rebuilds a changed circuit as a delete and
+// an add, so a circuit check only NewIsisServer reaches is one the reload runs
+// with the circuit already deleted. The MTU checks are the deliberate
+// exception: a circuit's MTU comes from its transport, and only a restart has
+// one to ask.
+func TestValidateOptionsRunsEveryCircuitCheckThatNeedsNoTransport(t *testing.T) {
+	circuits := func(cfgs ...CircuitConfig) []ServerOption {
+		opts := make([]ServerOption, 0, len(cfgs))
+		for _, c := range cfgs {
+			c.Transport = datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500)
+			opts = append(opts, WithCircuit(c))
+		}
+		return opts
+	}
+	// One more than the pseudonode space holds, which allocCircuitIDs refuses
+	// on the last circuit and ValidateOptions refuses on the count.
+	many := make([]CircuitConfig, 256)
+	for i := range many {
+		many[i] = CircuitConfig{Name: fmt.Sprintf("c%d", i)}
+	}
+
+	for name, tc := range map[string]struct {
+		opts []ServerOption
+		ok   bool
+	}{
+		"an ordinary circuit":                    {circuits(CircuitConfig{Name: "c"}), true},
+		"no interface name":                      {circuits(CircuitConfig{}), false},
+		"priority above the 127 ceiling":         {circuits(CircuitConfig{Name: "c", Priority: u8(200)}), false},
+		"priority at the ceiling":                {circuits(CircuitConfig{Name: "c", Priority: u8(127)}), true},
+		"hello accept passwords with no primary": {circuits(CircuitConfig{Name: "c", HelloAcceptPasswords: []string{"old"}}), false},
+		"a hello key rotation that keeps one":    {circuits(CircuitConfig{Name: "c", HelloPassword: "new", HelloAcceptPasswords: []string{"old"}}), true},
+		"more circuits than pseudonode octets":   {circuits(many...), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateOptions(tc.opts...); (err == nil) != tc.ok {
+				t.Errorf("ValidateOptions err = %v, want ok=%v", err, tc.ok)
+			}
+			if _, err := NewIsisServer(tc.opts...); (err == nil) != tc.ok {
+				t.Errorf("NewIsisServer err = %v, want ok=%v: the two paths disagree on the same file", err, tc.ok)
+			}
+		})
 	}
 }
 

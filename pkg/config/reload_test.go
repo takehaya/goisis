@@ -424,6 +424,67 @@ func startupAccepts(t *testing.T, yaml string) bool {
 	return err == nil
 }
 
+// TestAReloadRefusesEveryCircuitFileARestartRefuses is the circuit half of the
+// contract above, and the direction that costs the most when it is missing.
+// Diff expresses a changed circuit as a delete plus an add, and deletions go
+// first, so a per-circuit check that only addCircuit runs is a check that runs
+// after the delete has landed: the file is refused, and the circuit it named is
+// gone. On a single-circuit node that is the whole IGP, from a file the daemon
+// would simply have refused to start on. So every circuit check that needs no
+// transport has to be reachable from Diff, and a file that fails one has to
+// leave the running circuits exactly as they were.
+func TestAReloadRefusesEveryCircuitFileARestartRefuses(t *testing.T) {
+	const base = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+    metric: 10
+`
+	for name, tc := range map[string]struct {
+		// added is appended to base: an extra key on the circuit, or a
+		// second circuit entry.
+		added   string
+		startup bool
+	}{
+		"priority above the 127 ceiling":        {"    priority: 200\n", false},
+		"priority at the ceiling":               {"    priority: 127\n", true},
+		"accept passwords with no primary":      {"    hello-accept-passwords:\n      - old\n", false},
+		"a key rotation that keeps its primary": {"    hello-password: new\n    hello-accept-passwords:\n      - old\n", true},
+		"a circuit entry with no interface key": {"  - level: \"2\"\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			next := base + tc.added
+			if got := startupAccepts(t, next); got != tc.startup {
+				t.Fatalf("goisisd starts on this file = %v, want %v; the case no longer tests what it names", got, tc.startup)
+			}
+			cfg, s, path := runningServer(t, base)
+			before := circuitNames(t, s)
+			if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Reload(t.Context(), s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if tc.startup {
+				if err != nil {
+					t.Fatalf("goisisd starts on this file, but a reload of the very same file fails: %v", err)
+				}
+				return
+			}
+			if _, derr := Diff(loadConfig(t, base), loadConfig(t, next)); derr == nil {
+				t.Error("Diff accepted a file a restart refuses, so the reload reached apply")
+			}
+			if err == nil {
+				t.Fatal("the reload applied a file goisisd would not start on")
+			}
+			if errors.Is(err, ErrPartiallyApplied) {
+				t.Fatalf("the reload found the defect only after it had begun mutating: %v", err)
+			}
+			if after := circuitNames(t, s); !reflect.DeepEqual(before, after) {
+				t.Fatalf("a refused reload left circuits %v, want the running set %v untouched", after, before)
+			}
+		})
+	}
+}
+
 // TestDiffOpensNoSockets pins what Diff is: a pure function. It validates the
 // whole file, which means it walks the circuits too -- so the one impure step
 // in Options is replaced, not taken. The circuits a reload adds are opened
