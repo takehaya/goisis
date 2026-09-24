@@ -1,6 +1,7 @@
 package server
 
 import (
+	"container/heap"
 	"net/netip"
 	"slices"
 	"sort"
@@ -228,6 +229,9 @@ func lspParticipatesInAlgo(e *lspEntry, algo uint8) bool {
 type tentEntry struct {
 	id       packet.NodeID
 	distance uint32
+	// index is this entry's position in the tentative set's heap, maintained
+	// by container/heap so that relax can lower a distance in place.
+	index int
 	// firstHops are the directly-adjacent neighbor system IDs on the shortest
 	// path(s) to this node (empty for self and for pseudonodes reached
 	// directly from self before a real hop).
@@ -254,12 +258,10 @@ func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) m
 	dist := map[packet.NodeID]uint32{}
 	hops := map[packet.NodeID]map[packet.SystemID]bool{}
 	done := map[packet.NodeID]bool{}
-	tent := map[packet.NodeID]*tentEntry{
-		self: {id: self, distance: 0, firstHops: map[packet.SystemID]bool{}},
-	}
+	tent := newTentSet(self)
 
-	for len(tent) > 0 {
-		cur := popMin(tent)
+	for tent.len() > 0 {
+		cur := tent.pop()
 		done[cur.id] = true
 		dist[cur.id] = cur.distance
 		hops[cur.id] = cur.firstHops
@@ -286,7 +288,7 @@ func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) m
 				continue
 			}
 			fh := firstHopsFor(cur, e.to)
-			relax(tent, e.to, nd, fh)
+			tent.relax(e.to, nd, fh)
 		}
 	}
 
@@ -443,17 +445,52 @@ func twoWay(nodes map[packet.NodeID]*spfNode, a, b packet.NodeID) bool {
 	return false
 }
 
-// relax updates the tentative distance/first-hops for a node.
-func relax(tent map[packet.NodeID]*tentEntry, id packet.NodeID, d uint32, fh map[packet.SystemID]bool) {
-	e, ok := tent[id]
+// tentSet is Dijkstra's tentative set: a binary heap ordered by distance for
+// the pop, and a map beside it for the lookup relax needs.
+//
+// The pop was a linear scan over the map until profiling said otherwise. It is
+// the whole difference between the two shapes BenchmarkComputeSPF shows: 50 to
+// 200 nodes is linear because building the topology dominates, and 200 to 1000
+// was 33x because the scan had taken over. A heap puts the second regime back
+// on the first's curve.
+type tentSet struct {
+	heap  tentHeap
+	index map[packet.NodeID]*tentEntry
+}
+
+func newTentSet(self packet.NodeID) *tentSet {
+	e := &tentEntry{id: self, distance: 0, firstHops: map[packet.SystemID]bool{}}
+	return &tentSet{
+		heap:  tentHeap{e},
+		index: map[packet.NodeID]*tentEntry{self: e},
+	}
+}
+
+func (t *tentSet) len() int { return len(t.heap) }
+
+// pop removes and returns the minimum-distance entry.
+func (t *tentSet) pop() *tentEntry {
+	e := heap.Pop(&t.heap).(*tentEntry)
+	delete(t.index, e.id)
+	return e
+}
+
+// relax updates the tentative distance and first hops for a node. A lowered
+// distance moves the entry in the heap; an equal one only merges first hops,
+// which the ordering does not depend on.
+func (t *tentSet) relax(id packet.NodeID, d uint32, fh map[packet.SystemID]bool) {
+	e, ok := t.index[id]
 	if !ok {
-		tent[id] = &tentEntry{id: id, distance: d, firstHops: cloneHops(fh)}
+		e = &tentEntry{id: id, distance: d, firstHops: cloneHops(fh)}
+		t.index[id] = e
+		heap.Push(&t.heap, e)
 		return
 	}
 	switch {
 	case d < e.distance:
 		e.distance = d
 		e.firstHops = cloneHops(fh)
+		heap.Fix(&t.heap, e.index)
 	case d == e.distance:
 		for h := range fh {
 			e.firstHops[h] = true
@@ -461,21 +498,23 @@ func relax(tent map[packet.NodeID]*tentEntry, id packet.NodeID, d uint32, fh map
 	}
 }
 
-// popMin removes and returns the minimum-distance entry from tent.
-//
-// This is a linear scan (O(V) per pop, O(V^2) overall), chosen deliberately:
-// for a single-area L2 MVP the vertex count is small and the constant factors
-// beat a heap. Swap in a priority queue only if profiling on large areas shows
-// SPF as a bottleneck.
-func popMin(tent map[packet.NodeID]*tentEntry) *tentEntry {
-	var best *tentEntry
-	for _, e := range tent {
-		if best == nil || e.distance < best.distance {
-			best = e
-		}
-	}
-	delete(tent, best.id)
-	return best
+// tentHeap orders tentative entries by distance. Ties are left to the heap's
+// own arbitrary order: equal-distance entries contribute the same first hops
+// whichever is expanded first, which is what makes the ECMP merge in relax
+// order-independent.
+type tentHeap []*tentEntry
+
+func (h tentHeap) Len() int           { return len(h) }
+func (h tentHeap) Less(i, j int) bool { return h[i].distance < h[j].distance }
+func (h tentHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i]; h[i].index, h[j].index = i, j }
+func (h *tentHeap) Push(x any)        { e := x.(*tentEntry); e.index = len(*h); *h = append(*h, e) }
+func (h *tentHeap) Pop() any {
+	old := *h
+	n := len(old)
+	e := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return e
 }
 
 func cloneHops(h map[packet.SystemID]bool) map[packet.SystemID]bool {
