@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.1](https://github.com/takehaya/goisis/compare/v0.6.0...v0.6.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **config:** stop a refused reload rebuilding a circuit that already matches ([cccdb2a](https://github.com/takehaya/goisis/commit/cccdb2a8e4eab53e8bb8d712b67e512bbb29d419))
+* **config:** validate a circuit the way a restart validates it ([7d4da4a](https://github.com/takehaya/goisis/commit/7d4da4a4677cb41d2ca578abed46ee38c5979f4a))
+* **server:** compare a circuit, and own the transport on every path ([2bbb541](https://github.com/takehaya/goisis/commit/2bbb541f157a688f443aa8b620096f3eb2e3dad0))
+* **server:** flush a deleted circuit's purge where it can still be sent ([d179155](https://github.com/takehaya/goisis/commit/d179155307661cba9ffb2228e0f9d2440659c577))
+* **server:** refuse a duplicate circuit name at startup, and say what a ([e436bf4](https://github.com/takehaya/goisis/commit/e436bf431754243b664fc52a6af2bd979c6d0a8f))
+
 ## [0.6.0](https://github.com/takehaya/goisis/compare/v0.5.0...v0.6.0) (2026-09-24)
 
 ### Upgrade notes for operators
