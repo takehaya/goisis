@@ -33,7 +33,17 @@ const resyncInterval = 30 * time.Second
 
 // circuitSetter is the part of *server.IsisServer the watcher drives. It exists
 // so the event mapping can be exercised without opening a netlink socket.
+//
+// ListCircuits is here because the server is the watcher's source of truth for
+// which interfaces are ours. A set snapshotted at startup was correct only
+// while the circuits could not change: a reload can now add and remove them
+// (pkg/config.Reload), so a snapshot would leave an added circuit unfollowed --
+// never learning an address change, never losing its adjacencies on carrier
+// loss, which is the failure this watcher exists for -- and would warn once per
+// netlink event, forever, about a removed one. Sharing a map with the reload
+// goroutine instead would be a data race.
 type circuitSetter interface {
+	ListCircuits(ctx context.Context) ([]server.CircuitInfo, error)
 	SetCircuitAddresses(ctx context.Context, name string, v4, v6 []netip.Addr, connected []netip.Prefix) error
 	SetCircuitLinkState(ctx context.Context, name string, up bool) error
 }
@@ -52,12 +62,7 @@ type circuitSetter interface {
 // asserting a link state nobody asked about would risk tearing circuits down at
 // boot over a driver that reports carrier late. After that, events are the
 // fast path and the periodic re-read below is what makes a lost one survivable.
-func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, logger *slog.Logger) error {
-	watched := map[string]bool{}
-	for _, cc := range cfg.Circuits {
-		watched[cc.Interface] = true
-	}
-
+func WatchInterfaces(ctx context.Context, s *server.IsisServer, logger *slog.Logger) error {
 	// Closing done unsubscribes and lets the library's reader goroutines exit.
 	done := make(chan struct{})
 	defer close(done)
@@ -107,7 +112,7 @@ func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, log
 		}
 	}()
 
-	return watchLoop(ctx, s, watched, addrCh, linkCh, resync, logger)
+	return watchLoop(ctx, s, addrCh, linkCh, resync, logger)
 }
 
 // watchLoop maps subscription events onto the server until ctx is done.
@@ -119,13 +124,13 @@ func WatchInterfaces(ctx context.Context, s *server.IsisServer, cfg *Config, log
 // looks healthy until the next cable pull. Ignoring the close is not an option
 // either: the zero LinkUpdate has a nil Link and would panic in Attrs(), and
 // the address case would spin on the closed channel.
-func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate, resync <-chan struct{}, logger *slog.Logger) error {
+func watchLoop(ctx context.Context, s circuitSetter, addrCh <-chan netlink.AddrUpdate, linkCh <-chan netlink.LinkUpdate, resync <-chan struct{}, logger *slog.Logger) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-resync:
-			resyncAll(ctx, s, watched, logger)
+			resyncAll(ctx, s, logger)
 		case u, ok := <-addrCh:
 			if !ok {
 				return errors.New("interface address subscription closed")
@@ -134,7 +139,7 @@ func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, ad
 			if err != nil {
 				continue // the interface is already gone; the link event covers it
 			}
-			applyAddrEvent(ctx, s, watched, ifi.Name, logger)
+			applyAddrEvent(ctx, s, ifi.Name, logger)
 		case u, ok := <-linkCh:
 			if !ok {
 				return errors.New("link subscription closed")
@@ -143,7 +148,7 @@ func watchLoop(ctx context.Context, s circuitSetter, watched map[string]bool, ad
 			// A deleted link carries its last flags, which usually still say
 			// up; the message type is the only signal that it is gone.
 			up := u.Header.Type != unix.RTM_DELLINK && linkUp(attrs)
-			applyLinkEvent(ctx, s, watched, attrs.Name, up, logger)
+			applyLinkEvent(ctx, s, attrs.Name, up, logger)
 		}
 	}
 }
@@ -160,29 +165,39 @@ func linkUp(attrs *netlink.LinkAttrs) bool {
 	return attrs.OperState == netlink.OperUp
 }
 
-// resyncAll re-reads every watched interface and pushes its state, repairing a
-// circuit whose last event was dropped. The setters are idempotent, so a
+// resyncAll re-reads every configured interface and pushes its state, repairing
+// a circuit whose last event was dropped. The setters are idempotent, so a
 // resync that finds nothing changed costs two no-ops per circuit.
+//
+// The circuit set is read from the server each time rather than remembered, so
+// a circuit a reload added is followed from the next tick and one it removed is
+// dropped (see circuitSetter).
 //
 // An interface the kernel no longer has is reported down, the same conclusion
 // RTM_DELLINK carries — that message going missing is precisely what this
 // repairs. Any other error means the state could not be read, not that it
 // changed, so the interface is left alone rather than torn down on a transient
 // netlink failure.
-func resyncAll(ctx context.Context, s circuitSetter, watched map[string]bool, logger *slog.Logger) {
-	for name := range watched {
+func resyncAll(ctx context.Context, s circuitSetter, logger *slog.Logger) {
+	circuits, err := s.ListCircuits(ctx)
+	if err != nil {
+		logger.Warn("resync: cannot read the configured circuits", "error", err)
+		return
+	}
+	for _, c := range circuits {
+		name := c.Interface
 		link, err := netlink.LinkByName(name)
 		if err != nil {
 			var notFound netlink.LinkNotFoundError
 			if errors.As(err, &notFound) {
-				applyLinkEvent(ctx, s, watched, name, false, logger)
+				applyLinkEvent(ctx, s, name, false, logger)
 				continue
 			}
 			logger.Warn("resync interface state", "circuit", name, "error", err)
 			continue
 		}
-		applyLinkEvent(ctx, s, watched, name, linkUp(link.Attrs()), logger)
-		applyAddrEvent(ctx, s, watched, name, logger)
+		applyLinkEvent(ctx, s, name, linkUp(link.Attrs()), logger)
+		applyAddrEvent(ctx, s, name, logger)
 	}
 }
 
@@ -190,22 +205,26 @@ func resyncAll(ctx context.Context, s circuitSetter, watched map[string]bool, lo
 // server. Netlink reports one change as several messages, and re-reading is
 // both cheap and idempotent (an unchanged set is a no-op on the server), so
 // every event is handled rather than debounced.
-func applyAddrEvent(ctx context.Context, s circuitSetter, watched map[string]bool, name string, logger *slog.Logger) {
-	if !watched[name] {
-		return
-	}
+func applyAddrEvent(ctx context.Context, s circuitSetter, name string, logger *slog.Logger) {
 	v4, v6 := interfaceAddrs(name)
-	if err := s.SetCircuitAddresses(ctx, name, v4, v6, connectedPrefixes(name)); err != nil {
-		logger.Warn("apply interface address change", "circuit", name, "error", err)
-	}
+	logPush(logger, "apply interface address change", name, s.SetCircuitAddresses(ctx, name, v4, v6, connectedPrefixes(name)))
 }
 
 // applyLinkEvent pushes an interface's carrier state to the server.
-func applyLinkEvent(ctx context.Context, s circuitSetter, watched map[string]bool, name string, up bool, logger *slog.Logger) {
-	if !watched[name] {
-		return
-	}
-	if err := s.SetCircuitLinkState(ctx, name, up); err != nil {
-		logger.Warn("apply interface link change", "circuit", name, "error", err)
+func applyLinkEvent(ctx context.Context, s circuitSetter, name string, up bool, logger *slog.Logger) {
+	logPush(logger, "apply interface link change", name, s.SetCircuitLinkState(ctx, name, up))
+}
+
+// logPush logs what a push into the server returned. The server is the only
+// filter on which interfaces are ours, so its refusal of an unknown circuit is
+// this watcher's "not mine": netlink reports every interface on the box, and at
+// Warn each one of them would be an alarm about a working daemon.
+func logPush(logger *slog.Logger, what, name string, err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, server.ErrUnknownCircuit):
+		logger.Debug(what+": not a configured circuit", "interface", name)
+	default:
+		logger.Warn(what, "circuit", name, "error", err)
 	}
 }

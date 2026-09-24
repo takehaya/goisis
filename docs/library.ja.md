@@ -161,7 +161,10 @@ s.SetCircuitLinkState(ctx, "eth0", false)
 にピアから消させ、直結サブネットのマークを外し、トランスポートを閉じます
 (トランスポートの所有権は `Serve` 以降インスタンス側にあります)。サーキットの
 リーダ goroutine は待ちません。1 秒以内に自分で終了し、既にキューに入っていた
-フレームは捨てられます。設定に無いサーキットの削除はエラーです。
+フレームは捨てられ、`Metrics` シンクのラベル系列も引退させます
+(`ForgetCircuit`)。設定に無いサーキットの削除は `server.ErrAlreadyInState` と
+して拒否するので、バッチを再送する呼び出し側はノードを別の状態に残した拒否と
+区別できます。
 
 対になるのが `AddCircuit` です。トランスポートは呼び出し側で開いて
 `CircuitConfig` に入れて渡します。管理ループ上で開くと、その syscall の裏で他の
@@ -172,7 +175,9 @@ s.SetCircuitLinkState(ctx, "eth0", false)
 最初の hello は即座に送られ、戻る前に再 originate するので、MTU のより小さい
 サーキットなら自 LSP の再フラグメントが、どのサーキットも居なかったレベルなら
 その node LSP が、制御が戻った時点で済んでいます。既に設定済みの名前は置き換え
-ではなく拒否されます。
+ではなく拒否され、これも `server.ErrAlreadyInState` です。動作中のサーキットの
+トランスポートは開いたソケットであり、渡されたものと等しくなりえないので、
+比較するのは名前だけです。
 
 ```go
 s.AddCircuit(ctx, server.CircuitConfig{Name: "eth1", Transport: tr, Level2: true})

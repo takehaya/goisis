@@ -209,4 +209,25 @@ func (p *Prometheus) InterLevelPrefixes(direction string, n int) {
 	p.interLevel.WithLabelValues(direction).Set(float64(n))
 }
 
+// ForgetCircuit implements server.Metrics: it drops every child of every
+// collector that carries a "circuit" label.
+//
+// DeletePartialMatch and not DeleteLabelValues, which takes the complete label
+// tuple in declaration order: this package would then have to enumerate the
+// drop reasons, the transmit steps and the PDU types that pkg/server keeps as
+// unexported constants, and would silently miss a series the first time one of
+// those sets grew. Matching on the label that identifies the circuit deletes
+// whatever is there.
+func (p *Prometheus) ForgetCircuit(circuit string) {
+	labels := prometheus.Labels{"circuit": circuit}
+	for _, v := range []interface {
+		DeletePartialMatch(prometheus.Labels) int
+	}{
+		p.adjTransitions, p.floodTx, p.floodDrops, p.pduRx, p.pduDrops,
+		p.adjacencies, p.pduTxErrors, p.pduRxErrors, p.lifetimeFloors,
+	} {
+		v.DeletePartialMatch(labels)
+	}
+}
+
 var _ server.Metrics = (*Prometheus)(nil)

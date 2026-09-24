@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -89,19 +90,27 @@ func TestDiffAppliesRuntimeKeysAndNamesTheRest(t *testing.T) {
 		},
 		"circuit added": {
 			next: reloadBase + "  - interface: mock1\n",
-			want: Changes{Ignored: []string{"circuits: mock1 added"}},
+			want: Changes{AddCircuits: []CircuitConfig{{Interface: "mock1"}}},
 		},
 		// Retiming a circuit, or moving it between levels, is the edit an
-		// operator is likeliest to make: taking the circuit apart and building
-		// it again is a restart's job, so the reload has to say so rather than
-		// run the rest of the file and leave the circuit as it was.
+		// operator is likeliest to make, and it comes out as a removal and an
+		// addition: no runtime call changes a circuit's level, timers or keys,
+		// and almost every one of them drops the adjacency by protocol rule
+		// anyway. The deletion is first so the name and the pseudonode octet
+		// are free before the addition asks for them.
 		"circuit changed": {
 			next: strings.Replace(reloadBase, "    level: \"2\"\n", "    level: \"1\"\n", 1),
-			want: Changes{Ignored: []string{"circuits: mock0 changed"}},
+			want: Changes{
+				DeleteCircuits: []string{"mock0"},
+				AddCircuits:    []CircuitConfig{{Interface: "mock0", Level: "1"}},
+			},
 		},
 		"circuit replaced": {
 			next: strings.Replace(reloadBase, "  - interface: mock0\n", "  - interface: mock1\n", 1),
-			want: Changes{Ignored: []string{"circuits: mock1 added", "circuits: mock0 removed"}},
+			want: Changes{
+				DeleteCircuits: []string{"mock0"},
+				AddCircuits:    []CircuitConfig{{Interface: "mock1", Level: "2"}},
+			},
 		},
 		"system id changed": {
 			next: strings.Replace(reloadBase, "0000.0000.0001.00", "0000.0000.0009.00", 1),
@@ -218,10 +227,11 @@ func TestDiffNamesEveryConfigKey(t *testing.T) {
 	}
 }
 
-// TestReloadAppliesPrefixesAndLeavesCircuitsToARestart drives the whole path
-// against a running server: the file's new prefix reaches the node's own LSP,
-// the circuit the file grew does not appear, and it is named in the log.
-func TestReloadAppliesPrefixesAndLeavesCircuitsToARestart(t *testing.T) {
+// TestReloadAppliesPrefixesAndCircuitsFromOneFile drives the whole path against
+// a running server: the file's new prefix reaches the node's own LSP, the
+// circuit the file grew appears, and the configuration the reload returns is
+// the file, so a second signal has nothing left to do.
+func TestReloadAppliesPrefixesAndCircuitsFromOneFile(t *testing.T) {
 	const initial = `net: 49.0001.1921.6800.1001.00
 prefixes:
   - 192.0.2.0/24
@@ -240,35 +250,12 @@ circuits:
   - interface: mock1
     level: "2"
 `
-	path := filepath.Join(t.TempDir(), "goisisd.yaml")
-	write := func(s string) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write(initial)
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
-		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
-	})
-	opts, err := cfg.Options()
-	if err != nil {
-		t.Fatalf("Options: %v", err)
-	}
-	s, err := server.NewIsisServer(opts...)
-	if err != nil {
-		t.Fatalf("NewIsisServer: %v", err)
-	}
+	cfg, s, path := runningServer(t, initial)
 	ctx := t.Context()
-	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
-
-	var logs bytes.Buffer
-	write(next)
-	running, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	running, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -277,29 +264,48 @@ circuits:
 	if ownLSPHas(t, s, "192.0.2.0/24") {
 		t.Error("the prefix the file dropped is still advertised")
 	}
-	circuits, err := s.ListCircuits(ctx)
-	if err != nil {
-		t.Fatalf("ListCircuits: %v", err)
-	}
-	if len(circuits) != 1 || circuits[0].Interface != "mock0" {
-		t.Errorf("circuits = %+v, want only mock0: a reload never adds one", circuits)
-	}
-	if !strings.Contains(logs.String(), "mock1") {
-		t.Errorf("the ignored circuit is not named in the log:\n%s", logs.String())
+	if got := circuitNames(t, s); !slices.Equal(got, []string{"mock0", "mock1"}) {
+		t.Errorf("circuits = %v, want both the file names", got)
 	}
 
-	// The returned configuration is what the daemon runs, not what the file
-	// says: the circuit it could not add is still absent from it, so the next
-	// reload warns about it again instead of forgetting it.
+	// The returned configuration is what the daemon runs, and it now runs the
+	// whole file: a further signal has nothing to apply and nothing to warn
+	// about.
 	again, err := Diff(running, loadConfigFile(t, path))
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
-	if !slices.Contains(again.Ignored, "circuits: mock1 added") {
-		t.Errorf("a second reload reports %v, want the circuit named again", again.Ignored)
+	if !reflect.DeepEqual(again, Changes{}) {
+		t.Errorf("a second reload still diffs %+v: the baseline never adopted the file", again)
 	}
-	if len(again.AddPrefixes)+len(again.DeletePrefixes) != 0 {
-		t.Errorf("a second reload re-applies prefixes: %+v", again)
+}
+
+// circuitNames lists the configured circuits by interface name, in order.
+func circuitNames(t *testing.T, s *server.IsisServer) []string {
+	t.Helper()
+	circuits, err := s.ListCircuits(t.Context())
+	if err != nil {
+		t.Fatalf("ListCircuits: %v", err)
+	}
+	out := make([]string, len(circuits))
+	for i, c := range circuits {
+		out[i] = c.Interface
+	}
+	return out
+}
+
+// mockTransports is a Config.OpenCircuit that hands out a *new* mock transport
+// on every call over the named interfaces. A shared one would not do: a circuit
+// a reload rebuilds gets its transport from a second open, and the first was
+// closed by the deletion that came before it.
+func mockTransports(names ...string) func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+	var n byte
+	return func(ifname string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+		if !slices.Contains(names, ifname) {
+			return nil, nil, nil, fmt.Errorf("no mock circuit for %q", ifname)
+		}
+		n++
+		return datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, n}, 1500), nil, nil, nil
 	}
 }
 
@@ -419,11 +425,11 @@ func startupAccepts(t *testing.T, yaml string) bool {
 }
 
 // TestDiffOpensNoSockets pins what Diff is: a pure function. It validates the
-// whole file, which means it walks the circuits too, and a circuit's transport
-// is a restart's to open -- so the one impure step in Options is replaced, not
-// taken. A Diff that opened sockets would hand every reload a handful of
-// AF_PACKET file descriptors to leak, and a validation that could fail because
-// an interface is down.
+// whole file, which means it walks the circuits too -- so the one impure step
+// in Options is replaced, not taken. The circuits a reload adds are opened
+// while the batch is applied, and Reload calls Diff before it decides to apply
+// anything: a Diff that opened sockets would take one per interface for a
+// reload then refused on an unrelated key, and leak every one of them.
 func TestDiffOpensNoSockets(t *testing.T) {
 	old := loadConfig(t, reloadBase)
 	next := loadConfig(t, strings.Replace(reloadBase, "192.0.2.0/24", "198.51.100.0/24", 1))
@@ -941,8 +947,9 @@ circuits:
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
 	}
-	if n := len(ch.DeleteLocators) + len(ch.DeleteFlexAlgos) + len(ch.AddFlexAlgos) +
-		len(ch.AddLocators) + len(ch.DeletePrefixes) + len(ch.AddPrefixes); n != 1 {
+	if n := len(ch.DeleteCircuits) + len(ch.DeleteLocators) + len(ch.DeleteFlexAlgos) +
+		len(ch.AddFlexAlgos) + len(ch.AddLocators) + len(ch.DeletePrefixes) +
+		len(ch.AddPrefixes) + len(ch.AddCircuits); n != 1 {
 		t.Fatalf("the reload makes %d calls, not the single refused one this test is about: %+v", n, ch)
 	}
 
@@ -1048,9 +1055,7 @@ func runningServer(t *testing.T, yaml string, extra ...server.ServerOption) (*Co
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
-		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
-	})
+	cfg.OpenCircuit = mockTransports("mock0", "mock1", "mock2")
 	opts, err := cfg.Options()
 	if err != nil {
 		t.Fatalf("Options: %v", err)
@@ -1126,11 +1131,12 @@ circuits:
 	}
 }
 
-// TestReloadNamesAChangedSecretWithoutLoggingIt pins the contract Changes.Ignored
-// is written under: it carries keys and never values, because half of these keys
-// are authentication secrets. An operator rotating a password sends SIGHUP,
-// gets told the key needs a restart, and must not find the password itself in
-// the daemon's log -- wherever that log is shipped to.
+// TestReloadNamesAChangedSecretWithoutLoggingIt pins the contract every reload
+// warning is written under: it carries keys and circuit names, never values,
+// because half of these keys are authentication secrets. An operator rotating a
+// password sends SIGHUP -- the area key is declined, the hello key is applied by
+// rebuilding the circuit -- and must not find either password in the daemon's
+// log, wherever that log is shipped to.
 func TestReloadNamesAChangedSecretWithoutLoggingIt(t *testing.T) {
 	const (
 		oldArea  = "s3cr3t-area"
@@ -1157,9 +1163,9 @@ circuits:
 	}
 
 	// Both rotations are named -- the area password by key, the hello password
-	// as the circuit it belongs to -- so the log really did have both values in
-	// reach when it wrote the warnings.
-	for _, key := range []string{"area-password", "circuits: mock0 changed"} {
+	// as the circuit that is rebuilt to carry it -- so the log really did have
+	// both values in reach when it wrote the warnings.
+	for _, key := range []string{"area-password", "its adjacencies will drop"} {
 		if !strings.Contains(logs.String(), key) {
 			t.Fatalf("the log does not name %q, so it never came near either secret:\n%s", key, logs.String())
 		}
@@ -1256,5 +1262,179 @@ func TestAReloadReturnsWhenTheManagementLoopNeverAnswers(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Reload did not return; the outcome report is unbounded")
+	}
+}
+
+// circuitOpener is a Config.OpenCircuit that keeps every transport it handed
+// out, per interface, and can refuse one the way a NIC that is not there yet
+// does. Only the goroutine running the reload calls it.
+type circuitOpener struct {
+	refuse map[string]bool
+	opened map[string][]*datalink.MockTransport
+	n      byte
+}
+
+func (o *circuitOpener) open(ifname string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+	if o.refuse[ifname] {
+		return nil, nil, nil, fmt.Errorf("open %s: no such device", ifname)
+	}
+	o.n++
+	tr := datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, o.n}, 1500)
+	if o.opened == nil {
+		o.opened = map[string][]*datalink.MockTransport{}
+	}
+	o.opened[ifname] = append(o.opened[ifname], tr)
+	return tr, nil, nil, nil
+}
+
+// closedTransport reports whether a mock transport has been closed. Send and
+// not Recv: Recv blocks on a transport that is still open, so a regression
+// would hang the test instead of failing it.
+func closedTransport(tr *datalink.MockTransport) bool {
+	return errors.Is(tr.Send(packet.SNPA{}, nil), datalink.ErrClosed)
+}
+
+// TestReloadAddsACircuitAndRetriesTheOneThatCannotOpen is what a reload owes an
+// operator who adds circuits to the file while the node runs. It pins four
+// decisions together because each is what makes the next one worth anything.
+//
+// An interface that cannot be opened -- written into the file before it exists,
+// or a minute from coming up -- costs its own circuit and nothing else: apply
+// issues the whole batch, so a sibling circuit in the same file still lands.
+// The reload is then ErrPartiallyApplied and keeps its baseline, so the next
+// signal re-diffs the whole change and tries the refused one again. That retry
+// re-issues the addition that already landed, which the server answers as
+// ErrAlreadyInState -- handing back the transport it did not take, which the
+// reload must close or every further signal leaks a socket.
+func TestReloadAddsACircuitAndRetriesTheOneThatCannotOpen(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	const next = initial + `  - interface: mock1
+    level: "2"
+  - interface: mock2
+    level: "2"
+`
+	o := &circuitOpener{refuse: map[string]bool{"mock1": true}}
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(initial)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = o.open
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	ctx := t.Context()
+	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	write(next)
+	running, err := Reload(ctx, s, cfg, path, logger)
+	if !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want an ErrPartiallyApplied: an interface that cannot be opened is not a reload that ran", err)
+	}
+	if got := circuitNames(t, s); !slices.Equal(got, []string{"mock0", "mock2"}) {
+		t.Errorf("circuits = %v, want mock2 beside mock0: one interface that cannot be opened must not take the rest of the batch with it", got)
+	}
+
+	again, err := Diff(running, loadConfigFile(t, path))
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(again.AddCircuits) != 2 {
+		t.Fatalf("the next signal adds %+v, want both circuits again: the baseline advanced over a change the node never took", again.AddCircuits)
+	}
+
+	// The interface came up. One signal, and the node is running the file.
+	o.refuse = nil
+	running, err = Reload(ctx, s, running, path, logger)
+	if err != nil {
+		t.Fatalf("the retry was refused: %v", err)
+	}
+	if got := circuitNames(t, s); !slices.Equal(got, []string{"mock0", "mock2", "mock1"}) {
+		t.Errorf("circuits = %v, want all three the file names", got)
+	}
+	if again, err := Diff(running, loadConfigFile(t, path)); err != nil {
+		t.Fatalf("Diff: %v", err)
+	} else if !reflect.DeepEqual(again, Changes{}) {
+		t.Errorf("a further signal still diffs %+v: the baseline never adopted the file", again)
+	}
+
+	// The retry opened mock2 a second time and the server refused it, so that
+	// socket is the reload's to close -- while the one the circuit is running
+	// on is not.
+	mock2 := o.opened["mock2"]
+	if len(mock2) != 2 {
+		t.Fatalf("mock2 was opened %d times, want 2 (the reload and its retry)", len(mock2))
+	}
+	if !closedTransport(mock2[1]) {
+		t.Error("the transport the server refused was left open: every retry over a circuit the node already has leaks one")
+	}
+	if closedTransport(mock2[0]) {
+		t.Error("the running circuit's transport was closed by the retry")
+	}
+}
+
+// TestReloadRebuildsAChangedCircuitAndDropsOneTheFileStoppedNaming pins the
+// half of the batch order that only shows when both ends of it run. A circuit
+// whose definition changed is a removal and an addition under one name, so the
+// removals have to be issued first -- against a node that still holds the old
+// circuit, AddCircuit refuses the name, and the reload ends part applied with
+// the circuit gone. A circuit the file stopped naming is removed in the same
+// pass and stays removed.
+func TestReloadRebuildsAChangedCircuitAndDropsOneTheFileStoppedNaming(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+    metric: 10
+  - interface: mock1
+    level: "2"
+`
+	const next = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+    metric: 55
+`
+	cfg, s, path := runningServer(t, initial)
+	ctx := t.Context()
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	running, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	circuits, err := s.ListCircuits(ctx)
+	if err != nil {
+		t.Fatalf("ListCircuits: %v", err)
+	}
+	if len(circuits) != 1 || circuits[0].Interface != "mock0" {
+		t.Fatalf("circuits = %+v, want only the one the file still names", circuits)
+	}
+	if circuits[0].Metric != 55 {
+		t.Errorf("mock0 metric = %d, want the file's 55: the circuit was not rebuilt", circuits[0].Metric)
+	}
+	if again, err := Diff(running, loadConfigFile(t, path)); err != nil {
+		t.Fatalf("Diff: %v", err)
+	} else if !reflect.DeepEqual(again, Changes{}) {
+		t.Errorf("a further signal still diffs %+v", again)
 	}
 }

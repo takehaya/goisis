@@ -209,10 +209,10 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// setupVeth creates a veth pair and returns the name of one end, so the daemon
-// under test has a real interface to open an AF_PACKET socket on. Same pattern,
-// and the same root requirement, as pkg/datalink's transport tests.
-func setupVeth(t *testing.T) string {
+// setupVeth creates a veth pair and returns both ends, so the daemon under test
+// has real interfaces to open AF_PACKET sockets on. Same pattern, and the same
+// root requirement, as pkg/datalink's transport tests.
+func setupVeth(t *testing.T) (string, string) {
 	t.Helper()
 	a, b := "gisishup0", "gisishup1"
 	_ = exec.Command("ip", "link", "del", a).Run() // best-effort pre-clean
@@ -225,7 +225,7 @@ func setupVeth(t *testing.T) string {
 			t.Fatalf("set %s up: %v: %s", name, err, out)
 		}
 	}
-	return a
+	return a, b
 }
 
 // TestSIGHUPReloadsTheConfigurationFile pins the plumbing between the signal
@@ -239,18 +239,21 @@ func TestSIGHUPReloadsTheConfigurationFile(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root for AF_PACKET + veth; run: go test -exec sudo ./cmd/goisisd")
 	}
-	iface := setupVeth(t)
+	iface, peer := setupVeth(t)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "goisisd.yaml")
-	write := func(prefix string) {
+	write := func(prefix string, ifaces ...string) {
 		t.Helper()
-		cfg := "net: 49.0001.0000.0000.0001.00\nprefixes:\n  - " + prefix + "\ncircuits:\n  - interface: " + iface + "\n"
+		cfg := "net: 49.0001.0000.0000.0001.00\nprefixes:\n  - " + prefix + "\ncircuits:\n"
+		for _, name := range ifaces {
+			cfg += "  - interface: " + name + "\n"
+		}
 		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("192.0.2.0/24")
+	write("192.0.2.0/24", iface)
 
 	logs := &syncBuffer{}
 	exited := make(chan error, 1)
@@ -279,11 +282,20 @@ func TestSIGHUPReloadsTheConfigurationFile(t *testing.T) {
 	// would take the test process down with the daemon.
 	waitForLog("goisis server started")
 
-	write("198.51.100.0/24")
+	write("198.51.100.0/24", iface)
 	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatalf("SIGHUP: %v", err)
 	}
 	waitForLog("configuration reloaded")
+
+	// The circuit half of the same path, which is the half that needs the
+	// daemon rather than the library: applying it opens an AF_PACKET socket on
+	// an interface goisisd was not started with, and starts a reader on it.
+	write("198.51.100.0/24", iface, peer)
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("SIGHUP: %v", err)
+	}
+	waitForLog("circuit added")
 
 	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("SIGTERM: %v", err)

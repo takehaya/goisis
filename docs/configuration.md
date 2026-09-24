@@ -196,7 +196,7 @@ log, so a reload is never half a file applied silently:
 
 ```console
 $ systemctl reload goisisd         # or: kill -HUP $(pidof goisisd)
-WARN configuration reload: this change needs a restart and was not applied key="circuits: eth1 added"
+WARN configuration reload: this change needs a restart and was not applied key="hostname"
 ```
 
 | Key | On `SIGHUP` |
@@ -204,7 +204,7 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `prefixes` | Applied. A changed metric is a withdrawal and a re-advertisement. |
 | `srv6.locators` | Applied, with each locator's End SID. |
 | `flex-algo` | Applied. A changed definition is deleted and re-added, and a locator bound to it steps aside and comes back with it. |
-| `circuits` | **Restart.** Adding or removing one needs a transport and a reader goroutine to appear or go away; changing a level, metric, timer or key means rebuilding it the same way. An interface's addresses and carrier are followed live and need neither. |
+| `circuits` | Applied. A circuit the file adds is opened and a circuit it drops is removed, its pseudonode LSPs purged. One whose definition changed is removed and added again, so **its adjacencies drop** — the reload warns by name before they do. An interface that cannot be opened costs only its own circuit: the reload reports a partial apply and the next `SIGHUP` retries it. Addresses and carrier are followed live and need no reload at all. |
 | `net` | **Restart.** The System ID and area addresses identify every LSP this node has originated. |
 | `hostname` | **Restart.** It is advertised in the node's own LSP, which a reload has no way to re-originate under a new name without the System ID beneath it. |
 | `area-*` / `domain-*` passwords, algorithms and key IDs | **Restart** — a rolling one, not a flag day, via [Key rotation](#key-rotation). |
@@ -227,10 +227,13 @@ circuit, leaves the daemon exactly as it was: the whole file is validated
 before the first call goes out, the server's own checks included — the
 Flex-Algo range and duplicates, a locator's address family and the algorithm it
 binds to, what a prefix may be and what metric it may carry. What a reload
-cannot check is what needs a socket: whether the interface is there and what
-its MTU admits is settled when a restart opens the circuit, which costs the
-reload nothing, since it applies no circuit key either. A `SIGHUP` to a daemon
-started without `-f` is ignored rather than fatal. The overload bit is not a
+cannot check up front is what needs a socket: whether an interface is there and
+whether its MTU admits our LSPs is settled when the circuit is opened, which
+happens while the batch is being applied. So a circuit the file names and the
+box does not have leaves the reload partially applied rather than refused, and
+the next `SIGHUP` opens it — an interface that comes up a minute later needs no
+further intervention. A `SIGHUP` to a daemon started without `-f` is ignored
+rather than fatal. The overload bit is not a
 file key at all: `goisis overload on` sets it at runtime.
 
 What validation cannot foresee is the node's own state: the file is compared

@@ -2,11 +2,19 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 	"time"
 )
+
+// ErrUnknownCircuit classifies the refusal of a call that names a circuit this
+// instance does not have. The daemon's interface watcher needs it: it follows
+// netlink, which reports every interface on the box, so an event for one we do
+// not run is the ordinary case rather than a fault, and telling the two apart
+// is what keeps an unrelated NIC out of the warning log.
+var ErrUnknownCircuit = errors.New("goisis: no such circuit")
 
 // SetCircuitAddresses replaces a circuit's interface addresses (CircuitConfig
 // IPv4Addrs / IPv6Addrs — pass all of them, the hello and the LSP take the
@@ -23,7 +31,7 @@ func (s *IsisServer) SetCircuitAddresses(ctx context.Context, name string, v4, v
 	return s.mgmtOperation(ctx, func() error {
 		c := s.circuitNamed(name)
 		if c == nil {
-			return fmt.Errorf("goisis: unknown circuit %q", name)
+			return fmt.Errorf("%w: %q", ErrUnknownCircuit, name)
 		}
 		// Compare as sets, not as slices: the kernel is free to hand the same
 		// addresses back in another order, and an interface carrying two
@@ -54,7 +62,7 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 	return s.mgmtOperation(ctx, func() error {
 		c := s.circuitNamed(name)
 		if c == nil {
-			return fmt.Errorf("goisis: unknown circuit %q", name)
+			return fmt.Errorf("%w: %q", ErrUnknownCircuit, name)
 		}
 		if c.linkDown == !up {
 			return nil
@@ -77,9 +85,17 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 // AddCircuit adds a circuit at runtime, the counterpart of DeleteCircuit: the
 // circuit joins the flooding set and this node's LSPs, contributes its
 // connected subnets, starts receiving, and sends its first hello at once
-// instead of at the next housekeeping tick. A name that is already configured
-// is refused rather than replaced, because replacing would orphan the running
-// circuit's transport with its reader goroutine still on it.
+// instead of at the next housekeeping tick.
+//
+// A name that is already configured is refused rather than replaced -- that
+// would orphan the running circuit's transport with its reader goroutine still
+// on it -- and refused as ErrAlreadyInState, because to a caller replaying a
+// batch the name is the whole of a circuit's identity: a reload keys its
+// circuit difference on the interface name and turns every other change into a
+// delete and an add (pkg/config.Diff), so the only way one reaches this is the
+// retry of a batch whose add already landed. Whether the running circuit
+// matches in every field is not checked and cannot be, since its transport is
+// an open socket and never equal to the fresh one this call carries.
 //
 // The caller opens the transport and puts it in cfg (applyDefaults refuses a
 // nil one). It is deliberately not opened here: net.InterfaceByName, a
@@ -87,9 +103,9 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 // goroutine, where every other circuit's hellos and the LSP aging would wait
 // behind them.
 //
-// If this returns an error the transport is still the caller's and the caller
-// must close it — nothing else will. On success the instance owns it, and
-// DeleteCircuit or Serve's exit closes it.
+// If this returns an error — ErrAlreadyInState included — the transport is
+// still the caller's and the caller must close it, because nothing else will.
+// On success the instance owns it, and DeleteCircuit or Serve's exit closes it.
 func (s *IsisServer) AddCircuit(ctx context.Context, cfg CircuitConfig) error {
 	return s.mgmtOperation(ctx, func() error { return s.addCircuit(cfg, time.Now()) })
 }
@@ -105,7 +121,7 @@ func (s *IsisServer) addCircuit(cfg CircuitConfig, now time.Time) error {
 		return err
 	}
 	if s.circuitNamed(cfg.Name) != nil {
-		return fmt.Errorf("goisis: circuit %s is already configured", cfg.Name)
+		return fmt.Errorf("goisis: circuit %s is already configured: %w", cfg.Name, ErrAlreadyInState)
 	}
 	// setLSPBufferSize only ever lowers the size, and the size is at or above
 	// the minimum already (NewIsisServer refuses less and deleteCircuit only
@@ -207,10 +223,12 @@ func (s *IsisServer) allocCircuitIDs() (pseudonode uint8, extCircID uint32, err 
 // frames are refused, the circuit leaves the flooding set and this node's LSPs,
 // its End.X SIDs are released and the adjacency loss reconverges SPF, the RIB
 // and the FIB — plus what only a removal owes: the pseudonode LSPs the circuit
-// owned are purged, its connected subnets are withdrawn, and its transport is
-// closed. Deleting a circuit that is not configured is an error: a caller that
-// issues the same delete twice has a bug, and a reload derives its deletions
-// from a difference, so it cannot issue one.
+// owned are purged, its connected subnets are withdrawn, its transport is
+// closed, and its metric label series are retired (Metrics.ForgetCircuit).
+// Deleting a circuit that is not configured is refused as ErrAlreadyInState:
+// the node is in the state the call asks for, and a reload refused part way
+// re-issues its whole batch on the next signal, its deletions included, so
+// without that classification the file could never be adopted.
 //
 // The circuit's pseudonode octet and extended circuit ID are not handed back to
 // anything. There is nothing to hand them to: the allocator reads the octets in
@@ -228,7 +246,7 @@ func (s *IsisServer) DeleteCircuit(ctx context.Context, name string) error {
 func (s *IsisServer) deleteCircuit(name string, now time.Time) error {
 	c := s.circuitNamed(name)
 	if c == nil {
-		return fmt.Errorf("goisis: circuit %s is not configured", name)
+		return fmt.Errorf("goisis: circuit %s is not configured: %w", name, ErrAlreadyInState)
 	}
 	// Refuse the events its reader has already queued, before anything else
 	// makes acting on them wrong (see circuit.detached).
@@ -319,6 +337,15 @@ func (s *IsisServer) deleteCircuit(name string, now time.Time) error {
 	} else {
 		s.requestLSPRegen()
 	}
+	// Last, after every report this removal owes (the adjacencies going down,
+	// the flush above) and after the re-origination that follows it: the sink
+	// keys its series on the circuit name, so anything reported for this name
+	// afterwards builds them again. The reader goroutine outlives this call and
+	// has events queued; c.detached is what keeps them off Metrics (handleEvent).
+	// Without this the adjacency gauge — re-set for every circuit on every
+	// housekeeping tick — holds its last value for as long as the process runs,
+	// which is the stale reading its own contract exists to rule out.
+	s.metrics.ForgetCircuit(name)
 	return nil
 }
 
