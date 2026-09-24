@@ -2,6 +2,29 @@
 
 ## [0.6.0](https://github.com/takehaya/goisis/compare/v0.5.0...v0.6.0) (2026-09-24)
 
+### Upgrade notes for operators
+
+* Startup now refuses a `prefixes:` entry that no unicast forwarding entry can
+  serve — multicast, unspecified, link-local, IPv4-mapped — or one whose metric
+  is at the RFC 5305 reachability ceiling. Through 0.5.0 only `goisis prefix
+  add` refused these, so a file carrying one started and then could not be
+  reloaded. Remove the entry or give it a usable metric.
+* A configuration file holds one YAML document. Anything past a `---` separator
+  was being dropped in silence, including a correctly spelled `area-password`,
+  so it is now a load error. A leading separator is still one document.
+* A circuit can be added or removed with `SIGHUP`. A circuit whose settings
+  change is rebuilt rather than mutated, so **its adjacency drops and re-forms**;
+  the reload warns by name before it happens.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `ConfigReloadUnapplied` and
+  `ForgetCircuit`. An implementation that embeds `server.NoopMetrics` is
+  unaffected; one that does not needs both methods.
+* `config.WatchInterfaces` no longer takes a `*Config`. It reads the circuit set
+  from the server, because a startup snapshot stops being correct once circuits
+  change at runtime.
+
 
 ### Features
 
