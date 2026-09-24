@@ -2,6 +2,23 @@
 
 ## [0.6.1](https://github.com/takehaya/goisis/compare/v0.6.0...v0.6.1) (2026-09-24)
 
+### Upgrade notes for operators
+
+* Startup now refuses circuit settings that only the runtime path refused
+  before: a `priority:` above 127, `hello-accept-passwords` with no
+  `hello-password`, a `circuits:` entry naming no interface, and two circuits
+  under one interface name. A file carrying one of these started under 0.6.0
+  and then took every circuit down on the next `SIGHUP`, because a changed
+  circuit is applied as a removal followed by an addition and only the addition
+  was checked. Fix the setting before upgrading.
+* A reload no longer rebuilds a circuit whose running configuration already
+  matches the file, so a reload refused for an unrelated reason stops dropping
+  that circuit's adjacency once per signal.
+* The guidance on the configuration file's ownership and mode is corrected:
+  whoever can write it can attach this node's IGP to any interface, or detach
+  it from one, and can turn hello authentication off. Area and domain keys still
+  need a restart. The `0640` root-owned advice is unchanged and still right.
+
 
 ### Bug Fixes
 
@@ -9,7 +26,7 @@
 * **config:** validate a circuit the way a restart validates it ([7d4da4a](https://github.com/takehaya/goisis/commit/7d4da4a4677cb41d2ca578abed46ee38c5979f4a))
 * **server:** compare a circuit, and own the transport on every path ([2bbb541](https://github.com/takehaya/goisis/commit/2bbb541f157a688f443aa8b620096f3eb2e3dad0))
 * **server:** flush a deleted circuit's purge where it can still be sent ([d179155](https://github.com/takehaya/goisis/commit/d179155307661cba9ffb2228e0f9d2440659c577))
-* **server:** refuse a duplicate circuit name at startup, and say what a ([e436bf4](https://github.com/takehaya/goisis/commit/e436bf431754243b664fc52a6af2bd979c6d0a8f))
+* **server:** refuse a duplicate circuit name at startup, and say what a writable configuration file allows ([e436bf4](https://github.com/takehaya/goisis/commit/e436bf431754243b664fc52a6af2bd979c6d0a8f))
 
 ## [0.6.0](https://github.com/takehaya/goisis/compare/v0.5.0...v0.6.0) (2026-09-24)
 
