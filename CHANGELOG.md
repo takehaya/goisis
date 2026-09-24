@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/takehaya/goisis/compare/v0.4.0...v0.5.0) (2026-09-24)
+
+
+### Features
+
+* **goisisd:** apply the runtime-capable part of a config change on SIGHUP ([099f7de](https://github.com/takehaya/goisis/commit/099f7de030dc247770ae54a4b4eaf54d62a50b11))
+* **metrics:** count reload outcomes, floored lifetimes and inter-level prefixes ([dd0fb51](https://github.com/takehaya/goisis/commit/dd0fb5176ca10a03cee58bab6d14280dcdb939fb))
+* **origination:** leak Level-2 prefixes into Level-1 behind a policy ([c6e96bd](https://github.com/takehaya/goisis/commit/c6e96bd3a794567ba1eafadb2ada0f2fc9ab138b))
+
+
+### Bug Fixes
+
+* **config:** validate a reload before it mutates, and keep the baseline when one is refused ([e3595de](https://github.com/takehaya/goisis/commit/e3595def04a7221d49021e4bea3dc0e0bca39e89))
+* **lsdb:** hold a received LSP's lifetime at MaxAge (RFC 7987) ([96d1a86](https://github.com/takehaya/goisis/commit/96d1a862d76e7584b0a253d1ba5186a59d1ea67b))
+* **rib:** rank a leaked Level-1 route below a Level-2 route (RFC 5302 3.2) ([7c56add](https://github.com/takehaya/goisis/commit/7c56addf1669134007eebf72ef451f6ce6cbc6e5))
+* **server:** clamp the leaked metric where it reaches the wire, and bound a reload ([325c821](https://github.com/takehaya/goisis/commit/325c82103464f9953a6567bd0a575f6f325a3dce))
+* **spf:** keep the winning advertisement's up/down bit instead of a sticky merge ([5996f4a](https://github.com/takehaya/goisis/commit/5996f4a49bd0b7b9058c9a3cf09f454683438525))
+
 ## [0.4.0](https://github.com/takehaya/goisis/compare/v0.3.0...v0.4.0) (2026-09-23)
 
 
