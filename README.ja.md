@@ -16,7 +16,8 @@ Go で書かれた IS-IS ルーティングプロトコル実装 —
 - hello と LSP/SNP の HMAC 認証(RFC 5304/5310)
 - Prometheus メトリクス、FRR との常時相互運用
 
-> シングルエリアの MVP。マルチトポロジ・graceful restart・BFD は見送り。
+> シングルエリアの MVP。マルチトポロジ・graceful restart の restarter 側
+> （RFC 5306 の helper 側は実装済み）・BFD は見送り。
 
 ## インストール
 

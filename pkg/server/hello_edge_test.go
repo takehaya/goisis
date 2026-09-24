@@ -200,7 +200,7 @@ func TestLANHelloWithManyNeighborsSerializes(t *testing.T) {
 				c.adjs[packet.Level2][id] = &adjacency{systemID: id, snpa: want[i], state: AdjUp}
 			}
 
-			wire, err := s.buildLANHello(c, packet.Level2).Serialize()
+			wire, err := s.buildLANHello(c, packet.Level2, nil).Serialize()
 			if err != nil {
 				t.Fatalf("serialize LAN hello with %d neighbors: %v", n, err)
 			}

@@ -49,6 +49,22 @@ type adjacency struct {
 	// Up having lasted at least ZeroAgeLifetime; see corruptLifetime.
 	upSince time.Time
 
+	// Graceful restart (RFC 5306), all three fields fed by noteRestart from
+	// every IIH that carries a Restart TLV.
+	//
+	// restartCapable says the neighbor's IIHs carry the TLV at all, which is
+	// what puts it in §3.2.1c's candidate set. restartMode is set by the first
+	// IIH with RR set and cleared by one with RR clear; it decides whether this
+	// IIH may refresh the holding time (§3.2.1a) and keeps a neighbor that is
+	// itself restarting out of that candidate set. suppressed is the SA bit
+	// (§3.2.2): the adjacency stays out of our LSPs and out of SPF until an IIH
+	// with SA clear arrives. It rides on the adjacency and so survives a
+	// Down-to-Up transition, as §3.2.2 requires; an adjacency torn all the way
+	// down and rebuilt is rebuilt from an IIH that carries the bit again.
+	restartCapable bool
+	restartMode    bool
+	suppressed     bool
+
 	// p2p three-way (RFC 5303): the neighbor's extended local circuit ID.
 	neighborExtCircID uint32
 	levels            levelSet

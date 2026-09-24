@@ -320,7 +320,7 @@ func (s *IsisServer) endXSubTLVs(c *circuit, adj *adjacency) []packet.SubTLV {
 // entry points at the pseudonode, so each sub-TLV names its neighbor.
 func (s *IsisServer) lanEndXSubTLVs(c *circuit, level packet.Level) []packet.SubTLV {
 	adjs := map[packet.SystemID]*adjacency{}
-	for _, adj := range c.upAdjacencies(level) {
+	for _, adj := range c.advertisedAdjacencies(level) {
 		adjs[adj.systemID] = adj
 	}
 	var out []packet.SubTLV

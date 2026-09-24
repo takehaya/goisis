@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
@@ -265,4 +266,16 @@ func (c *circuit) upAdjacencies(l packet.Level) []*adjacency {
 		}
 	}
 	return out
+}
+
+// advertisedAdjacencies returns the Up adjacencies at a level that this node's
+// LSPs may carry and SPF may cross: RFC 5306 §3.2.2 keeps one whose neighbor
+// set the SA bit out of both until an IIH with SA clear arrives.
+//
+// DIS election and the holding timer deliberately keep reading upAdjacencies
+// instead: §3.2.2 suppresses the advertisement of an adjacency, not the
+// adjacency, and a starting router that loses the election as well would have
+// to be re-elected once it finished, churning the LAN a second time.
+func (c *circuit) advertisedAdjacencies(l packet.Level) []*adjacency {
+	return slices.DeleteFunc(c.upAdjacencies(l), func(adj *adjacency) bool { return adj.suppressed })
 }

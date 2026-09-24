@@ -201,7 +201,10 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	var neighbors []packet.ExtendedISReachEntry
 	for _, c := range s.circuits {
 		if c.cfg.P2P {
-			if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) {
+			// !suppressed: RFC 5306 §3.2.2 keeps a starting neighbor out of our
+			// LSPs until it clears the SA bit, so that its own stale LSPs from a
+			// previous incarnation cannot be reached through us.
+			if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) && !adj.suppressed {
 				neighbors = appendISReach(neighbors, nodeID(adj.systemID, 0), c.cfg.Metric,
 					s.endXSubTLVs(c, adj))
 			}
@@ -211,7 +214,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			continue
 		}
 		dis := c.dis[level]
-		if dis == (packet.NodeID{}) || len(c.upAdjacencies(level)) == 0 {
+		if dis == (packet.NodeID{}) || len(c.advertisedAdjacencies(level)) == 0 {
 			continue // no usable pseudonode yet
 		}
 		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, s.lanEndXSubTLVs(c, level))
@@ -325,7 +328,7 @@ func (s *IsisServer) regeneratePseudonodeLSPs(level packet.Level, forceRefresh b
 		// ranges a map); otherwise the content-unchanged check spuriously
 		// fails and bumps the sequence number.
 		neighbors := []packet.ExtendedISReachEntry{{NeighborID: nodeID(s.systemID, 0)}}
-		for _, adj := range c.upAdjacencies(level) {
+		for _, adj := range c.advertisedAdjacencies(level) {
 			neighbors = append(neighbors, packet.ExtendedISReachEntry{NeighborID: nodeID(adj.systemID, 0)})
 		}
 		sort.Slice(neighbors, func(i, j int) bool {

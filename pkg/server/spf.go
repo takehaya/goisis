@@ -204,10 +204,17 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 // needs an Up adjacency at this level, a LAN pseudonode needs the circuit that
 // elected it to still have one (which member is DIS is a separate election),
 // and the edge a pseudonode LSP has back to us is always live.
+//
+// An adjacency whose neighbor set the SA bit does not count, which is RFC 5306
+// §3.2.2's "a router that suppresses advertisement of an adjacency MUST NOT
+// use this adjacency when performing its SPF calculation". Origination drops
+// the edge too, but not for up to minLSPGenInterval, and believing our own
+// stale copy for that long is exactly the reachability through stale LSPs that
+// the SA bit exists to prevent.
 func (s *IsisServer) edgeHasAdjacency(level packet.Level, to packet.NodeID) bool {
 	if to.PseudonodeID() != 0 {
 		for _, c := range s.circuits {
-			if !c.cfg.P2P && c.dis[level] == to && c.upAdjacencyCount(level) > 0 {
+			if !c.cfg.P2P && c.dis[level] == to && len(c.advertisedAdjacencies(level)) > 0 {
 				return true
 			}
 		}
@@ -218,12 +225,12 @@ func (s *IsisServer) edgeHasAdjacency(level packet.Level, to packet.NodeID) bool
 	}
 	for _, c := range s.circuits {
 		if c.cfg.P2P {
-			if a := c.p2pAdj; a != nil && a.state == AdjUp && a.levels.has(level) && a.systemID == to.SystemID() {
+			if a := c.p2pAdj; a != nil && a.state == AdjUp && a.levels.has(level) && a.systemID == to.SystemID() && !a.suppressed {
 				return true
 			}
 			continue
 		}
-		if a := c.adjs[level][to.SystemID()]; a != nil && a.state == AdjUp {
+		if a := c.adjs[level][to.SystemID()]; a != nil && a.state == AdjUp && !a.suppressed {
 			return true
 		}
 	}

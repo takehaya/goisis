@@ -16,7 +16,8 @@ IS-IS routing protocol implementation in Go — the IS-IS counterpart of
 - HMAC authentication (RFC 5304/5310) of hellos and LSPs/SNPs
 - Prometheus metrics, and continuous interop against FRR
 
-> Single-area MVP: multi-topology, graceful restart, and BFD are deferred.
+> Single-area MVP: multi-topology, the restarting half of graceful restart
+> (the RFC 5306 helper is implemented), and BFD are deferred.
 
 ## Install
 
