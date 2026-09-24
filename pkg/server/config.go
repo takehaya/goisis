@@ -386,6 +386,7 @@ type options struct {
 	flexAlgos         []FlexAlgoConfig
 	fib               fib.FIB
 	metrics           Metrics
+	clock             Clock
 	overloadOnStartup time.Duration
 	areaAuth          AuthConfig // L1 LSP/SNP authentication
 	domainAuth        AuthConfig // L2 LSP/SNP authentication
@@ -501,6 +502,13 @@ func WithFIBFilter(f FIBFilter) ServerOption {
 // Prometheus collector with pkg/metrics, or supply a custom implementation.
 func WithMetrics(m Metrics) ServerOption {
 	return func(o *options) { o.metrics = m }
+}
+
+// WithClock sets where the server reads time. Defaults to the wall clock. See
+// Clock: a consumer that wants to run this instance against simulated time
+// supplies its own.
+func WithClock(c Clock) ServerOption {
+	return func(o *options) { o.clock = c }
 }
 
 // WithConnectedPrefix marks a prefix as directly connected: it is never

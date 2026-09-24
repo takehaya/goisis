@@ -31,16 +31,26 @@ func waitForLong(t *testing.T, what string, fn func() bool, d time.Duration) {
 // steadyHello trades convergence speed for a holding time that survives a
 // loaded machine. fastHello's holding time is one second (the wire field is in
 // seconds), which a test that watches the LAN for a whole csnpInterval cannot
-// rely on: one stalled second re-elects the DIS and invalidates the run.
+// rely on: one stalled second re-elects the DIS and invalidates the run. It is
+// also what a test on a stepped clock needs, for the same reason from the
+// other side: hellos leave on housekeeping ticks, so two of them are a whole
+// simulated second apart however short HelloInterval is, and a one-second
+// holding time would expire the adjacency between them.
 func steadyHello(cfg *CircuitConfig) {
 	cfg.HelloInterval = 250 * time.Millisecond
 	cfg.HoldingMultiplier = 20
 }
 
 // lanNode builds a server with one broadcast Level-2 circuit on tr, at the
-// given DIS priority. Its System ID is ...00:id. tune adjusts the circuit
-// config after the fastHello defaults.
-func lanNode(t *testing.T, id byte, tr *datalink.MockTransport, prio uint8, tune ...func(*CircuitConfig)) *IsisServer {
+// given DIS priority, on the wall clock. Its System ID is ...00:id.
+func lanNode(t *testing.T, id byte, tr *datalink.MockTransport, prio uint8) *IsisServer {
+	t.Helper()
+	return lanNodeOn(t, nil, id, tr, prio)
+}
+
+// lanNodeOn is lanNode on a clock the test drives — a nil clock is the wall
+// clock — with tune to adjust the circuit config after the fastHello defaults.
+func lanNodeOn(t *testing.T, clk *fakeClock, id byte, tr *datalink.MockTransport, prio uint8, tune ...func(*CircuitConfig)) *IsisServer {
 	t.Helper()
 	cfg := CircuitConfig{
 		Name:      fmt.Sprintf("c%d", id),
@@ -53,11 +63,15 @@ func lanNode(t *testing.T, id byte, tr *datalink.MockTransport, prio uint8, tune
 	for _, f := range tune {
 		f(&cfg)
 	}
-	return mustServer(t,
+	opts := []ServerOption{
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, id}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(cfg),
-	)
+	}
+	if clk != nil {
+		opts = append(opts, WithClock(clk))
+	}
+	return mustServer(t, opts...)
 }
 
 // lanUpPeers returns the System IDs this server holds an Up Level-2 adjacency
@@ -370,9 +384,10 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 	sink := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
 	datalink.Link(trA, trB, trC)
 
-	a := lanNode(t, 1, trA, 64, steadyHello)
-	b := lanNode(t, 2, trB, 64, steadyHello)
-	c := lanNode(t, 3, trC, 100, steadyHello) // DIS
+	clk := newFakeClock()
+	a := lanNodeOn(t, clk, 1, trA, 64, steadyHello)
+	b := lanNodeOn(t, clk, 2, trB, 64, steadyHello)
+	c := lanNodeOn(t, clk, 3, trC, 100, steadyHello) // DIS
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -388,10 +403,10 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 	// its own circuit is concerned). Observing from t=0 would buffer that
 	// node's CSNP and fail the test on behaviour the protocol allows.
 	for _, s := range []*IsisServer{a, b, c} {
-		waitForLong(t, "every node agrees C is DIS", func() bool {
+		waitClock(t, clk, "every node agrees C is DIS", func() bool {
 			pns := lanPseudonodes(lanLiveLSPs(t, s))
 			return len(pns) == 1 && pns[cLAN] && maps.Equal(lanISNeighbors(t, s), map[packet.NodeID]bool{cLAN: true})
-		}, 10*time.Second)
+		})
 	}
 
 	// Drain continuously: the mock inbox drops once it is full, and hellos
@@ -431,11 +446,18 @@ func TestNonDISDoesNotSendCSNPs(t *testing.T) {
 
 	// Observe a whole csnpInterval, which is every sender's period, and require
 	// at least one CSNP in it: without one the check below would be vacuous,
-	// and the DIS's own periodic emission is what guarantees there is one.
-	start := time.Now()
-	waitForLong(t, "a full CSNP cycle on a settled segment",
-		func() bool { return time.Since(start) >= csnpInterval && seen() > 0 },
-		3*csnpInterval)
+	// and the DIS's own periodic emission is what guarantees there is one. The
+	// interval is the nodes' own, so it passes as fast as they can be stepped
+	// through it rather than in ten seconds of waiting.
+	start := clk.Now()
+	waitClock(t, clk, "a full CSNP cycle on a settled segment",
+		func() bool { return clk.Now().Sub(start) >= csnpInterval && seen() > 0 })
+	// Nothing more may be sent once the sink closes, so let the last tick
+	// finish and its frames cross before closing it.
+	for _, s := range []*IsisServer{a, b, c} {
+		loopSync(t, s)
+	}
+	time.Sleep(stepDelay)
 	_ = sink.Close()
 	<-done
 

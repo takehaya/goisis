@@ -5,7 +5,6 @@ import (
 	"context"
 	"sort"
 	"sync/atomic"
-	"time"
 
 	"github.com/takehaya/goisis/pkg/packet"
 )
@@ -103,7 +102,7 @@ func (s *IsisServer) snapshotState() ([]AdjacencyInfo, []RouteInfo) {
 	// the same content as ListAdjacencies. Live events do not: the index is
 	// O(LSDB) and an adjacency change is not worth rebuilding it (see the
 	// Hostname field's doc).
-	hostnames := s.hostnameIndex(time.Now())
+	hostnames := s.hostnameIndex(s.clock.Now())
 	var adjs []AdjacencyInfo
 	for _, c := range s.circuits {
 		adjs = append(adjs, c.adjacencyInfos()...)

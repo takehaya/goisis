@@ -31,29 +31,38 @@ func (c *spfCounter) count() int {
 	return c.runs
 }
 
-// spfBackoffServer runs a one-circuit L2 instance with an SPF counter. It
-// returns once startup origination's own recompute and its hold have elapsed,
-// so a test measures only the changes it makes itself.
-func spfBackoffServer(t *testing.T) (*IsisServer, *spfCounter) {
+// spfBackoffServer runs a one-circuit L2 instance with an SPF counter, on a
+// clock the test drives. It returns once startup origination's own recompute
+// and its hold have elapsed, so a test measures only the changes it makes
+// itself, and with the loop idle at a known instant: no peer, no tick due, so
+// every recompute that follows is one the test asked for.
+func spfBackoffServer(t *testing.T) (*IsisServer, *spfCounter, *fakeClock) {
 	t.Helper()
 	c := &spfCounter{}
+	clk := newFakeClock()
 	s := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
 		WithMetrics(c),
+		WithClock(clk),
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
-	if err := s.mgmtOperation(ctx, func() error { return nil }); err != nil {
-		t.Fatalf("waiting for the loop to start: %v", err)
-	}
-	time.Sleep(2 * spfHold)
-	return s, c
+	// loopSync before the first Advance, not only as a barrier: the loop arms
+	// its ticker and its hold timer before it serves anything, so this is also
+	// what guarantees the clock has them to fire.
+	loopSync(t, s)
+	clk.Advance(2 * spfHold)
+	loopSync(t, s)
+	return s, c, clk
 }
 
-// markDirty on the loop, the way a protocol event would.
+// dirty marks SPF dirty on the loop, the way a protocol event would, and
+// returns once the loop has run the tail of that iteration — so the back-off
+// has already decided what to do with the change, and the count the test
+// reads next cannot be one recompute behind.
 func dirty(t *testing.T, s *IsisServer) {
 	t.Helper()
 	if err := s.mgmtOperation(t.Context(), func() error {
@@ -62,51 +71,54 @@ func dirty(t *testing.T, s *IsisServer) {
 	}); err != nil {
 		t.Fatalf("markDirty: %v", err)
 	}
+	loopSync(t, s)
 }
 
 func TestSPFRunsPromptlyOnFirstChange(t *testing.T) {
-	s, c := spfBackoffServer(t)
+	s, c, _ := spfBackoffServer(t)
 	base := c.count()
 
 	dirty(t, s)
 
-	// The recompute happens at the end of the same loop iteration, so it lands
-	// well inside a hold interval; only scheduling separates us from it.
-	deadline := time.Now().Add(100 * time.Millisecond)
-	for c.count() == base && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := c.count() - base; got == 0 {
-		t.Errorf("SPF runs within 100ms of the first change = 0, want at least 1")
+	// Promptly means in the tail of the very iteration that took the change,
+	// before any timer: dirty returns at the end of that iteration and the
+	// clock has not moved, so one run here is the whole claim.
+	if got := c.count() - base; got != 1 {
+		t.Errorf("SPF runs in the iteration that took the first change = %d, want 1", got)
 	}
 }
 
 func TestSPFCoalescesChangesDuringHold(t *testing.T) {
-	s, c := spfBackoffServer(t)
+	s, c, clk := spfBackoffServer(t)
 	base := c.count()
 
-	// Ten changes spread over 200ms: one immediate recompute, then at most one
-	// per hold window — and never zero for the trailing change.
-	start := time.Now()
+	// Ten changes, one every 20ms of the server's own time against a 200ms
+	// hold. The first recomputes at once and arms the hold; the other nine all
+	// fall inside it and cost one recompute between them, at its end. Two, and
+	// which change landed where is not a matter of how the run was scheduled:
+	// dirty leaves the loop idle at a known instant and only Advance moves it.
 	for range 10 {
 		dirty(t, s)
-		time.Sleep(20 * time.Millisecond)
+		clk.Advance(20 * time.Millisecond)
 	}
-	time.Sleep(time.Until(start.Add(time.Second)))
+	loopSync(t, s)
 
-	if got := c.count() - base; got < 2 || got > 3 {
-		t.Errorf("SPF runs for 10 changes over 200ms = %d, want 2 or 3", got)
+	if got := c.count() - base; got != 2 {
+		t.Errorf("SPF runs for 10 changes over one hold = %d, want 2", got)
 	}
 }
 
 func TestSPFHoldDoesNotDelayIdleLoop(t *testing.T) {
-	s, c := spfBackoffServer(t)
+	s, c, clk := spfBackoffServer(t)
+
+	// One change arms the hold and nothing changes while it runs, so it is an
+	// idle loop the timer fires on. That loop neither recomputes nor wedges:
+	// management operations are still served afterwards.
+	dirty(t, s)
 	base := c.count()
+	clk.Advance(3 * spfHold)
+	loopSync(t, s)
 
-	time.Sleep(3 * spfHold)
-
-	// An idle loop neither recomputes nor wedges: the hold timer fires with
-	// nothing dirty, and management operations are still served.
 	if err := s.mgmtOperation(t.Context(), func() error { return nil }); err != nil {
 		t.Fatalf("mgmtOperation: %v", err)
 	}

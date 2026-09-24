@@ -211,8 +211,11 @@ func ownLSPSeq(t *testing.T, s *IsisServer) uint32 {
 
 // mutatePair returns two servers converged at Level 2 over one link — a LAN, or
 // point-to-point when p2p — A with an IPv4 interface address so its prefixes
-// resolve to a next hop on B.
-func mutatePair(t *testing.T, p2p bool) (*IsisServer, *IsisServer, context.CancelFunc) {
+// resolve to a next hop on B. Both run on the fake clock it returns, so an
+// adjacency here cannot expire because a loaded machine stalled a housekeeping
+// tick: the ticks are the test's to deliver; steadyHello rather than fastHello
+// because a stepped clock's hellos are a whole tick apart (see steadyHello).
+func mutatePair(t *testing.T, p2p bool) (*IsisServer, *IsisServer, *fakeClock, context.CancelFunc) {
 	t.Helper()
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -221,18 +224,19 @@ func mutatePair(t *testing.T, p2p bool) (*IsisServer, *IsisServer, context.Cance
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	cfgA := CircuitConfig{Name: "a", Transport: ta, P2P: p2p, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
 	cfgB := CircuitConfig{Name: "b", Transport: tb, P2P: p2p, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
-	fastHello(&cfgA)
-	fastHello(&cfgB)
+	steadyHello(&cfgA)
+	steadyHello(&cfgB)
 
-	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA))
-	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB))
+	clk := newFakeClock()
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithClock(clk))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithClock(clk))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
-	waitFor(t, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
-	waitFor(t, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
-	return a, b, cancel
+	waitClock(t, clk, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+	return a, b, clk, cancel
 }
 
 func TestAddDeletePrefix(t *testing.T) {
@@ -319,7 +323,7 @@ func TestAddPrefixRejectsUnroutablePrefixesAndUnusableMetrics(t *testing.T) {
 // TestAddPrefixReachesPeerRIB checks a runtime prefix floods and is installed
 // by the peer, and that deleting it withdraws the peer's route.
 func TestAddPrefixReachesPeerRIB(t *testing.T) {
-	a, b, cancel := mutatePair(t, false)
+	a, b, clk, cancel := mutatePair(t, false)
 	defer cancel()
 	ctx := context.Background()
 	dst := netip.MustParsePrefix("10.9.9.0/24")
@@ -340,12 +344,12 @@ func TestAddPrefixReachesPeerRIB(t *testing.T) {
 	if err := a.AddPrefix(ctx, AdvertisedPrefix{Prefix: dst, Metric: 10}); err != nil {
 		t.Fatalf("AddPrefix: %v", err)
 	}
-	waitFor(t, "b installs a's new prefix", hasRoute)
+	waitClock(t, clk, "b installs a's new prefix", hasRoute)
 
 	if err := a.DeletePrefix(ctx, dst); err != nil {
 		t.Fatalf("DeletePrefix: %v", err)
 	}
-	waitFor(t, "b withdraws the deleted prefix", func() bool { return !hasRoute() })
+	waitClock(t, clk, "b withdraws the deleted prefix", func() bool { return !hasRoute() })
 }
 
 func TestSetOverload(t *testing.T) {
@@ -377,7 +381,7 @@ func TestSetOverload(t *testing.T) {
 }
 
 func TestClearAdjacency(t *testing.T) {
-	a, _, cancel := mutatePair(t, false)
+	a, _, clk, cancel := mutatePair(t, false)
 	defer cancel()
 	ctx := context.Background()
 
@@ -403,7 +407,7 @@ func TestClearAdjacency(t *testing.T) {
 		}
 	}
 	// Hellos re-form the adjacency without any further action.
-	waitFor(t, "adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
 
 	// Clearing an adjacency that does not exist is a no-op, not an error.
 	absent := packet.SystemID{0, 0, 0, 0, 0, 9}
@@ -424,13 +428,13 @@ func TestClearAdjacency(t *testing.T) {
 // 7.3.17 re-arms the whole database when it comes back), and hellos re-form it
 // with no further action.
 func TestClearAdjacencyOnP2PClearsFloodingFlagsAndReforms(t *testing.T) {
-	a, _, cancel := mutatePair(t, true)
+	a, _, clk, cancel := mutatePair(t, true)
 	defer cancel()
 	ctx := context.Background()
 
 	// Arm a flag so "cleared" is distinguishable from "never set".
 	if err := a.mgmtOperation(ctx, func() error {
-		a.circuits[0].setSRM(packet.Level2, lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0), time.Now())
+		a.circuits[0].setSRM(packet.Level2, lspID(packet.SystemID{0, 0, 0, 0, 0, 9}, 0), clk.Now())
 		return nil
 	}); err != nil {
 		t.Fatalf("mgmtOperation: %v", err)
@@ -452,7 +456,7 @@ func TestClearAdjacencyOnP2PClearsFloodingFlagsAndReforms(t *testing.T) {
 		t.Fatalf("mgmtOperation: %v", err)
 	}
 
-	waitFor(t, "p2p adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "p2p adjacency re-forms", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
 }
 
 // v4ReachMetrics returns the metric of every TLV 135 entry for p — one element

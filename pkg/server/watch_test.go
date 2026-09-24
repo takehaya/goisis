@@ -19,11 +19,15 @@ func TestWatchEmitsAdjacencyAndRoute(t *testing.T) {
 	dst := netip.MustParsePrefix("10.9.9.0/24")
 	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
 	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
-	fastHello(&cfgA)
-	fastHello(&cfgB)
+	// A stepped clock, so the adjacency the events come from cannot expire
+	// because a loaded machine stalled a housekeeping tick; steadyHello for
+	// the reason steadyHello gives.
+	steadyHello(&cfgA)
+	steadyHello(&cfgB)
 
-	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithAdvertisedPrefix(dst, 10))
-	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB))
+	clk := newFakeClock()
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithAdvertisedPrefix(dst, 10), WithClock(clk))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithClock(clk))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -38,9 +42,12 @@ func TestWatchEmitsAdjacencyAndRoute(t *testing.T) {
 	defer sub.Unsubscribe()
 	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 
+	// Take what the subscriber has, and when it has nothing, step the clock so
+	// the instances get another housekeeping tick to produce something. The
+	// bound is in ticks rather than wall time, so a loaded runner makes this
+	// slower and not flakier.
 	var gotAdjUp, gotRoute bool
-	deadline := time.After(10 * time.Second)
-	for !gotAdjUp || !gotRoute {
+	for ticks := 0; !gotAdjUp || !gotRoute; {
 		select {
 		case ev, ok := <-sub.Events:
 			if !ok {
@@ -52,8 +59,12 @@ func TestWatchEmitsAdjacencyAndRoute(t *testing.T) {
 			if ev.Route != nil && ev.Route.Prefix == dst && !ev.Withdrawn {
 				gotRoute = true
 			}
-		case <-deadline:
-			t.Fatalf("timed out; gotAdjUp=%v gotRoute=%v", gotAdjUp, gotRoute)
+		default:
+			if ticks++; ticks > 120 {
+				t.Fatalf("timed out; gotAdjUp=%v gotRoute=%v", gotAdjUp, gotRoute)
+			}
+			clk.Advance(housekeepInterval)
+			time.Sleep(stepDelay)
 		}
 	}
 }

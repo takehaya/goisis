@@ -130,7 +130,7 @@ func winsElection(cand, best *FlexAlgoDefinition) bool {
 func (s *IsisServer) ListFlexAlgos(ctx context.Context) ([]FlexAlgoInfo, error) {
 	var out []FlexAlgoInfo
 	err := s.mgmtOperation(ctx, func() error {
-		now := time.Now()
+		now := s.clock.Now()
 		for _, level := range s.levelCap.levels() {
 			for _, fi := range s.flexAlgoState(level, now) {
 				out = append(out, *fi)

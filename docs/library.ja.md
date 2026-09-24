@@ -38,6 +38,7 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 | `WithL2LeakFilter(func(AdvertisedPrefix) bool)` | リークポリシー:L1L2 ノードが up/down ビット付きで Level-1 LSP に載せる Level-2 prefix。省略すると何もリークしない。 |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB ポリシー:どの経路を FIB に入れるか(拒否分は RIB に残る)。 |
 | `WithMetrics(server.Metrics)` | テレメトリシンク(デフォルト `NoopMetrics`)。 |
+| `WithClock(server.Clock)` | サーバが時刻を読む先(デフォルトは実時刻)。模擬時刻でインスタンスを動かしたいときに渡す。リーダー goroutine の再試行待ちと SPF の実行時間計測は実時刻のまま。 |
 | `WithLogger(*slog.Logger)` | 構造化ロガー。 |
 
 `CircuitConfig` は `Name`、注入する `datalink.Transport`(Linux では

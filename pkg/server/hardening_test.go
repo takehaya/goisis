@@ -29,7 +29,10 @@ func liveLSPFrom(t *testing.T, s *IsisServer, sys packet.SystemID) bool {
 	live := false
 	_ = s.mgmtOperation(context.Background(), func() error {
 		if e := s.dbs[packet.Level2].get(lspID(sys, 0)); e != nil {
-			live = e.purgedAt.IsZero() && e.remaining(time.Now()) > 0
+			// The server's clock, not the wall clock: a test driving a fake
+			// one installs LSPs at an instant real time is nowhere near, and
+			// against real time every one of them reads as long expired.
+			live = e.purgedAt.IsZero() && e.remaining(s.clock.Now()) > 0
 		}
 		return nil
 	})
@@ -61,8 +64,10 @@ func TestOverloadOnStartup(t *testing.T) {
 }
 
 // helloAuthPair links two p2p servers whose circuits use the given hello
-// passwords and starts them; it returns both servers.
-func helloAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer) {
+// passwords and starts them. Both run on the fake clock it returns and report
+// to the same counter, so a test can make hellos happen rather than wait for
+// them and can see what the far end did with each one.
+func helloAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer, clk *fakeClock, m *countingMetrics) {
 	t.Helper()
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -70,14 +75,15 @@ func helloAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	mk := func(name string, tr datalink.Transport, pw string) CircuitConfig {
 		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse(), HelloPassword: pw}
-		fastHello(&c)
+		steadyHello(&c)
 		return c
 	}
-	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta, passA)))
-	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb, passB)))
+	clk, m = newFakeClock(), newCountingMetrics()
+	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta, passA)), WithClock(clk), WithMetrics(m))
+	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb, passB)), WithClock(clk), WithMetrics(m))
 	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
-	return a, b
+	return a, b, clk, m
 }
 
 // TestHelloAuthMatchingFormsAdjacency: matching HMAC-MD5 hello passwords let the
@@ -85,9 +91,9 @@ func helloAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b
 func TestHelloAuthMatchingFormsAdjacency(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a, b := helloAuthPair(t, ctx, "s3cret", "s3cret")
-	waitFor(t, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
-	waitFor(t, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+	a, b, clk, _ := helloAuthPair(t, ctx, "s3cret", "s3cret")
+	waitClock(t, clk, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
 }
 
 // TestHelloAuthMismatchNoAdjacency: a mismatched hello password drops the peer's
@@ -95,8 +101,10 @@ func TestHelloAuthMatchingFormsAdjacency(t *testing.T) {
 func TestHelloAuthMismatchNoAdjacency(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a, _ := helloAuthPair(t, ctx, "s3cret", "different")
-	time.Sleep(1500 * time.Millisecond) // ample time for a fast-hello adjacency
+	a, _, clk, m := helloAuthPair(t, ctx, "s3cret", "different")
+	// Three of the peer's hellos turned away is more than an adjacency would
+	// have needed to come up, and it is reached the moment they arrive.
+	waitDrops(t, clk, m, "a", dropAuth, 3)
 	if st, ok := adjState(t, a, packet.Level2); ok && st == AdjUp {
 		t.Errorf("adjacency reached %v despite mismatched hello passwords", st)
 	}
@@ -104,8 +112,9 @@ func TestHelloAuthMismatchNoAdjacency(t *testing.T) {
 
 // domainAuthPair starts two p2p L2 servers using the given L2 (domain) LSP/SNP
 // passwords. Hellos are unauthenticated, so the adjacency forms regardless; only
-// LSP/SNP exchange is gated by the password.
-func domainAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer) {
+// LSP/SNP exchange is gated by the password. Clock and counter as in
+// helloAuthPair.
+func domainAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, b *IsisServer, clk *fakeClock, m *countingMetrics) {
 	t.Helper()
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -113,14 +122,15 @@ func domainAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, 
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	mk := func(name string, tr datalink.Transport) CircuitConfig {
 		c := CircuitConfig{Name: name, Transport: tr, P2P: true, Level2: true, Padding: ptrFalse()}
-		fastHello(&c)
+		steadyHello(&c)
 		return c
 	}
-	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta)), WithDomainPassword(passA))
-	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb)), WithDomainPassword(passB))
+	clk, m = newFakeClock(), newCountingMetrics()
+	a = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(mk("a", ta)), WithDomainPassword(passA), WithClock(clk), WithMetrics(m))
+	b = mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(mk("b", tb)), WithDomainPassword(passB), WithClock(clk), WithMetrics(m))
 	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
-	return a, b
+	return a, b, clk, m
 }
 
 // TestLSPAuthMatchingSyncsLSDB: a matching domain password lets authenticated
@@ -128,8 +138,8 @@ func domainAuthPair(t *testing.T, ctx context.Context, passA, passB string) (a, 
 func TestLSPAuthMatchingSyncsLSDB(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, b := domainAuthPair(t, ctx, "lsppw", "lsppw")
-	waitFor(t, "b installs A's authenticated LSP", func() bool {
+	_, b, clk, _ := domainAuthPair(t, ctx, "lsppw", "lsppw")
+	waitClock(t, clk, "b installs A's authenticated LSP", func() bool {
 		return liveLSPFrom(t, b, packet.SystemID{0, 0, 0, 0, 0, 1})
 	})
 }
@@ -139,9 +149,11 @@ func TestLSPAuthMatchingSyncsLSDB(t *testing.T) {
 func TestLSPAuthMismatchRejectsLSP(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a, b := domainAuthPair(t, ctx, "lsppw", "wrongpw")
-	waitFor(t, "adjacency up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
-	time.Sleep(1500 * time.Millisecond) // give flooding ample time
+	a, b, clk, m := domainAuthPair(t, ctx, "lsppw", "wrongpw")
+	waitClock(t, clk, "adjacency up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	// A floods its LSP as soon as the adjacency is Up; the wait is over once B
+	// has rejected two of the PDUs that arrived over it.
+	waitDrops(t, clk, m, "b", dropAuth, 2)
 	if liveLSPFrom(t, b, packet.SystemID{0, 0, 0, 0, 0, 1}) {
 		t.Error("peer LSP installed despite a mismatched domain password")
 	}

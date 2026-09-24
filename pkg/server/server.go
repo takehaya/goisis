@@ -50,6 +50,7 @@ type IsisServer struct {
 	levelCap      levelSet // union of circuit levels, for the LSP IS-Type field
 	fib           fib.FIB
 	metrics       Metrics
+	clock         Clock
 	rib           map[netip.Prefix]RouteInfo
 	l1Export      map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
 	l2Leak        map[netip.Prefix]uint32 // L2-reachable prefixes leaked down into our L1 LSP
@@ -131,6 +132,7 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		dbs:               map[packet.Level]*lsdb{},
 		fib:               o.fib,
 		metrics:           o.metrics,
+		clock:             o.clock,
 		rib:               map[netip.Prefix]RouteInfo{},
 		connected:         map[netip.Prefix]bool{},
 		fibPending:        map[netip.Prefix]bool{},
@@ -166,6 +168,9 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	}
 	if s.metrics == nil {
 		s.metrics = NoopMetrics{}
+	}
+	if s.clock == nil {
+		s.clock = realClock{}
 	}
 	// Prefixes named by an option belong to the configuration, not to a
 	// circuit: a circuit whose addresses later change must leave them alone.
@@ -249,7 +254,7 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 
 	// Send an initial hello burst and originate our LSPs so neighbors and
 	// their databases learn about us promptly.
-	now := time.Now()
+	now := s.clock.Now()
 	if s.overloadOnStartup > 0 {
 		s.overloadUntil = now.Add(s.overloadOnStartup)
 	}
@@ -280,7 +285,7 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	// install failed) is repaired without a restart.
 	s.installLocalSIDs()
 
-	ticker := time.NewTicker(housekeepInterval)
+	ticker := s.clock.NewTicker(housekeepInterval)
 	defer ticker.Stop()
 
 	// SPF back-off (RFC 8405), with two states instead of three: QUIET, where a
@@ -291,7 +296,7 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	// and a second threshold would only delay convergence further.
 	// The timer is its own select arm so a hold really is spfHold rather than
 	// being rounded up to the next housekeeping tick.
-	hold := time.NewTimer(spfHold)
+	hold := s.clock.NewTimer(spfHold)
 	hold.Stop()
 	defer hold.Stop()
 	holding := false
@@ -305,21 +310,21 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 			op.errCh <- op.f()
 		case ev := <-s.eventCh:
 			s.handleEvent(ev)
-		case t := <-ticker.C:
+		case t := <-ticker.C():
 			s.housekeeping(t)
-		case <-hold.C:
+		case <-hold.C():
 			holding = false // leave HOLD; the check below picks up any change
 		}
 		// Coalesce the regenerations protocol events asked for, before the SPF
 		// check below, so an LSP generated here feeds the same recompute.
-		s.drainLSPGen(time.Now())
+		s.drainLSPGen(s.clock.Now())
 		// Recompute routes promptly after a topology change, rather than
 		// waiting for the next housekeeping tick — then hold, so a burst
 		// spread over several iterations costs one more recompute, not one
 		// per event.
 		if s.spfDirty && !holding {
 			s.spfDirty = false
-			s.updateRIB(time.Now())
+			s.updateRIB(s.clock.Now())
 			// holding is true exactly while the timer is armed, so this only
 			// ever resets a stopped or already-received one.
 			hold.Reset(spfHold)
@@ -432,7 +437,7 @@ func (s *IsisServer) purgeOwnLSPs(now time.Time) {
 func (s *IsisServer) shutdown() {
 	// Purge our own LSPs and flush the purges on the wire before the transports
 	// close, so neighbors reconverge without us promptly (clean shutdown).
-	now := time.Now()
+	now := s.clock.Now()
 	s.purgeOwnLSPs(now)
 	s.floodTransmit(now)
 	for _, c := range s.circuits {
@@ -453,7 +458,9 @@ func (s *IsisServer) shutdown() {
 }
 
 // readerRetryDelay paces the retries after a transient Recv error, so a
-// circuit whose socket keeps failing does not spin.
+// circuit whose socket keeps failing does not spin. It is the one delay the
+// server does not take from its Clock: it is waited out on a reader goroutine
+// rather than on the management loop, and nothing asserts on its length.
 const readerRetryDelay = time.Second
 
 // startReader runs the reader goroutine for one circuit. Serve starts one per
@@ -628,7 +635,7 @@ type Global struct {
 func (s *IsisServer) GetGlobal(ctx context.Context) (Global, error) {
 	var g Global
 	err := s.mgmtOperation(ctx, func() error {
-		g = Global{Version: version.Version, SystemID: s.systemID, Overload: s.overloaded(time.Now())}
+		g = Global{Version: version.Version, SystemID: s.systemID, Overload: s.overloaded(s.clock.Now())}
 		return nil
 	})
 	return g, err
@@ -685,7 +692,7 @@ func (s *IsisServer) ListLSDBDetail(ctx context.Context) ([]LSPInfo, error) {
 func (s *IsisServer) listLSDB(ctx context.Context, detail bool) ([]LSPInfo, error) {
 	var out []LSPInfo
 	err := s.mgmtOperation(ctx, func() error {
-		now := time.Now()
+		now := s.clock.Now()
 		hostnames := s.hostnameIndex(now)
 		for _, db := range s.dbs {
 			out = append(out, db.snapshot(now, hostnames)...)
@@ -705,7 +712,7 @@ func (s *IsisServer) listLSDB(ctx context.Context, detail bool) ([]LSPInfo, erro
 func (s *IsisServer) ListAdjacencies(ctx context.Context) ([]AdjacencyInfo, error) {
 	var out []AdjacencyInfo
 	err := s.mgmtOperation(ctx, func() error {
-		hostnames := s.hostnameIndex(time.Now())
+		hostnames := s.hostnameIndex(s.clock.Now())
 		for _, c := range s.circuits {
 			for _, a := range c.adjacencyInfos() {
 				a.Hostname = hostnames[a.SystemID]

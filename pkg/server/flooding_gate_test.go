@@ -32,7 +32,8 @@ func TestLSPAndSNPsFromSourceWithoutAdjacencyAreIgnored(t *testing.T) {
 			idR := packet.SystemID{0, 0, 0, 0, 0, 9}
 			cfg := CircuitConfig{Name: "v", Transport: tv, Level2: true, P2P: tc.p2p, Padding: ptrFalse()}
 			fastHello(&cfg)
-			v := mustServer(t, WithSystemID(idV), WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}), WithCircuit(cfg))
+			m := newCountingMetrics()
+			v := mustServer(t, WithSystemID(idV), WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}), WithCircuit(cfg), WithMetrics(m))
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -64,10 +65,14 @@ func TestLSPAndSNPsFromSourceWithoutAdjacencyAreIgnored(t *testing.T) {
 				}
 			}
 
-			// A fixed wait rather than waitFor: the assertion is that nothing
-			// happens, so a slow loop can only make the test pass later, never
-			// flake.
-			time.Sleep(200 * time.Millisecond)
+			// What the fixed wait this replaces was really waiting for is the
+			// three frames crossing the segment, which no clock governs. The
+			// gate counts each one it turns away, so waiting for that count is
+			// both exact and over as soon as they have arrived — and a slow
+			// loop makes the test later rather than flaky, as before.
+			waitFor(t, "the victim turns all three PDUs away", func() bool {
+				return m.count("pdu_drop", "v", dropNoAdjacency) >= 3
+			})
 
 			if hasLSPFrom(t, v, idR) {
 				t.Error("LSP from a source without an adjacency entered the database")

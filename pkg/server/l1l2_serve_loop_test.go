@@ -46,7 +46,10 @@ func routeVia(t *testing.T, s *IsisServer, p netip.Prefix) (RouteInfo, bool) {
 //
 // The latency of that hand-off is a documented property (docs/design.md,
 // Origination: at most minLSPGenInterval plus one housekeeping tick), so the
-// assertions are on convergence, not on a deadline.
+// assertions are on convergence, not on a deadline. All three instances run on
+// one clock the test steps, so those intervals pass as fast as the three loops
+// can be stepped through them; steadyHello rather than fastHello because a
+// stepped clock's hellos are a whole tick apart (see steadyHello).
 func TestL1PrefixReachesAnL2NeighborThroughTheServeLoop(t *testing.T) {
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	configured := netip.MustParsePrefix("10.1.0.0/24")
@@ -65,12 +68,13 @@ func TestL1PrefixReachesAnL2NeighborThroughTheServeLoop(t *testing.T) {
 			Level1: !l2, Level2: l2, Padding: ptrFalse(),
 			IPv4Addrs: []netip.Addr{addr},
 		}
-		fastHello(&c)
+		steadyHello(&c)
 		return c
 	}
 
 	taB, tbA := link(0xa, 0xb) // the Level-1 link
 	taC, tcA := link(0xa, 0xc) // the Level-2 link
+	clk := newFakeClock()
 
 	// Both prefixes cost 5 at B; A's Level-1 path to B costs DefaultMetric, and
 	// C's Level-2 path to A another DefaultMetric.
@@ -78,16 +82,16 @@ func TestL1PrefixReachesAnL2NeighborThroughTheServeLoop(t *testing.T) {
 	b := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area),
 		WithCircuit(p2p("b", tbA, false, netip.MustParseAddr("10.0.1.2"))),
-		WithAdvertisedPrefix(configured, prefixMetric),
+		WithAdvertisedPrefix(configured, prefixMetric), WithClock(clk),
 	)
 	a := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area),
 		WithCircuit(p2p("a1", taB, false, netip.MustParseAddr("10.0.1.1"))),
-		WithCircuit(p2p("a2", taC, true, aToC)),
+		WithCircuit(p2p("a2", taC, true, aToC)), WithClock(clk),
 	)
 	c := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 3}), WithAreaAddresses(area),
-		WithCircuit(p2p("c", tcA, true, netip.MustParseAddr("10.0.2.3"))),
+		WithCircuit(p2p("c", tcA, true, netip.MustParseAddr("10.0.2.3"))), WithClock(clk),
 	)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -104,19 +108,20 @@ func TestL1PrefixReachesAnL2NeighborThroughTheServeLoop(t *testing.T) {
 		return ok && r.Metric == wantMetric && r.Level == packet.Level2 &&
 			len(r.NextHops) == 1 && r.NextHops[0].Gateway == aToC && r.NextHops[0].Interface == "c"
 	}
-	waitFor(t, "C installs the Level-1 prefix A exports", func() bool { return exported(configured) })
+	waitClock(t, clk, "C installs the Level-1 prefix A exports", func() bool { return exported(configured) })
 
 	// From here the network is converged and idle, so B's LSP is the only event
 	// A sees for the second prefix.
 	if err := b.AddPrefix(context.Background(), AdvertisedPrefix{Prefix: runtime, Metric: prefixMetric}); err != nil {
 		t.Fatalf("AddPrefix on B: %v", err)
 	}
-	waitFor(t, "C installs a prefix B originated after convergence", func() bool { return exported(runtime) })
+	waitClock(t, clk, "C installs a prefix B originated after convergence", func() bool { return exported(runtime) })
 
 	// B leaves: its clean-shutdown purge reaches A, A's Level-1 SPF loses both
 	// prefixes, and the same hand-off must run in reverse.
 	stopB()
-	waitFor(t, "C withdraws both prefixes once B is gone", func() bool {
+	stopped(t, b) // B's loop takes its timers off the clock on the way out
+	waitClock(t, clk, "C withdraws both prefixes once B is gone", func() bool {
 		_, got1 := routeVia(t, c, configured)
 		_, got2 := routeVia(t, c, runtime)
 		return !got1 && !got2
