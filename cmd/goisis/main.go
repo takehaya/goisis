@@ -95,8 +95,11 @@ func printResponse(cmd *cobra.Command, msg proto.Message, table func() error) er
 		if err != nil {
 			return err
 		}
-		cmd.Println(string(b))
-		return nil
+		// OutOrStdout, not cmd.Println: cobra's Print writes to OutOrStderr, so
+		// the one output format that exists to be piped into jq was going to
+		// the one stream a pipe does not carry.
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(b))
+		return err
 	case "table", "":
 		return table()
 	default:
