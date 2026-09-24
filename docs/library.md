@@ -164,8 +164,10 @@ and reports them, purges the pseudonode LSPs it owned so peers drop them now
 rather than at MaxAge, stops its subnets being directly connected, and closes
 its transport — the instance owns that transport from `Serve` on. It does not
 wait for the circuit's reader goroutine, which ends on its own within a second;
-the frames that goroutine has already queued are discarded. Deleting a circuit
-that is not configured is an error.
+the frames that goroutine has already queued are discarded, and its label
+series are retired from the `Metrics` sink (`ForgetCircuit`). Deleting a circuit
+that is not configured is refused as `server.ErrAlreadyInState`, so a caller
+replaying a batch can tell it from a refusal that left the node elsewhere.
 
 `AddCircuit` is the other half. You open the transport and pass it in the
 `CircuitConfig`, because opening it on the management loop would stall every
@@ -176,7 +178,10 @@ values, so an addition never renumbers the SIDs of links that did not change —
 sends its first hello at once, and re-originates before returning, so a circuit
 with a smaller MTU has re-fragmented this node's LSPs and a level no circuit was
 at before has its node LSP by the time you get control back. A name that is
-already configured is refused rather than replaced.
+already configured is refused rather than replaced, also as
+`server.ErrAlreadyInState`: the running circuit's transport is an open socket
+and can never equal the one you are passing, so the name is all that is
+compared.
 
 ```go
 s.AddCircuit(ctx, server.CircuitConfig{Name: "eth1", Transport: tr, Level2: true})

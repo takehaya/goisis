@@ -118,6 +118,17 @@ type Metrics interface {
 	// Every direction reports on every recompute, so a node that stops leaking
 	// reports 0 instead of leaving a stale gauge behind.
 	InterLevelPrefixes(direction string, n int)
+	// ForgetCircuit retires every series this sink holds for a circuit that
+	// has been deleted (DeleteCircuit). It is called once, after the last
+	// report that names the circuit.
+	//
+	// Nothing else can retire them. AdjacencyCount and the other per-circuit
+	// gauges are re-set on every housekeeping tick, which walks the configured
+	// circuits -- so one that is gone is never visited again and its last
+	// value stands for as long as the process runs, which is what the "reports
+	// 0 rather than leaving a stale value behind" above exists to prevent. The
+	// counters keep their series for the same reason, with no rate to read.
+	ForgetCircuit(circuit string)
 }
 
 // ReloadOutcome is how a configuration reload ended, as reported through
@@ -271,6 +282,9 @@ func (NoopMetrics) LSPLifetimeFloored(string) {}
 
 // InterLevelPrefixes implements Metrics.
 func (NoopMetrics) InterLevelPrefixes(string, int) {}
+
+// ForgetCircuit implements Metrics.
+func (NoopMetrics) ForgetCircuit(string) {}
 
 // txFailKey identifies one kind of transmit failure on one circuit. The key is
 // (circuit, step) and not the PDU: what fails is the circuit's socket or its

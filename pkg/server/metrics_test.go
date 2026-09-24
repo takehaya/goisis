@@ -23,6 +23,13 @@ type countingMetrics struct {
 	mu     sync.Mutex
 	counts map[string]int
 	gauges map[string]int
+	// reports counts every report made, and reportsAtForget the value it held
+	// when ForgetCircuit ran. The two are what tell a retirement made last
+	// from one made half way through: a sink keys its series on the circuit
+	// name, so anything reported afterwards builds them again.
+	reports         int
+	reportsAtForget int
+	forgotten       []string
 }
 
 func newCountingMetrics() *countingMetrics {
@@ -55,12 +62,21 @@ func (m *countingMetrics) inc(parts ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counts[strings.Join(parts, "|")]++
+	m.reports++
 }
 
 func (m *countingMetrics) set(n int, parts ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gauges[strings.Join(parts, "|")] = n
+	m.reports++
+}
+
+func (m *countingMetrics) ForgetCircuit(circuit string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgotten = append(m.forgotten, circuit)
+	m.reportsAtForget = m.reports
 }
 
 func (m *countingMetrics) count(parts ...string) int {
@@ -612,4 +628,57 @@ func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestADeletedCircuitIsRetiredFromTheSinkLast pins the one call that keeps a
+// removed circuit's series from standing forever. Every per-circuit gauge is
+// re-set on the housekeeping tick, which walks the configured circuits, so a
+// circuit that is gone is never visited again and its last value is what a
+// scrape keeps reading.
+//
+// "Last" is half the guarantee: the sink keys on the circuit name, so a report
+// made after the retirement builds the series again. The removal itself owes
+// several (the adjacencies going down, the flush onto the departing segment),
+// and its reader goroutine outlives it with events already queued -- which is
+// why the guard that refuses those sits in handleEvent and not in handleRx.
+func TestADeletedCircuitIsRetiredFromTheSinkLast(t *testing.T) {
+	m := newCountingMetrics()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(lanCircuit("a", 0xa1, 1500)), WithCircuit(lanCircuit("b", 0xb1, 1500)),
+		WithMetrics(m),
+	)
+	now := time.Now()
+	c := s.circuits[0]
+	addUpAdjacency(c, now)
+	s.regenerateLSPs(false, now)
+
+	if err := s.deleteCircuit("a", now); err != nil {
+		t.Fatalf("deleteCircuit: %v", err)
+	}
+
+	if got := m.forgets(); len(got) != 1 || got[0] != "a" {
+		t.Fatalf("circuits retired from the sink = %v, want exactly [a]", got)
+	}
+	if made, atForget := m.reportCounts(); made != atForget {
+		t.Errorf("%d reports were made after the circuit was retired, so its series are back", made-atForget)
+	}
+	// The reader's queued failure must not put them back either.
+	s.handleEvent(&rxErrEvent{circuit: c})
+	if got := m.count("pdu_rx_error", "a"); got != 0 {
+		t.Errorf("receive errors recorded for a deleted circuit = %d, want 0", got)
+	}
+}
+
+func (m *countingMetrics) forgets() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.forgotten...)
+}
+
+func (m *countingMetrics) reportCounts() (made, atForget int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reports, m.reportsAtForget
 }

@@ -189,7 +189,7 @@ prefix と Level-2 へ伝搬する Level-1 prefix を受け持ちます。した
 
 ```console
 $ systemctl reload goisisd         # または kill -HUP $(pidof goisisd)
-WARN configuration reload: this change needs a restart and was not applied key="circuits: eth1 added"
+WARN configuration reload: this change needs a restart and was not applied key="hostname"
 ```
 
 | キー | `SIGHUP` での扱い |
@@ -197,7 +197,7 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `prefixes` | 反映。メトリックの変更は取り下げと再広報になります。 |
 | `srv6.locators` | 反映。各 locator の End SID も追従します。 |
 | `flex-algo` | 反映。定義の変更は削除と再追加で行い、束ねられた locator も一度外して付け直します。 |
-| `circuits` | **要再起動**。増減には transport と受信ゴルーチンの生成・破棄が必要で、level・メトリック・タイマ・鍵の変更も同じ作り直しになります。インターフェイスのアドレスとキャリアは実時間で追従するので、どちらも不要です。 |
+| `circuits` | 反映。ファイルが足した回線は開き、外した回線は削除して pseudonode LSP を purge します。定義が変わった回線は削除して作り直すので、**隣接は落ちます**。落ちる前にリロードが回線名を挙げて警告します。開けなかったインタフェースが巻き添えにするのはその回線だけで、リロードは partial を報告し、次の `SIGHUP` が再試行します。アドレスとキャリアは実時間で追従するので、そもそもリロードは要りません。 |
 | `net` | **要再起動**。System ID とエリアアドレスは、このノードが出した全 LSP の identity です。 |
 | `hostname` | **要再起動**。自 LSP で広報するため、下にある System ID ごと作り直さずに名前だけ変えることはできません。 |
 | `area-*` / `domain-*` のパスワード・アルゴリズム・鍵 ID | **要再起動**。[鍵のローテーション](#鍵のローテーション)により、一斉切り替えではなくローリング再起動で済みます。 |
@@ -218,9 +218,11 @@ RPC が要りますが、現状ありません。
 デーモンを一切変えません。最初の呼び出しを出す前に、サーバ自身の検査まで含めて
 ファイル全体を検証するからです。Flex-Algo の番号範囲と重複、locator のアドレス
 ファミリと束ねるアルゴリズム、prefix の形とメトリックの上限がそれに当たります。
-リロードが検査できないのはソケットが要るもの、つまりインタフェースの存在と MTU が
-自 LSP を通すかどうかで、これは再起動が回線を開くときに決まります。リロードは
-回線のキーをそもそも適用しないので、失うものはありません。`-f` なしで起動した
+事前に検査できないのはソケットが要るもの、つまりインタフェースの存在と MTU が
+自 LSP を通すかどうかで、これは回線を開くとき、すなわちバッチの適用中に決まります。
+そのためファイルが名指しした回線がこの箱に無い場合、リロードは拒否ではなく
+partial になり、次の `SIGHUP` がそれを開きます。1 分後に上がってくる I/F には
+それ以上何もする必要がありません。`-f` なしで起動した
 デーモンへの `SIGHUP` は致命的にせず無視します。オーバーロードビットはそもそも
 ファイルのキーではなく、実行時に `goisis overload on` で設定します。
 

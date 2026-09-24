@@ -211,13 +211,14 @@ func run(logger *slog.Logger, apiListen string, apiAllowRemote bool, configFile 
 		// circuits. A failure to subscribe is fatal: a daemon that silently
 		// ignores link events looks healthy until the next cable pull.
 		g.Go(func() error {
-			return config.WatchInterfaces(gctx, isis, cfg, logger)
+			return config.WatchInterfaces(gctx, isis, logger)
 		})
 	}
 	g.Go(func() error {
-		// The reload's own view of the running configuration. It never changes
-		// the circuits, so the watcher's copy stays correct and this goroutine
-		// shares nothing writable with it.
+		// The reload's own view of the running configuration. A reload can add
+		// and remove circuits, so this is not a set anything else may hold a
+		// copy of: the watcher asks the server which circuits are its own
+		// rather than keeping one.
 		running := cfg
 		for {
 			select {

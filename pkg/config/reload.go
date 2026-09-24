@@ -19,19 +19,36 @@ import (
 // applied in declaration order, which is the order the server's own rules
 // require: a locator is withdrawn before the Flexible Algorithm it names is
 // deleted, and an algorithm is added before a locator binds to it.
+//
+// The circuits bracket the rest. Deletions come first so that a circuit being
+// rebuilt has given up its name and its pseudonode octet before the addition
+// asks for them, and additions come last so that a circuit whose MTU lowers
+// this node's LSP budget re-fragments once, after every other change has
+// landed. The additions are held in the file's own form and not in
+// server.CircuitConfig, because building one opens a socket (CircuitConfig
+// requires a non-nil transport) and Diff opens none.
 type Changes struct {
+	DeleteCircuits  []string
 	DeleteLocators  []netip.Prefix
 	DeleteFlexAlgos []uint8
 	AddFlexAlgos    []server.FlexAlgoConfig
 	AddLocators     []server.SRv6LocatorConfig
 	DeletePrefixes  []netip.Prefix
 	AddPrefixes     []server.AdvertisedPrefix
+	AddCircuits     []CircuitConfig
 	// Ignored names every difference a reload leaves unapplied, by the key it
-	// is written under in the file ("net", "circuits: eth1 added"). Values are
-	// never included: half of these keys are secrets. A difference that is
-	// neither applied nor named here would be a reload that quietly ran half
-	// the file, which is worse than one that refuses.
+	// is written under in the file ("net", "policy"). Values are never
+	// included: half of these keys are secrets. A difference that is neither
+	// applied nor named here would be a reload that quietly ran half the file,
+	// which is worse than one that refuses.
 	Ignored []string
+	// open is how AddCircuits get their transports, carried here rather than
+	// taken in Diff: Diff is documented as changing nothing, and Reload calls
+	// it before deciding to apply anything, so opening there would cost a
+	// socket per interface for a reload then refused on an unrelated key. It
+	// is unexported so a Changes written by hand needs no value for it; nil
+	// selects defaultOpenCircuit, exactly as Config.OpenCircuit does.
+	open func(ifname string) (datalink.Transport, []netip.Addr, []netip.Addr, error)
 }
 
 // ErrPartiallyApplied reports that a reload issued every call in its batch and
@@ -85,13 +102,14 @@ var restartOnly = []struct {
 // locator's address family and the algorithm it binds to, what a prefix may
 // be and what metric it may carry.
 //
-// Two things stay outside that line. A circuit's transport is a restart's to
-// open, so what only the socket can answer -- that the interface is there,
-// that its MTU admits our LSPs -- is settled at startup alone, which costs a
-// reload nothing: it applies no circuit key either. And the node's running
-// state is not compared at all. Diff is file against file, so a prefix or
-// locator an operator added through the management API is one the server can
-// still refuse in the middle of the batch.
+// Two things stay outside that line. What only a socket can answer -- that an
+// interface is there, that its MTU admits our LSPs -- is not asked here: the
+// circuits are opened while the batch is applied (Changes.addCircuit), so a
+// circuit the box does not have leaves the reload partially applied for the
+// next signal rather than refusing a file whose other keys are fine. And the
+// node's running state is not compared at all. Diff is file against file, so a
+// prefix or locator an operator added through the management API is one the
+// server can still refuse in the middle of the batch.
 func Diff(old, next *Config) (Changes, error) {
 	// Options is the startup path's validation. Opening the circuits is its
 	// one side effect and a restart's job alone, so the probe replaces the
@@ -102,7 +120,8 @@ func Diff(old, next *Config) (Changes, error) {
 		return Changes{}, err
 	}
 
-	var ch Changes
+	ch := Changes{open: next.OpenCircuit}
+	ch.DeleteCircuits, ch.AddCircuits = circuitChanges(old, next)
 
 	oldAlgos, err := flexAlgoSet(old)
 	if err != nil {
@@ -184,18 +203,23 @@ func Diff(old, next *Config) (Changes, error) {
 			ch.Ignored = append(ch.Ignored, f.key)
 		}
 	}
-	ch.Ignored = append(ch.Ignored, ignoredCircuits(old, next)...)
 	return ch, nil
 }
 
-// ignoredCircuits names the circuits a reload cannot touch. Adding or removing
-// one needs a transport and a reader goroutine to appear or go away, which the
-// Serve loop has no operation for; changing one (its level, its timers, its
-// keys) would mean taking it apart and rebuilding it the same way. What a
-// circuit can change at runtime — its addresses and its carrier — is the
-// interface watcher's job, not the file's.
-func ignoredCircuits(old, next *Config) []string {
-	var out []string
+// circuitChanges is the difference between two circuit lists, as the calls that
+// apply it. A circuit is identified by its interface name, and one whose
+// definition changed is a deletion and an addition: there is no runtime path
+// for a circuit's level, timers, priority, padding or metric, and building one
+// would be a mutator per field, each with a protocol consequence of its own.
+// Nor would it buy much — almost every field takes the adjacency down anyway
+// (the level and the hello keys by protocol rule, the hello interval through
+// the holding time it advertises, padding through the MTU check the neighbor
+// runs), and only the metric would survive a re-origination. Reload warns
+// before the drop.
+//
+// The order within each slice is the file's, which is deterministic; the two
+// sets are ordered against each other by Changes' field order.
+func circuitChanges(old, next *Config) (del []string, add []CircuitConfig) {
 	before := make(map[string]CircuitConfig, len(old.Circuits))
 	for _, cc := range old.Circuits {
 		before[cc.Interface] = cc
@@ -206,17 +230,17 @@ func ignoredCircuits(old, next *Config) []string {
 		prev, ok := before[cc.Interface]
 		switch {
 		case !ok:
-			out = append(out, fmt.Sprintf("circuits: %s added", cc.Interface))
+			add = append(add, cc)
 		case !reflect.DeepEqual(prev, cc):
-			out = append(out, fmt.Sprintf("circuits: %s changed", cc.Interface))
+			del, add = append(del, cc.Interface), append(add, cc)
 		}
 	}
 	for _, cc := range old.Circuits {
 		if !after[cc.Interface] {
-			out = append(out, fmt.Sprintf("circuits: %s removed", cc.Interface))
+			del = append(del, cc.Interface)
 		}
 	}
-	return out
+	return del, add
 }
 
 // prefixSet returns the configured prefixes keyed by their masked form — the
@@ -339,6 +363,10 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 		report(server.ReloadRefused)
 		return cur, err
 	}
+	// The transport seam belongs to the running configuration, never to the
+	// file: Load cannot set it, and a reload that dropped it would open the
+	// circuits it adds with AF_PACKET under an embedder that supplied its own.
+	next.OpenCircuit = cur.OpenCircuit
 	ch, err := Diff(cur, next)
 	if err != nil {
 		report(server.ReloadRefused)
@@ -346,6 +374,15 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	}
 	for _, key := range ch.Ignored {
 		logger.Warn("configuration reload: this change needs a restart and was not applied", "key", key)
+	}
+	// A circuit that appears in both halves of the batch is one whose
+	// definition changed, and applying that means taking it apart and building
+	// it again (circuitChanges). The adjacencies go with it, so the operator is
+	// told before it happens rather than reading it off a neighbor count.
+	for _, name := range ch.DeleteCircuits {
+		if slices.ContainsFunc(ch.AddCircuits, func(cc CircuitConfig) bool { return cc.Interface == name }) {
+			logger.Warn("configuration reload: this circuit is rebuilt to apply the change, and its adjacencies will drop", "circuit", name)
+		}
 	}
 	// Counted as well as logged, because the difference outlives the log line.
 	// The file keeps it, so the next restart applies it -- and Restart= makes
@@ -374,6 +411,7 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 
 	running := *cur
 	running.Prefixes, running.SRv6, running.FlexAlgo = next.Prefixes, next.SRv6, next.FlexAlgo
+	running.Circuits = next.Circuits
 	return &running, nil
 }
 
@@ -400,6 +438,9 @@ func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 			errs = append(errs, err)
 		}
 	}
+	for _, name := range ch.DeleteCircuits {
+		call(s.DeleteCircuit(ctx, name))
+	}
 	for _, prefix := range ch.DeleteLocators {
 		call(s.DeleteLocator(ctx, prefix))
 	}
@@ -418,5 +459,37 @@ func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 	for _, p := range ch.AddPrefixes {
 		call(s.AddPrefix(ctx, p))
 	}
+	for _, cc := range ch.AddCircuits {
+		call(ch.addCircuit(ctx, s, cc))
+	}
 	return errors.Join(errs...)
+}
+
+// addCircuit opens one circuit's transport and hands it to the server. An
+// interface that cannot be opened costs this circuit and nothing else: apply
+// issues the whole batch, so the rest still lands, Reload reports
+// ErrPartiallyApplied and keeps its baseline, and the next signal re-diffs and
+// tries this one again -- which is what makes "that NIC comes up in a minute"
+// resolve itself.
+//
+// AddCircuit takes ownership of the transport only when it accepts it, so a
+// refusal is this function's to close: nothing else holds it, and without this
+// every retry over an already-added circuit would leak an AF_PACKET socket.
+func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc CircuitConfig) error {
+	open := ch.open
+	if open == nil {
+		open = defaultOpenCircuit
+	}
+	cfg, err := cc.circuit(open)
+	if err != nil {
+		return err
+	}
+	cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
+	if err := s.AddCircuit(ctx, cfg); err != nil {
+		if cerr := cfg.Transport.Close(); cerr != nil {
+			return errors.Join(err, cerr)
+		}
+		return err
+	}
+	return nil
 }

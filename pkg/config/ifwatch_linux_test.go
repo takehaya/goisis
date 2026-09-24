@@ -3,28 +3,51 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vishvananda/netlink"
+
+	"github.com/takehaya/goisis/pkg/server"
 )
 
-// fakeSetter records what the watcher would have pushed into the server.
+// fakeSetter stands in for the server: it answers which circuits are
+// configured, refuses a push for any other name the way the server does, and
+// records what reached it.
 type fakeSetter struct {
+	circuits  []string
 	addrCalls []string
 	linkCalls map[string]bool
 }
 
+func (f *fakeSetter) ListCircuits(context.Context) ([]server.CircuitInfo, error) {
+	out := make([]server.CircuitInfo, 0, len(f.circuits))
+	for _, name := range f.circuits {
+		out = append(out, server.CircuitInfo{Interface: name})
+	}
+	return out, nil
+}
+
 func (f *fakeSetter) SetCircuitAddresses(_ context.Context, name string, _, _ []netip.Addr, _ []netip.Prefix) error {
+	if !slices.Contains(f.circuits, name) {
+		return fmt.Errorf("%w: %q", server.ErrUnknownCircuit, name)
+	}
 	f.addrCalls = append(f.addrCalls, name)
 	return nil
 }
 
 func (f *fakeSetter) SetCircuitLinkState(_ context.Context, name string, up bool) error {
+	if !slices.Contains(f.circuits, name) {
+		return fmt.Errorf("%w: %q", server.ErrUnknownCircuit, name)
+	}
 	if f.linkCalls == nil {
 		f.linkCalls = map[string]bool{}
 	}
@@ -32,28 +55,64 @@ func (f *fakeSetter) SetCircuitLinkState(_ context.Context, name string, up bool
 	return nil
 }
 
-// TestApplyEventsOnlyConfiguredCircuits checks the event mapping: an interface
-// named in the configuration reaches the server, anything else is ignored (the
-// kernel reports every interface on the box, not just ours).
-func TestApplyEventsOnlyConfiguredCircuits(t *testing.T) {
-	watched := map[string]bool{"isis0": true}
-	logger := slog.New(slog.DiscardHandler)
-	f := &fakeSetter{}
+// TestAnEventForAnInterfaceWeDoNotRunIsNotAWarning pins what replaced the
+// startup snapshot of the circuit set. The kernel reports every interface on
+// the box, so the watcher pushes each event and lets the server say whether the
+// circuit is ours; an unrelated NIC must therefore not reach the warning log,
+// or every daemon on a multi-homed host would look broken.
+func TestAnEventForAnInterfaceWeDoNotRunIsNotAWarning(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	f := &fakeSetter{circuits: []string{"isis0"}}
 	ctx := t.Context()
 
-	applyAddrEvent(ctx, f, watched, "isis0", logger)
-	applyAddrEvent(ctx, f, watched, "eth9", logger)
-	applyLinkEvent(ctx, f, watched, "isis0", false, logger)
-	applyLinkEvent(ctx, f, watched, "eth9", true, logger)
+	applyAddrEvent(ctx, f, "isis0", logger)
+	applyAddrEvent(ctx, f, "eth9", logger)
+	applyLinkEvent(ctx, f, "isis0", false, logger)
+	applyLinkEvent(ctx, f, "eth9", true, logger)
 
-	if want := []string{"isis0"}; len(f.addrCalls) != 1 || f.addrCalls[0] != want[0] {
+	if want := []string{"isis0"}; !slices.Equal(f.addrCalls, want) {
 		t.Errorf("address calls = %v, want %v", f.addrCalls, want)
+	}
+	if up, ok := f.linkCalls["isis0"]; !ok || up {
+		t.Errorf("isis0 link state = %v (reported %v), want down", up, ok)
 	}
 	if len(f.linkCalls) != 1 {
 		t.Errorf("link calls = %v, want only isis0", f.linkCalls)
 	}
-	if up, ok := f.linkCalls["isis0"]; !ok || up {
-		t.Errorf("isis0 link state = %v (reported %v), want down", up, ok)
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Errorf("an interface we do not run was warned about:\n%s", logs.String())
+	}
+	// The event was handled rather than dropped in silence: an operator who
+	// turns Debug on can still see the watcher deciding.
+	if !strings.Contains(logs.String(), "eth9") {
+		t.Errorf("the refused interface is not in the log at Debug either:\n%s", logs.String())
+	}
+}
+
+// TestAResyncFollowsACircuitAddedAfterStartup is the reason the watcher holds
+// no circuit set of its own. A reload adds and removes circuits, so a set read
+// once at startup would leave an added circuit unfollowed for the life of the
+// daemon -- no address change learned, and no adjacency torn down when its
+// carrier drops, which is the failure this watcher exists for.
+func TestAResyncFollowsACircuitAddedAfterStartup(t *testing.T) {
+	// The loopback stands in for a real interface: reading it needs no
+	// privileges, and it exists in every namespace a test can run in.
+	f := &fakeSetter{}
+	logger := slog.New(slog.DiscardHandler)
+
+	resyncAll(t.Context(), f, logger)
+	if len(f.addrCalls)+len(f.linkCalls) != 0 {
+		t.Fatalf("a server with no circuits was pushed to: %v %v", f.addrCalls, f.linkCalls)
+	}
+
+	f.circuits = []string{"lo"} // a reload added it
+	resyncAll(t.Context(), f, logger)
+	if !slices.Contains(f.addrCalls, "lo") {
+		t.Errorf("address calls = %v, want the circuit added after startup", f.addrCalls)
+	}
+	if up, ok := f.linkCalls["lo"]; !ok || !up {
+		t.Errorf("lo link state = %v (reported %v), want up", up, ok)
 	}
 }
 
@@ -89,7 +148,7 @@ func watchLoopError(t *testing.T, addrCh <-chan netlink.AddrUpdate, linkCh <-cha
 	t.Helper()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- watchLoop(t.Context(), &fakeSetter{}, map[string]bool{"isis0": true}, addrCh, linkCh, nil, slog.New(slog.DiscardHandler))
+		errCh <- watchLoop(t.Context(), &fakeSetter{circuits: []string{"isis0"}}, addrCh, linkCh, nil, slog.New(slog.DiscardHandler))
 	}()
 	select {
 	case err := <-errCh:
@@ -142,8 +201,8 @@ func TestResyncPushesCurrentInterfaceState(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &fakeSetter{}
-			resyncAll(t.Context(), f, map[string]bool{tt.iface: true}, slog.New(slog.DiscardHandler))
+			f := &fakeSetter{circuits: []string{tt.iface}}
+			resyncAll(t.Context(), f, slog.New(slog.DiscardHandler))
 
 			if got := len(f.addrCalls) > 0; got != tt.wantAddrs {
 				t.Errorf("addresses pushed = %v (calls %v), want %v", got, f.addrCalls, tt.wantAddrs)
@@ -163,6 +222,10 @@ func TestResyncPushesCurrentInterfaceState(t *testing.T) {
 // the watcher goroutine instead of racing it.
 type signalSetter struct{ addrs chan string }
 
+func (s *signalSetter) ListCircuits(context.Context) ([]server.CircuitInfo, error) {
+	return []server.CircuitInfo{{Interface: "lo"}}, nil
+}
+
 func (s *signalSetter) SetCircuitAddresses(_ context.Context, name string, _, _ []netip.Addr, _ []netip.Prefix) error {
 	s.addrs <- name
 	return nil
@@ -178,7 +241,7 @@ func TestWatchLoopResyncsOnTrigger(t *testing.T) {
 	s := &signalSetter{addrs: make(chan string, 1)}
 	resync := make(chan struct{}, 1)
 	go func() {
-		_ = watchLoop(t.Context(), s, map[string]bool{"lo": true}, nil, nil, resync, slog.New(slog.DiscardHandler))
+		_ = watchLoop(t.Context(), s, nil, nil, resync, slog.New(slog.DiscardHandler))
 	}()
 
 	resync <- struct{}{}
