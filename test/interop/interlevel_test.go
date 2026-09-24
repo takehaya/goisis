@@ -279,9 +279,15 @@ router isis 1
 		run(t, "docker", "run", "-d", "--name", g, "--network", "none", "--privileged",
 			"--entrypoint", "sleep", "-v", dir+":/etc/goisis:ro", "goisis:interop", "infinity")
 	}
-	for _, f := range []string{frl1, frl2} {
-		run(t, "docker", "run", "-d", "--name", f, "--network", "none", "--privileged",
-			"-v", dir+"/daemons:/etc/frr/daemons:ro", "-v", dir+"/"+f+".conf:/etc/frr/frr.conf:ro", frrImage)
+	// The configuration file is named for the node, not for the container: the
+	// container names carry a prefix that keeps them clear of the other tests'.
+	// A mount whose source does not exist is a silently created empty
+	// directory, and FRR then comes up with every daemon running and no
+	// configuration at all -- which reads exactly like an adjacency that will
+	// not form.
+	for _, f := range []struct{ container, conf string }{{frl1, "frl1"}, {frl2, "frl2"}} {
+		run(t, "docker", "run", "-d", "--name", f.container, "--network", "none", "--privileged",
+			"-v", dir+"/daemons:/etc/frr/daemons:ro", "-v", dir+"/"+f.conf+".conf:/etc/frr/frr.conf:ro", frrImage)
 	}
 	pid := func(name string) string {
 		t.Helper()
