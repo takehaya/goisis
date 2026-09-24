@@ -20,13 +20,17 @@ import (
 // require: a locator is withdrawn before the Flexible Algorithm it names is
 // deleted, and an algorithm is added before a locator binds to it.
 //
-// The circuits bracket the rest. Deletions come first so that a circuit being
-// rebuilt has given up its name and its pseudonode octet before the addition
-// asks for them, and additions come last so that a circuit whose MTU lowers
-// this node's LSP budget re-fragments once, after every other change has
-// landed. The additions are held in the file's own form and not in
-// server.CircuitConfig, because building one opens a socket (CircuitConfig
-// requires a non-nil transport) and Diff opens none.
+// The circuits bracket the rest. The deletions come first, of the circuits the
+// file stopped naming, and the additions come last so that a circuit whose MTU
+// lowers this node's LSP budget re-fragments once, after every other change has
+// landed. A circuit named by both halves is one whose definition changed, and
+// apply does not issue that deletion in this order at all: it belongs inside
+// the addition (Changes.addCircuit), which is both where the name is freed
+// immediately before the addition that takes it and the only place that knows
+// whether the running circuit needs rebuilding at all. The additions are held
+// in the file's own form and not in server.CircuitConfig, because building one
+// opens a socket (CircuitConfig requires a non-nil transport) and Diff opens
+// none.
 type Changes struct {
 	DeleteCircuits  []string
 	DeleteLocators  []netip.Prefix
@@ -378,37 +382,35 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	for _, key := range ch.Ignored {
 		logger.Warn("configuration reload: this change needs a restart and was not applied", "key", key)
 	}
-	// A circuit that appears in both halves of the batch is one whose
-	// definition changed, and applying that means taking it apart and building
-	// it again (circuitChanges). The adjacencies go with it, so the operator is
-	// told before it happens rather than reading it off a neighbor count.
-	for _, name := range ch.DeleteCircuits {
-		if slices.ContainsFunc(ch.AddCircuits, func(cc CircuitConfig) bool { return cc.Interface == name }) {
-			logger.Warn("configuration reload: this circuit is rebuilt to apply the change, and its adjacencies will drop", "circuit", name)
-		}
-	}
 	// Counted as well as logged, because the difference outlives the log line.
 	// The file keeps it, so the next restart applies it -- and Restart= makes
 	// that restart something nobody has to ask for. See ConfigReloadUnapplied.
+	// The calls the server refuses are added to it below: a circuit the box
+	// does not have is the same kind of divergence as a key that needs a
+	// restart, and the worse one, because the next restart does not adopt it --
+	// it fails on it.
+	//
 	// Deferred so it goes out however the apply below ends, and after the
 	// outcome rather than in front of it: the count is the same either way,
 	// and a reload must not spend a second deadline before it applies anything.
-	defer reportUnapplied(len(ch.Ignored))
+	unapplied := len(ch.Ignored)
+	defer func() { reportUnapplied(unapplied) }()
 	// A deadline, because the caller's context is the daemon's lifetime: every
 	// call below queues behind the Serve loop, so a loop wedged on a slow sink
 	// would otherwise hold the reload — and the signal handler behind it —
 	// until the process ends, with nothing said.
 	applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)
 	defer cancel()
-	if err := ch.apply(applyCtx, s); err != nil {
+	if errs := ch.apply(applyCtx, s, logger); len(errs) > 0 {
 		// No rollback: undoing what landed would need the inverse of every
 		// mutator, and the joined error already names every call the server
 		// refused. What is owed instead is honesty — the baseline stays where
 		// it was, so the next SIGHUP re-diffs the whole change and reports it
 		// again, rather than recording a file the node never adopted as the
 		// truth.
+		unapplied += len(errs)
 		report(server.ReloadPartial)
-		return cur, fmt.Errorf("%w: %w", ErrPartiallyApplied, err)
+		return cur, fmt.Errorf("%w: %w", ErrPartiallyApplied, errors.Join(errs...))
 	}
 	report(server.ReloadApplied)
 
@@ -419,11 +421,13 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 }
 
 // apply pushes the changes through the server's runtime API, in the field
-// order Changes documents. Every call is issued and the refusals are joined:
-// the batch order is fixed and Diff derives the same batch from the same file
+// order Changes documents, and returns every refusal rather than the first.
+// The batch order is fixed and Diff derives the same batch from the same file
 // every time, so returning at the first refusal would put every call behind it
 // out of reach of any number of signals. Issuing them all costs a refusal only
-// the call it refuses.
+// the call it refuses. The refusals are returned one per call and not joined,
+// because the count is the reload's distance from the file and Reload reports
+// it (ConfigReloadUnapplied).
 //
 // The file is authoritative for what it names, so a call the server refuses
 // because the node is already in the state it asks for (server.ErrAlreadyInState)
@@ -434,7 +438,7 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 // signalling. A refusal that reports anything else -- a prefix present at
 // another metric, a locator bound to another algorithm -- is still an error,
 // because the file asks for a value the node does not have.
-func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
+func (ch Changes) apply(ctx context.Context, s *server.IsisServer, logger *slog.Logger) []error {
 	var errs []error
 	call := func(err error) {
 		if err != nil && !errors.Is(err, server.ErrAlreadyInState) {
@@ -442,6 +446,9 @@ func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 		}
 	}
 	for _, name := range ch.DeleteCircuits {
+		if ch.rebuilds(name) {
+			continue // issued by addCircuit, and only if the node still needs it
+		}
 		call(s.DeleteCircuit(ctx, name))
 	}
 	for _, prefix := range ch.DeleteLocators {
@@ -463,33 +470,69 @@ func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 		call(s.AddPrefix(ctx, p))
 	}
 	for _, cc := range ch.AddCircuits {
-		call(ch.addCircuit(ctx, s, cc))
+		call(ch.addCircuit(ctx, s, cc, logger))
 	}
-	return errors.Join(errs...)
+	return errs
 }
 
-// addCircuit opens one circuit's transport and hands it to the server. An
-// interface that cannot be opened costs this circuit and nothing else: apply
-// issues the whole batch, so the rest still lands, Reload reports
-// ErrPartiallyApplied and keeps its baseline, and the next signal re-diffs and
-// tries this one again -- which is what makes "that NIC comes up in a minute"
-// resolve itself.
+// rebuilds reports whether a circuit is named by both halves of the batch,
+// which is the shape circuitChanges gives a circuit whose definition changed.
+func (ch Changes) rebuilds(name string) bool {
+	return slices.Contains(ch.DeleteCircuits, name) &&
+		slices.ContainsFunc(ch.AddCircuits, func(cc CircuitConfig) bool { return cc.Interface == name })
+}
+
+// addCircuit puts one circuit into the shape the file gives it: it opens a
+// transport and hands it to the server, and for a circuit that is being
+// rebuilt it issues the deletion between two attempts at that. An interface
+// that cannot be opened costs this circuit and nothing else: apply issues the
+// whole batch, so the rest still lands, Reload reports ErrPartiallyApplied and
+// keeps its baseline, and the next signal re-diffs and tries this one again --
+// which is what makes "that NIC comes up in a minute" resolve itself.
+//
+// The addition is also what says whether a rebuild is still owed, which is why
+// the deletion is here rather than at the head of the batch. The server
+// answers ErrAlreadyInState for a running circuit identical in every field and
+// names the fields when it is not (server.AddCircuit), so asking first is
+// asking the node. Deleting up front instead would rebuild the circuit on
+// every signal: Diff is file against file and a refused reload keeps its
+// baseline, so the same delete-plus-add is re-derived unchanged, and the
+// adjacencies would drop once per SIGHUP over a circuit already in the file's
+// shape, for as long as some unrelated call in the batch keeps failing. An
+// addition that failed before it reached the server -- an interface that is
+// not there -- takes the delete path too: the file asks for a circuit the node
+// does not have either way, and the running one is on an interface the box no
+// longer opens.
 //
 // AddCircuit takes ownership of the transport on every path, refusals
 // included, so there is nothing to close here -- and nothing that may be
-// closed here. A management operation's context bounds the caller's wait and
-// not the operation, so an addition still queued when applyTimeout expires
-// runs afterwards: closing on that error would hand the server a circuit on a
-// socket this reload had already closed.
-func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc CircuitConfig) error {
-	open := ch.open
-	if open == nil {
-		open = defaultOpenCircuit
+// closed here, the refused first attempt included. A management operation's
+// context bounds the caller's wait and not the operation, so an addition still
+// queued when applyTimeout expires runs afterwards: closing on that error
+// would hand the server a circuit on a socket this reload had already closed.
+func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc CircuitConfig, logger *slog.Logger) error {
+	add := func() error {
+		open := ch.open
+		if open == nil {
+			open = defaultOpenCircuit
+		}
+		cfg, err := cc.circuit(open)
+		if err != nil {
+			return err
+		}
+		cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
+		return s.AddCircuit(ctx, cfg)
 	}
-	cfg, err := cc.circuit(open)
-	if err != nil {
+	err := add()
+	if err == nil || errors.Is(err, server.ErrAlreadyInState) || !ch.rebuilds(cc.Interface) {
 		return err
 	}
-	cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
-	return s.AddCircuit(ctx, cfg)
+	// The adjacencies go with the circuit, so the operator is told before they
+	// drop rather than reading it off a neighbor count -- and only on the
+	// signal that drops them.
+	logger.Warn("configuration reload: this circuit is rebuilt to apply the change, and its adjacencies will drop", "circuit", cc.Interface)
+	if err := s.DeleteCircuit(ctx, cc.Interface); err != nil && !errors.Is(err, server.ErrAlreadyInState) {
+		return err
+	}
+	return add()
 }
