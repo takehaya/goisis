@@ -23,19 +23,25 @@ jobs:
         run: |
           docker pull quay.io/frrouting/frr:10.6.1
           docker pull alpine:3.22
-      - name: Build root-gated netlink and data-link tests
+      - name: Build root-gated tests
         run: |
           go test -c -race -o /tmp/fib.test ./pkg/fib
           go test -c -race -o /tmp/datalink.test ./pkg/datalink
-      - name: Run root-gated netlink and data-link tests
+          go test -c -race -o /tmp/goisisd.test ./cmd/goisisd
+      - name: Run root-gated tests
         # These skip without root, so no other job ever executes them: the FIB's
-        # seg6local programming and AF_PACKET transport are only covered here.
+        # seg6local programming, the AF_PACKET transport, and the daemon's
+        # SIGHUP handler are only covered here. That last one is why the daemon
+        # survives a reload request at all -- SIGHUP's default disposition
+        # terminates the process -- so a job that never runs it is a job that
+        # would not notice.
         # Built as the runner user and only executed under sudo, like the
         # interop binary below: running `go` itself as root leaves root-owned
         # entries in the build cache that break every later step.
         run: |
           sudo /tmp/fib.test -test.v
           sudo /tmp/datalink.test -test.v
+          sudo /tmp/goisisd.test -test.v
       - name: Build interop tests
         run: go test -c -o /tmp/interop.test ./test/interop
       # 20m, not the suite's nominal runtime: the LAN route test alone waits
