@@ -310,9 +310,10 @@ func keyOn(lines []string, n string) string {
 
 // Options translates the configuration into server options, opening an
 // AF_PACKET transport per circuit and reading interface addresses for hellos.
-// It runs every validation a restart runs but the circuits' own (see
-// server.ValidateOptions), so that a caller which never starts a server --
-// Diff, validating a file for a reload -- still refuses what startup refuses.
+// It runs every validation a restart runs that needs no transport, the
+// circuits' own fields included (see server.ValidateOptions), so that a caller
+// which never starts a server -- Diff, validating a file for a reload -- still
+// refuses what startup refuses.
 func (c *Config) Options() ([]server.ServerOption, error) {
 	area, sysID, err := packet.ParseNET(c.NET)
 	if err != nil {
@@ -419,13 +420,6 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 			Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword, AcceptSecrets: c.DomainAcceptPasswords,
 		}))
 	}
-	// The server's own checks, before the first socket: they need no transport,
-	// so a reload reaches them through this same path and refuses a file a
-	// restart would refuse (Diff). Running them here also means a file with a
-	// reserved Flex-Algo number costs a startup no file descriptors.
-	if err := server.ValidateOptions(opts...); err != nil {
-		return nil, err
-	}
 	open := c.OpenCircuit
 	if open == nil {
 		open = defaultOpenCircuit
@@ -442,6 +436,16 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		// (WatchInterfaces) can withdraw exactly this circuit's subnets.
 		cfg.ConnectedPrefixes = connectedPrefixes(cc.Interface)
 		opts = append(opts, server.WithCircuit(cfg))
+	}
+	// The server's own checks, over the whole option set and so after the loop
+	// that puts the circuits in it: they need no transport, so a reload reaches
+	// them through this same path and refuses a file a restart would refuse
+	// (Diff). Run before the loop they would miss the circuits, which is the
+	// half a reload pays for most, since Diff rebuilds a changed circuit as a
+	// delete and an add. A startup that fails here has opened its sockets and
+	// then exits; Diff's probe opens none.
+	if err := server.ValidateOptions(opts...); err != nil {
+		return nil, err
 	}
 	return opts, nil
 }

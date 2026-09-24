@@ -148,18 +148,30 @@ func (c *CircuitConfig) padding() bool {
 	return c.Padding == nil || *c.Padding
 }
 
-func (c *CircuitConfig) applyDefaults() error {
+// validate is the half of applyDefaults that answers from the file alone. It
+// is split out so ValidateOptions can run it over a circuit whose transport
+// nobody has opened: a reload turns a changed circuit into a delete and an add
+// (config.Diff), so a check reachable only from addCircuit is one that runs
+// after the delete has already taken the circuit down.
+func (c *CircuitConfig) validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("circuit: empty name")
+	}
+	if c.Priority != nil && *c.Priority > MaxPriority {
+		return fmt.Errorf("circuit %q: priority %d exceeds %d", c.Name, *c.Priority, MaxPriority)
+	}
+	return requirePrimaryPassword(fmt.Sprintf("circuit %q hello authentication", c.Name), c.HelloPassword, c.HelloAcceptPasswords)
+}
+
+func (c *CircuitConfig) applyDefaults() error {
+	if err := c.validate(); err != nil {
+		return err
 	}
 	if c.Transport == nil {
 		return fmt.Errorf("circuit %q: nil transport", c.Name)
 	}
 	if !c.Level1 && !c.Level2 {
 		c.Level1, c.Level2 = true, true
-	}
-	if c.Priority != nil && *c.Priority > MaxPriority {
-		return fmt.Errorf("circuit %q: priority %d exceeds %d", c.Name, *c.Priority, MaxPriority)
 	}
 	if c.HelloInterval == 0 {
 		c.HelloInterval = DefaultHelloInterval
@@ -170,9 +182,6 @@ func (c *CircuitConfig) applyDefaults() error {
 	if c.Metric == 0 {
 		c.Metric = DefaultMetric
 	}
-	if err := requirePrimaryPassword(fmt.Sprintf("circuit %q hello authentication", c.Name), c.HelloPassword, c.HelloAcceptPasswords); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -181,11 +190,15 @@ type ServerOption func(*options)
 
 // ValidateOptions reports whether NewIsisServer would accept this option set,
 // building nothing and owning nothing. It runs every check that needs no
-// transport; what it leaves out is the circuits, whose transport a restart
-// alone can open (the LSP size the MTU dictates, and applyDefaults' nil-
-// transport check). That split is what lets a configuration reload refuse a
-// file a restart would refuse, without opening a socket per interface — see
-// config.Diff.
+// transport, the circuits' own checks included (CircuitConfig.validate). That
+// is what lets a configuration reload refuse a file a restart would refuse,
+// without opening a socket per interface — see config.Diff.
+//
+// What it leaves out is exactly what a transport answers, and a restart is
+// alone in having one: applyDefaults' nil-transport check, addCircuit's
+// per-circuit MTU floor, and the LSP buffer size the smallest MTU on the box
+// dictates (setLSPBufferSize). A circuit's MTU comes from its socket, so no
+// amount of reading the file decides whether this node's LSPs fit on it.
 func ValidateOptions(opts ...ServerOption) error {
 	var o options
 	for _, opt := range opts {
@@ -228,6 +241,18 @@ func (o *options) validate() error {
 		// hole. Require explicit participation rather than advertising silently.
 		if lc.Algo != 0 && !participated[lc.Algo] {
 			return fmt.Errorf("goisis: SRv6 locator %s is bound to Flex-Algo %d but the node does not participate in it (add WithFlexAlgo)", lc.Prefix, lc.Algo)
+		}
+	}
+	// allocCircuitIDs hands each circuit one pseudonode octet out of 255 and
+	// refuses the circuit that finds none free. Counting them here is the same
+	// refusal reached without building anything, so a file naming more than the
+	// space holds is refused whole rather than part way through.
+	if len(o.circuits) > 255 {
+		return fmt.Errorf("goisis: %d circuits exceed the 255 pseudonode octets available", len(o.circuits))
+	}
+	for i := range o.circuits {
+		if err := o.circuits[i].validate(); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -226,8 +226,12 @@ A file that will not parse, or that a restart would refuse before it opens a
 circuit, leaves the daemon exactly as it was: the whole file is validated
 before the first call goes out, the server's own checks included — the
 Flex-Algo range and duplicates, a locator's address family and the algorithm it
-binds to, what a prefix may be and what metric it may carry. What a reload
-cannot check up front is what needs a socket: whether an interface is there and
+binds to, what a prefix may be and what metric it may carry, and each circuit's
+own fields: its name, its DIS priority and its hello keys. That last group is
+what a reload pays most for, because a circuit whose definition changed is
+removed and added again, so a check reached only on the addition would run with
+the circuit already down. What a reload cannot check up front is what needs a
+socket: whether an interface is there and
 whether its MTU admits our LSPs is settled when the circuit is opened, which
 happens while the batch is being applied. So a circuit the file names and the
 box does not have leaves the reload partially applied rather than refused, and

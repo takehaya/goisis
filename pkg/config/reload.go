@@ -100,7 +100,10 @@ var restartOnly = []struct {
 // every check that needs no transport, Options having been given the server's
 // own (server.ValidateOptions): the Flex-Algo range and duplicates, a
 // locator's address family and the algorithm it binds to, what a prefix may
-// be and what metric it may carry.
+// be and what metric it may carry, and each circuit's own fields -- its name,
+// its DIS priority and its hello keys. That last one matters most here,
+// because a changed circuit leaves as a delete and comes back as an add, so a
+// check this does not reach is one that runs with the circuit already down.
 //
 // Two things stay outside that line. What only a socket can answer -- that an
 // interface is there, that its MTU admits our LSPs -- is not asked here: the
