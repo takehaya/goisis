@@ -189,7 +189,8 @@ type CircuitConfig struct {
 // Load reads and parses a configuration file. A key the schema does not have
 // is an error: dropped in silence, "area-pasword" leaves the node
 // unauthenticated, and a reload cannot even name it, because the key never
-// reached Config.
+// reached Config. A second YAML document is refused for the same reason: the
+// check only sees the document it decodes.
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -203,6 +204,15 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("config %q: %s", path, parseError(b, err))
 	}
+	// A decoder consumes one document, so everything past a "---" separator
+	// was dropped with nothing to report it -- the same failure the check
+	// above exists for, since goisisd has no multi-document configuration and
+	// an area-password in the second document is as silently absent as a
+	// misspelled one. A trailing separator with no keys after it is refused
+	// too: the honest answer is that goisisd reads one document.
+	if err := dec.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("config %q: more than one YAML document; goisisd reads one", path)
+	}
 	if c.NET == "" {
 		return nil, fmt.Errorf("config %q: net is required", path)
 	}
@@ -212,53 +222,90 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
+// yamlTag matches a YAML tag and goType a Go type name, the only two kinds of
+// name a message below repeats. Neither can hold a backtick or a space, so
+// neither can be made to hold the scalar that sits between them.
+const (
+	yamlTag = `!!?[\w.-]+`
+	goType  = `[\w.*\[\]]+`
+)
+
+// The yaml.v3 messages goisisd repeats, as an allowlist: what is rendered is
+// built from these captures, never from the message itself. A blocklist over
+// the parser's text cannot hold, because half the keys in the file are secrets
+// and the library quotes the scalar it rejected without escaping it -- so a
+// backtick in a password ends a non-greedy redaction early, and a shape the
+// list does not know walks past it whole. Each pattern is anchored and the run
+// before the closing backtick is greedy, so an embedded backtick cannot end
+// the scalar early either; anything that does not match is withheld.
 var (
-	// yamlScalar matches the value yaml.v3 quotes into a type error:
-	// "line 2: cannot unmarshal !!str `pass1234` into []string" (a scalar
-	// longer than ten characters is quoted by its first seven).
-	yamlScalar = regexp.MustCompile("(!!\\w+) `[^`]*`")
-	// yamlLine matches the line number every yaml.v3 type error carries.
+	yamlBadType  = regexp.MustCompile("^line (\\d+): cannot unmarshal (" + yamlTag + ")(?: `.*`)? into (" + goType + ")$")
+	yamlBadField = regexp.MustCompile(`^line (\d+): field ([\w.-]+) not found in type (` + goType + `)$`)
+	yamlDupKey   = regexp.MustCompile(`^line (\d+): mapping key "([\w.-]+)" already defined at line (\d+)$`)
+	yamlBadTag   = regexp.MustCompile("^cannot decode (" + yamlTag + ") `.*` as a (" + yamlTag + ")$")
+	// yamlLine matches the line number a message carries when nothing else
+	// about it is recognised.
 	yamlLine = regexp.MustCompile(`^line (\d+): `)
 	// yamlKey matches the key a configuration line names, to put back what
-	// redacting the value takes away.
+	// building the message from parts leaves out.
 	yamlKey = regexp.MustCompile(`^\s*([a-z0-9-]+):`)
 )
 
-// parseError renders a YAML failure the way a daemon may log it: yaml.v3
-// quotes the scalar it could not convert, and writing a password as a scalar
-// where a list is expected — the typo the documented key rotation invites —
-// would put an HMAC key verbatim into the log. What is left is where (the
-// line, and the key written on it) and what (the two types), which is what the
-// operator needs and all they need.
+// parseError renders a YAML failure the way a daemon may log it: never with
+// the value. Writing a password as a scalar where a list is expected -- the
+// typo the documented key rotation invites -- would otherwise put an HMAC key
+// verbatim into the log, and yaml.v3 reports that mistake through several
+// shapes, one of which is not a *yaml.TypeError at all. What is left is where
+// (the line, and the key written on it) and what (the two types), which is
+// what the operator needs and all they need.
 func parseError(src []byte, err error) string {
+	lines := strings.Split(string(src), "\n")
 	var te *yaml.TypeError
 	if !errors.As(err, &te) {
-		// Everything else yaml.v3 reports (scanner and parser failures,
-		// unknown anchors) names positions and keys, never a scalar's value.
-		return err.Error()
+		return "yaml: " + sanitize(strings.TrimPrefix(err.Error(), "yaml: "), lines)
 	}
-	lines := strings.Split(string(src), "\n")
 	out := make([]string, len(te.Errors))
 	for i, msg := range te.Errors {
-		out[i] = yamlScalar.ReplaceAllString(msg, "$1")
-		if out[i] == msg {
-			// Nothing was removed, so the message is still complete: the
-			// unknown-key and duplicate-key errors already name their key.
-			continue
-		}
-		n := yamlLine.FindStringSubmatch(msg)
-		if n == nil {
-			continue
-		}
-		ln, convErr := strconv.Atoi(n[1])
-		if convErr != nil || ln < 1 || ln > len(lines) {
-			continue
-		}
-		if key := yamlKey.FindStringSubmatch(lines[ln-1]); key != nil {
-			out[i] += fmt.Sprintf(" (key %q)", key[1])
-		}
+		out[i] = sanitize(msg, lines)
 	}
 	return "yaml: " + strings.Join(out, "; ")
+}
+
+// sanitize rebuilds one parser message from the parts goisis can name itself.
+// A shape it does not recognise is replaced rather than repaired: there is no
+// reading of a third-party string that stays true across a version bump, and
+// the cost of being wrong is a credential in the log.
+func sanitize(msg string, lines []string) string {
+	if m := yamlBadType.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("line %s: cannot unmarshal %s into %s%s", m[1], m[2], m[3], keyOn(lines, m[1]))
+	}
+	if m := yamlBadField.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("line %s: field %s not found in type %s", m[1], m[2], m[3])
+	}
+	if m := yamlDupKey.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("line %s: mapping key %q already defined at line %s", m[1], m[2], m[3])
+	}
+	if m := yamlBadTag.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("cannot decode %s as a %s", m[1], m[2])
+	}
+	if m := yamlLine.FindStringSubmatch(msg); m != nil {
+		return fmt.Sprintf("line %s: withheld, the parser's wording can quote the value%s", m[1], keyOn(lines, m[1]))
+	}
+	return "withheld, the parser's wording can quote the value"
+}
+
+// keyOn names the configuration key written on line n of the source, empty if
+// the line does not start one.
+func keyOn(lines []string, n string) string {
+	ln, err := strconv.Atoi(n)
+	if err != nil || ln < 1 || ln > len(lines) {
+		return ""
+	}
+	m := yamlKey.FindStringSubmatch(lines[ln-1])
+	if m == nil {
+		return ""
+	}
+	return fmt.Sprintf(" (key %q)", m[1])
 }
 
 // Options translates the configuration into server options, opening an
