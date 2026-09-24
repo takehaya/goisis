@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/takehaya/goisis/pkg/datalink"
 	"github.com/takehaya/goisis/pkg/fib"
@@ -1024,5 +1025,93 @@ circuits:
 		if strings.Contains(logs.String(), secret) {
 			t.Errorf("the reload logged the secret %q:\n%s", secret, logs.String())
 		}
+	}
+}
+
+// shortTimeouts narrows the reload's two deadlines for a test and restores
+// them. The tests below are the only writers, and they do not run in parallel.
+func shortTimeouts(t *testing.T, apply, report time.Duration) {
+	t.Helper()
+	a, r := applyTimeout, reportTimeout
+	applyTimeout, reportTimeout = apply, report
+	t.Cleanup(func() { applyTimeout, reportTimeout = a, r })
+}
+
+// blockingFIB holds the management loop inside the first local-SID write, the
+// way a wedged sink does, and releases it after a fixed delay.
+type blockingFIB struct {
+	fib.Noop
+	once sync.Once
+	hold time.Duration
+}
+
+func (b *blockingFIB) AddLocalSID(fib.LocalSID) error {
+	b.once.Do(func() { time.Sleep(b.hold) })
+	return nil
+}
+
+// A reload reports how it went even when its own apply deadline expired. That
+// outcome is the one worth having: the counter exists to expose a management
+// loop too slow to answer, and sharing the apply's expired context with the
+// report is exactly the case in which nothing would be recorded.
+func TestAPartialApplyIsCountedWhenItsDeadlineExpires(t *testing.T) {
+	shortTimeouts(t, 20*time.Millisecond, 5*time.Second)
+	m := &reloadMetrics{}
+	cfg, s, path := runningServer(t, reloadBase,
+		server.WithMetrics(m), server.WithFIB(&blockingFIB{hold: 300 * time.Millisecond}))
+
+	// Any change that reaches a local SID will do: the first write blocks past
+	// the apply deadline, and the loop is free again well inside the report's.
+	if err := os.WriteFile(path, []byte(strings.Replace(reloadBase,
+		"    - fc00:0:1::/48", "    - fc00:0:1::/48\n    - fc00:0:2::/48", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reload(t.Context(), s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("Reload: want the apply deadline to expire, got nil")
+	}
+	if got := m.count(string(server.ReloadPartial)); got != 1 {
+		t.Errorf("partial reloads recorded = %d, want 1", got)
+	}
+}
+
+// A reload is bounded even when the management loop never answers at all. The
+// signal handler is behind this call, so an unbounded report would make one
+// wedged loop swallow every later SIGHUP as well as this one.
+func TestAReloadReturnsWhenTheManagementLoopNeverAnswers(t *testing.T) {
+	shortTimeouts(t, 20*time.Millisecond, 20*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	if err := os.WriteFile(path, []byte(reloadBase), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+	})
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	// Never Serve: every mgmtOperation parks on the unread channel, which is
+	// what a loop wedged on a slow sink looks like from here.
+	s, err := server.NewIsisServer(opts...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// A file that will not load takes the earliest report path, the one
+		// that runs before the apply has a deadline of its own.
+		_, _ = Reload(t.Context(), s, cfg, filepath.Join(t.TempDir(), "absent.yaml"),
+			slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reload did not return; the outcome report is unbounded")
 	}
 }
