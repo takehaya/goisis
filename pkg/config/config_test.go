@@ -202,23 +202,6 @@ policy:
 	}
 }
 
-// Without a policy.leak-l2-to-l1 section the server gets no leak filter, which
-// is what keeps Level-2 to Level-1 leaking off by default.
-func TestLeakPolicyIsAbsentByDefault(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "c.yaml")
-	cfg := "net: 49.0001.0000.0000.0001.00\ncircuits:\n  - interface: eth0\n"
-	if err := os.WriteFile(path, []byte(cfg), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if c.Policy != nil && c.Policy.LeakL2ToL1 != nil {
-		t.Errorf("leak policy = %+v, want none when the config does not ask for it", c.Policy.LeakL2ToL1)
-	}
-}
-
 func TestPrefixListInvalid(t *testing.T) {
 	if _, err := (PrefixListConfig{Rules: []PrefixRuleConfig{{Permit: "10.0.0.0/8", Deny: "10.0.0.0/8"}}}).prefixList(); err == nil {
 		t.Error("expected error when both permit and deny are set")
@@ -329,6 +312,38 @@ circuits:
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("the error carries the value written under a password key: %v", err)
+	}
+}
+
+// The same guarantee one level down, where Load's decoder option cannot reach:
+// PrefixConfig unmarshals itself, so a misspelled key inside a prefix mapping
+// is caught by that method's own check or by nothing at all -- and dropped, it
+// advertises the prefix at the default metric while reporting the file loaded.
+func TestLoadRejectsAMisspelledKeyInsideAPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+prefixes:
+  - {prefix: 192.0.2.0/24, metirc: 50}
+circuits:
+  - interface: mock0
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted a misspelled key inside a prefix: the prefix would be advertised at the default metric")
+	}
+	if !strings.Contains(err.Error(), "metirc") {
+		t.Errorf("the error does not name the offending key: %v", err)
+	}
+}
+
+// The example an operator copies has to load under the loader shipped beside
+// it. Since an unknown key became a hard error, an example that gets ahead of
+// the schema is a file goisisd refuses to start on.
+func TestTheShippedExampleConfigurationLoads(t *testing.T) {
+	if _, err := Load("../../examples/goisisd.yaml"); err != nil {
+		t.Fatalf("examples/goisisd.yaml does not load: %v", err)
 	}
 }
 

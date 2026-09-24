@@ -823,6 +823,69 @@ circuits:
 	}
 }
 
+// A reload that lands nothing is reported "partial" like one that lands half,
+// and that is deliberate. Since apply counts an already-satisfied call as
+// success, an error that reaches the outcome is the file and the node
+// disagreeing about a value, which no repetition of the signal settles; whether
+// a sibling call happened to land first changes neither what the operator has
+// to do nor what the next SIGHUP will try, and with no rollback and no ordering
+// guarantee against the refusal it is not even stable between two signals over
+// the same file. "Refused" keeps its narrower meaning -- the file rejected
+// before a single call went out -- because that is the one outcome that says
+// the server was never touched.
+func TestAReloadWhoseOnlyCallIsRefusedIsPartialNotRefused(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	m := &reloadMetrics{}
+	cfg, s, path := runningServer(t, initial, server.WithMetrics(m))
+	ctx := t.Context()
+
+	// The same disagreement the refused-apply test uses, reduced to one call:
+	// a prefix advertised through the management API at a metric the file
+	// contradicts. Everything else in the file is already true of the node.
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{
+		Prefix: netip.MustParsePrefix("198.51.100.0/24"), Metric: 20,
+	}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(initial,
+		"  - 192.0.2.0/24\n", "  - 192.0.2.0/24\n  - 198.51.100.0/24\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := Diff(cfg, loadConfigFile(t, path))
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if n := len(ch.DeleteLocators) + len(ch.DeleteFlexAlgos) + len(ch.AddFlexAlgos) +
+		len(ch.AddLocators) + len(ch.DeletePrefixes) + len(ch.AddPrefixes); n != 1 {
+		t.Fatalf("the reload makes %d calls, not the single refused one this test is about: %+v", n, ch)
+	}
+
+	if _, err := Reload(ctx, s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil))); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want an ErrPartiallyApplied", err)
+	}
+	if got := m.count(string(server.ReloadPartial)); got != 1 {
+		t.Errorf("partial reloads = %d, want 1", got)
+	}
+	if got := m.count(string(server.ReloadRefused)); got != 0 {
+		t.Errorf("refused reloads = %d, want 0: nothing was refused before the calls went out", got)
+	}
+
+	// Nothing landed: this is the shape the outcome above is claimed for, so
+	// the test is worth no more than its fixture.
+	if !ownLSPHas(t, s, "198.51.100.0/24 metric 20") {
+		t.Error("the refused call landed after all; this reload was meant to change nothing")
+	}
+	if !ownLSPHas(t, s, "192.0.2.0/24") {
+		t.Error("the prefix the file still names left our own LSP; this reload was meant to change nothing")
+	}
+}
+
 // reloadOrderingBase fills every slice of Changes with more than one entry, so
 // the order they come out in is observable at all. reloadBase cannot: with one
 // prefix, one locator and one algorithm, map iteration order has nowhere to
