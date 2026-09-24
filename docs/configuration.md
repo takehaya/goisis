@@ -215,17 +215,16 @@ reload cannot apply: a prefix-list change needs a restart. Reaching it at
 runtime would mean an RPC for the filters, which the management API does not
 have.
 
-
-A file that will not parse, or that a restart would refuse, leaves the daemon
-exactly as it was: the whole file is validated before the first call goes out,
-the server's own checks included — the Flex-Algo range and duplicates, a
-locator's address family and the algorithm it binds to, what a prefix may be
-and what metric it may carry. What a reload cannot check is what needs a
-socket: whether the interface is there and what its MTU admits is settled when
-a restart opens the circuit, which costs the reload nothing, since it applies
-no circuit key either. A `SIGHUP` to a daemon started without `-f` is ignored
-rather than fatal. The overload bit is not a file key at all: `goisis overload
-on` sets it at runtime.
+A file that will not parse, or that a restart would refuse before it opens a
+circuit, leaves the daemon exactly as it was: the whole file is validated
+before the first call goes out, the server's own checks included — the
+Flex-Algo range and duplicates, a locator's address family and the algorithm it
+binds to, what a prefix may be and what metric it may carry. What a reload
+cannot check is what needs a socket: whether the interface is there and what
+its MTU admits is settled when a restart opens the circuit, which costs the
+reload nothing, since it applies no circuit key either. A `SIGHUP` to a daemon
+started without `-f` is ignored rather than fatal. The overload bit is not a
+file key at all: `goisis overload on` sets it at runtime.
 
 What validation cannot foresee is the node's own state: the file is compared
 with the file the daemon is running, never with the node, so a prefix or a
@@ -240,8 +239,9 @@ an update for a prefix, a locator or a Flexible Algorithm. Withdraw it with
 `goisis`, or write the running value into the file, and signal again.
 
 A reload has no rollback — undoing it needs the inverse of every call — so it
-stops where the refusal left it and says so, rather than recording the file as
-applied:
+issues the whole batch and names what was refused, rather than recording the
+file as applied. A refusal costs only the call it refuses; the rest of the
+batch still lands:
 
 ```console
 ERROR configuration reload was refused part way; the node is not in the state the file describes; fix the file and send SIGHUP again
@@ -330,7 +330,9 @@ daemon starts and reloads on the same set of files: what could never be routed
 to — multicast, unspecified, link-local and IPv4-mapped prefixes, and a metric
 at or above the RFC 5305 reachability ceiling (`0xfe000000`), which means
 "unreachable". A default route is not refused — originating one is legitimate,
-and `policy.advertise` is the knob that suppresses it.
+and `policy.advertise` is the knob that suppresses it. Only `prefix add`
+refused these through 0.5.0, so a file carrying one started then and does not
+now.
 
 `prefix delete` only withdraws what `prefixes` or `prefix add` originates. An
 interface's connected subnet is refused, naming the interface it is connected

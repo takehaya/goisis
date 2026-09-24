@@ -361,7 +361,7 @@ func TestDiffRefusesAFileARestartWouldRefuse(t *testing.T) {
 // to be a file a reload of that same file applies. Two checks lived in
 // AddPrefix alone -- the routability of the prefix and the reachability
 // ceiling on its metric -- so a node started on such a file could not reload
-// it, and the attempt stopped part way through the batch.
+// it, and the attempt left the node part way through the batch.
 func TestReloadAppliesEveryFileAStartupAccepts(t *testing.T) {
 	const base = `net: 49.0001.1921.6800.1001.00
 prefixes:

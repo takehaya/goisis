@@ -256,10 +256,8 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 		if cur, ok := merged[p]; ok && cur.level == packet.Level1 && cur.algo == 0 {
 			continue
 		}
-		// The metric is clamped where it goes on the wire, as the upward
-		// export's is (regenerateNodeLSP), not here: SPF drops a path that
-		// reaches the ceiling, so a route in this set is already below it and
-		// a clamp here could never fire.
+		// The metric is not clamped here: it is clamped where it goes on the
+		// wire (regenerateNodeLSP), as the upward export's is.
 		if !s.l2LeakFilter(AdvertisedPrefix{Prefix: p, Metric: r.metric}) {
 			continue
 		}
@@ -276,8 +274,8 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 // subnets its circuits have connected, and its SRv6 locators. Every circuit
 // subnet originatedPrefixes derives is connected by definition, so these sets
 // cover the advertised list without rebuilding its sorted form here. Both
-// inter-level transfers subtract it, so neither re-advertises a prefix
-// regenerateNodeLSP already carries.
+// inter-level transfers subtract it, so neither re-advertises a prefix this
+// node claims as its own.
 func (s *IsisServer) ownAdvertised() map[netip.Prefix]bool {
 	own := map[netip.Prefix]bool{}
 	for p := range s.optionPrefixes {
@@ -319,9 +317,10 @@ func betterRoute(candidate, incumbent route) bool {
 //     Level-2 LSP does not distinguish the two, and the RFC ranks them equal.
 //  3. Level-2-to-Level-1 inter-area, which is what the up/down bit marks.
 //
-// Classes 4 to 6 are the external-metric equivalents of 1 to 3. This
-// implementation originates wide metrics only (RFC 5305), which carry no
-// external-metric bit, so nothing lands in them.
+// Classes 4 to 6 are the external-metric equivalents of 1 to 3. Routes are
+// computed from wide-metric reachability (TLV 135/236) and SRv6 locators alone
+// (buildTopology), neither of which carries an external-metric bit, so nothing
+// lands in them.
 //
 // Class 3 below class 2 is the half of the up/down bit that lives in the
 // forwarding plane: without it, two L1L2 border routers leaking the same prefix
