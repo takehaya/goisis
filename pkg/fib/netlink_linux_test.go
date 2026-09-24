@@ -703,3 +703,64 @@ func TestNetlinkEndXForwardsFromAnotherIngressInterface(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalSIDRouteAsksTheKernelForTheRightDecapTable guarantees that each
+// decapsulating behavior names its table the way the kernel wants it named.
+//
+// The three are not interchangeable. End.DT6 takes a plain IPv6 table and the
+// kernel looks the packet up in it directly. End.DT4 and End.DT46 name a VRF:
+// SEG6_LOCAL_TABLE is refused with EINVAL for both, and the kernel resolves
+// SEG6_LOCAL_VRFTABLE through the l3mdev instead. Nothing in goisis originates
+// these, so a test that programs the kernel would also have to satisfy two
+// prerequisites that are the operator's (a VRF device on that table, and
+// net.vrf.strict_mode); this pins the attribute a consumer's SID turns into
+// without needing either.
+func TestLocalSIDRouteAsksTheKernelForTheRightDecapTable(t *testing.T) {
+	// The route is built, not installed: localSIDRoute creates the dummy
+	// device the SID lives on, which is the only reason this needs a
+	// namespace. No VRF and no sysctl, which is the point.
+	withNetns(t, func(t *testing.T) { checkDecapTables(t) })
+}
+
+func checkDecapTables(t *testing.T) {
+	t.Helper()
+	n := &Netlink{}
+	for _, tc := range []struct {
+		name     string
+		behavior SIDBehavior
+		action   int
+		vrf      bool
+	}{
+		{"End.DT6 takes a plain table", BehaviorEndDT6, nl.SEG6_LOCAL_ACTION_END_DT6, false},
+		{"End.DT4 takes a VRF", BehaviorEndDT4, nl.SEG6_LOCAL_ACTION_END_DT4, true},
+		{"End.DT46 takes a VRF", BehaviorEndDT46, seg6LocalActionEndDT46, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := n.localSIDRoute(LocalSID{
+				SID: netip.MustParseAddr("fc00:d7::1"), Behavior: tc.behavior, Table: 100,
+			})
+			if err != nil {
+				t.Fatalf("localSIDRoute: %v", err)
+			}
+			enc, ok := r.Encap.(*netlink.SEG6LocalEncap)
+			if !ok {
+				t.Fatalf("Encap = %T, want *netlink.SEG6LocalEncap", r.Encap)
+			}
+			if enc.Action != tc.action {
+				t.Errorf("action = %d, want %d", enc.Action, tc.action)
+			}
+			if got := enc.Flags[nl.SEG6_LOCAL_VRFTABLE]; got != tc.vrf {
+				t.Errorf("SEG6_LOCAL_VRFTABLE = %v, want %v", got, tc.vrf)
+			}
+			if got := enc.Flags[nl.SEG6_LOCAL_TABLE]; got != !tc.vrf {
+				t.Errorf("SEG6_LOCAL_TABLE = %v, want %v", got, !tc.vrf)
+			}
+			if tc.vrf && enc.VrfTable != 100 {
+				t.Errorf("VrfTable = %d, want 100", enc.VrfTable)
+			}
+			if !tc.vrf && enc.Table != 100 {
+				t.Errorf("Table = %d, want 100", enc.Table)
+			}
+		})
+	}
+}

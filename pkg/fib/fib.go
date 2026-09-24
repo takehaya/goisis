@@ -24,10 +24,6 @@ const (
 	BehaviorEndX
 	BehaviorEndDT4
 	BehaviorEndDT6
-	// BehaviorEndDT46 is declared for API completeness, but the netlink FIB
-	// cannot program it yet (the vendored netlink library predates the
-	// SEG6_LOCAL_ACTION_END_DT46 action) and rejects it with an error.
-	// Custom FIB implementations may support it.
 	BehaviorEndDT46
 )
 
@@ -37,7 +33,15 @@ type LocalSID struct {
 	SID netip.Addr
 	// Behavior is the endpoint behavior to apply.
 	Behavior SIDBehavior
-	// Table is the VRF/lookup table for End.DT4/DT6/DT46.
+	// Table is the lookup table a decapsulated packet is routed in.
+	//
+	// The three decapsulating behaviors do not ask the kernel for it the same
+	// way, and the difference is the operator's to satisfy, not this package's:
+	// End.DT6 names a plain IPv6 table, while End.DT4 and End.DT46 name a VRF
+	// and therefore need a VRF device bound to that table and
+	// net.vrf.strict_mode set, or the kernel refuses the route. goisis itself
+	// originates none of these -- it has no VPN control plane to bind a SID to
+	// a table -- so they exist for a consumer driving the FIB directly.
 	Table int
 	// Nexthop is the adjacency the packet is forwarded to for End.X. It is
 	// the neighbor's IPv6 address from its hellos, normally link-local.
