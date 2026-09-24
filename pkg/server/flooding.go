@@ -653,3 +653,20 @@ func chunkEntries(entries []packet.LSPEntry) [][]packet.LSPEntry {
 func inRange(id, start, end packet.LSPID) bool {
 	return bytes.Compare(id[:], start[:]) >= 0 && bytes.Compare(id[:], end[:]) <= 0
 }
+
+// drainSRM sends every LSP flagged for a circuit rather than one tick's worth,
+// for a circuit that is being removed. maxLSPSendPerTick paces a circuit that
+// will still be there next second; this one will not, and the farewell purge
+// must not lose a place in that budget to a flooding backlog — the flags go
+// with the circuit and no later tick carries them. It is bounded by rounds that
+// make no progress, because transmitSRM keeps the flag of a write that failed.
+func (s *IsisServer) drainSRM(c *circuit, level packet.Level, now time.Time) {
+	for left := len(c.srm[level]); left > 0; {
+		s.transmitSRM(c, level, now)
+		if n := len(c.srm[level]); n < left {
+			left = n
+			continue
+		}
+		return
+	}
+}

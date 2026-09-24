@@ -289,11 +289,17 @@ type sendRecorder struct {
 	sent [][]byte
 }
 
+// Send records only what the transport accepted. Recording first would count a
+// PDU handed to a closed transport, which is exactly the ordering this file's
+// delete test exists to catch.
 func (r *sendRecorder) Send(dst packet.SNPA, pdu []byte) error {
+	if err := r.MockTransport.Send(dst, pdu); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	r.sent = append(r.sent, append([]byte(nil), pdu...))
 	r.mu.Unlock()
-	return r.MockTransport.Send(dst, pdu)
+	return nil
 }
 
 func (r *sendRecorder) pdus(t *testing.T) []packet.PDU {
@@ -329,6 +335,15 @@ func TestDeleteCircuitFloodsItsPurgeBeforeTheTransportCloses(t *testing.T) {
 	pn := s.circuits[0].pseudonodeID
 	want := lspID(s.systemID, pn)
 
+	// A running daemon has already flooded what the fixture originated, and
+	// clears the flag when it does. Without this the fixture's own SRM flag is
+	// still set, and transmitSRM then sends whatever the database holds under
+	// that ID whether or not the delete's purge ever reached this circuit.
+	s.transmitSRM(s.circuits[0], packet.Level2, time.Now())
+	rec.mu.Lock()
+	rec.sent = nil
+	rec.mu.Unlock()
+
 	if err := s.deleteCircuit("a", time.Now()); err != nil {
 		t.Fatalf("deleteCircuit: %v", err)
 	}
@@ -343,4 +358,95 @@ func TestDeleteCircuitFloodsItsPurgeBeforeTheTransportCloses(t *testing.T) {
 		return
 	}
 	t.Fatalf("no purge of %s reached the segment; %d PDUs sent", want, len(rec.sent))
+}
+
+// TestDeleteCircuitFloodsItsPurgeOnAPointToPointCircuit guarantees that the
+// peer on a point-to-point link hears the purge of the node LSP this node
+// stops originating when the link was its last circuit at that level.
+//
+// floodReady gates a point-to-point circuit on an Up adjacency, so a teardown
+// before the flush makes it send nothing at all — and this is the one case
+// where there is no other circuit to carry the purge, so the peer would hold
+// our node LSP for the full MaxAge with nothing able to shorten it.
+func TestDeleteCircuitFloodsItsPurgeOnAPointToPointCircuit(t *testing.T) {
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xc1}, 1500)
+	rec := &sendRecorder{MockTransport: tr}
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peer := packet.SystemID{0, 0, 0, 0, 0, 0xee}
+	s := mustServer(t,
+		WithSystemID(self), WithAreaAddresses(area),
+		WithCircuit(CircuitConfig{Name: "p", Transport: rec, P2P: true, Level2: true, Padding: ptrFalse()}),
+	)
+	c := s.circuits[0]
+	now := time.Now()
+	// Two hellos: the first brings the adjacency to Init, the second echoes our
+	// own circuit ID back and brings it Up, which is what floodReady wants.
+	h := p2pHelloEchoing(peer, area, self, c.extCircID)
+	s.processP2PHello(c, packet.SNPA{0, 0, 0, 0, 0, 0xee}, h)
+	s.processP2PHello(c, packet.SNPA{0, 0, 0, 0, 0, 0xee}, h)
+	if c.p2pAdj == nil || c.p2pAdj.state != AdjUp {
+		t.Fatalf("adjacency state = %v, want Up", c.p2pAdj)
+	}
+	s.regenerateLSPs(false, now)
+	// As in the broadcast case: a running daemon has already flooded what the
+	// fixture originated and cleared the flag when it did.
+	s.transmitSRM(c, packet.Level2, now)
+	rec.mu.Lock()
+	rec.sent = nil
+	rec.mu.Unlock()
+
+	want := lspID(self, 0)
+	if err := s.deleteCircuit("p", now); err != nil {
+		t.Fatalf("deleteCircuit: %v", err)
+	}
+	for _, pdu := range rec.pdus(t) {
+		lsp, ok := pdu.(*packet.LSP)
+		if !ok || lsp.LSPID != want {
+			continue
+		}
+		if lsp.RemainingTime != 0 {
+			t.Fatalf("node LSP %s sent with remaining lifetime %d, want a purge", want, lsp.RemainingTime)
+		}
+		return
+	}
+	t.Fatalf("no purge of %s reached the peer; %d PDUs sent", want, len(rec.sent))
+}
+
+// TestDeleteCircuitFlushesItsPurgeThroughAFloodingBacklog guarantees that the
+// farewell purge goes out on a circuit whose SRM set is larger than one tick's
+// send budget.
+//
+// maxLSPSendPerTick paces a circuit that will still be there next second. This
+// one will not: its flags go with it and no later tick carries them, so a purge
+// that loses its place in that budget is a purge the segment never hears.
+func TestDeleteCircuitFlushesItsPurgeThroughAFloodingBacklog(t *testing.T) {
+	a := lanCircuit("a", 0xa1, 1500)
+	rec := &sendRecorder{MockTransport: a.Transport.(*datalink.MockTransport)}
+	a.Transport = rec
+	s := deleteFixture(t, a, lanCircuit("b", 0xb1, 1500))
+	now := time.Now()
+	// A backlog several times the per-tick budget, all of it ahead of the purge
+	// in a map whose iteration order is deliberately unspecified.
+	for i := range maxLSPSendPerTick * 3 {
+		peer := packet.SystemID{0, 0, 0, byte(i >> 8), byte(i), 0x10}
+		injectLSPAt(s, packet.Level2, peer, nil, now)
+		s.circuits[0].setSRM(packet.Level2, lspID(peer, 0), now)
+	}
+	s.transmitSRM(s.circuits[0], packet.Level2, now)
+	rec.mu.Lock()
+	rec.sent = nil
+	rec.mu.Unlock()
+
+	pn := s.circuits[0].pseudonodeID
+	want := lspID(s.systemID, pn)
+	if err := s.deleteCircuit("a", now); err != nil {
+		t.Fatalf("deleteCircuit: %v", err)
+	}
+	for _, pdu := range rec.pdus(t) {
+		if lsp, ok := pdu.(*packet.LSP); ok && lsp.LSPID == want && lsp.RemainingTime == 0 {
+			return
+		}
+	}
+	t.Fatalf("no purge of %s reached the segment behind a backlog; %d PDUs sent", want, len(rec.sent))
 }

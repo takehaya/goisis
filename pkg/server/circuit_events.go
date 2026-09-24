@@ -333,11 +333,6 @@ func (s *IsisServer) deleteCircuit(name string, now time.Time) error {
 	// Refuse the events its reader has already queued, before anything else
 	// makes acting on them wrong (see circuit.detached).
 	c.detached = true
-	// Every adjacency goes down, with the watch events, the metrics, the DIS
-	// re-election and the re-origination that a neighbor loss owes. Adjacencies
-	// still in Init are reported Down too, pairing with the event their Init
-	// transition emitted.
-	s.dropAdjacencies(c, "adjacency down: circuit deleted", func(*adjacency) bool { return true })
 	// Purge the pseudonode LSPs while the circuit is still in s.circuits: once
 	// it is out, regeneratePseudonodeLSPs never visits its octet again, so the
 	// entry would sit in the database own, unpurged, and past a refresh
@@ -371,15 +366,26 @@ func (s *IsisServer) deleteCircuit(name string, now time.Time) error {
 	}
 	// Flush both purges onto this circuit before it goes, exactly as a clean
 	// shutdown does (shutdown): the purges above set SRM on every circuit at
-	// the level, and this is the only one that reaches the LAN this circuit was
-	// on. Without it the members hold our pseudonode LSP until MaxAge —
+	// the level, and this is the only one that reaches the segment this circuit
+	// was on. Without it the neighbors hold our pseudonode LSP until MaxAge —
 	// harmless, because our node LSP no longer points at it and SPF ignores it,
-	// but twenty minutes of a database entry for a LAN we have left. A level
-	// losing its last circuit has nowhere else to send its node LSP's purge at
-	// all, so for that one this is the only flush there will ever be.
+	// but twenty minutes of a database entry for a segment we have left. A
+	// level losing its last circuit has nowhere else to send its node LSP's
+	// purge at all, so for that one this is the only flush there will ever be.
+	//
+	// It runs before the adjacencies go down, not after: floodReady gates a
+	// point-to-point circuit on an Up adjacency, so a teardown first makes this
+	// send nothing at all on exactly the circuits where the level-loss purge
+	// has no other way out. A clean shutdown flushes with its adjacencies up
+	// for the same reason.
 	for _, l := range c.cfg.levels() {
-		s.transmitSRM(c, l, now)
+		s.drainSRM(c, l, now)
 	}
+	// Every adjacency goes down, with the watch events, the metrics, the DIS
+	// re-election and the re-origination that a neighbor loss owes. Adjacencies
+	// still in Init are reported Down too, pairing with the event their Init
+	// transition emitted.
+	s.dropAdjacencies(c, "adjacency down: circuit deleted", func(*adjacency) bool { return true })
 	s.circuits = slices.DeleteFunc(s.circuits, func(other *circuit) bool { return other == c })
 	// Without this the circuit's subnets stay directly connected forever, and a
 	// prefix marked connected is never installed — so a legitimate advertiser
