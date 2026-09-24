@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.0](https://github.com/takehaya/goisis/compare/v0.6.1...v0.7.0) (2026-09-24)
+
+
+### Features
+
+* **lsdb:** report RFC 7987 3.2's corrupt-lifetime event ([1133c19](https://github.com/takehaya/goisis/commit/1133c195cb4b3d41a44efb11e5f61b7812fb911a))
+* **packet:** read multi-topology reachability, so an MT peer is not silent ([be2353a](https://github.com/takehaya/goisis/commit/be2353a22a0bbdfece2c800a61cd993e8a9b648d))
+* **server:** help a neighbour restart gracefully (RFC 5306) ([2cc27e0](https://github.com/takehaya/goisis/commit/2cc27e004a9447d06cfe45bc3ff8e3be8e239995))
+* **spf:** prune Flexible Algorithm links on their admin groups ([988f478](https://github.com/takehaya/goisis/commit/988f478c6923756ce22248a530df1e4bab99b29e))
+
+
+### Bug Fixes
+
+* **cli:** write JSON to stdout, which is the stream a pipe carries ([ed028b1](https://github.com/takehaya/goisis/commit/ed028b1feee2cb0b995c9dd8fe792517a13917db))
+* **fib:** name the decap table the way the kernel wants it named ([9ff29cd](https://github.com/takehaya/goisis/commit/9ff29cd76e10d8db1394df17af71df085d5a0a14))
+
+
+### Performance Improvements
+
+* **spf:** order the tentative set with a heap ([d368e62](https://github.com/takehaya/goisis/commit/d368e62794a8c997efee145d989deeeff0716875))
+
 ## [0.6.1](https://github.com/takehaya/goisis/compare/v0.6.0...v0.6.1) (2026-09-24)
 
 ### Upgrade notes for operators
