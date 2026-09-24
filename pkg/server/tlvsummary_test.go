@@ -137,6 +137,79 @@ func TestTLVSummary(t *testing.T) {
 	}
 }
 
+// TestFlexAlgoConstraintSummary pins the operator-facing rendering of every
+// FAD constraint sub-sub-TLV RFC 9350 section 6 defines, plus the two shapes
+// that must not be rendered as something they are not: a sub-sub-TLV this
+// renderer does not name, and one whose length the RFC rules out.
+func TestFlexAlgoConstraintSummary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ss   packet.FlexAlgoSubSubTLV
+		want string
+	}{
+		{
+			name: "exclude admin group",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubExcludeAdminGroup, Value: []byte{0, 0, 0, 5}},
+			want: "exclude-admin-group 0x00000005",
+		},
+		{
+			name: "include-any admin group, one unit per 32 colors",
+			ss: packet.FlexAlgoSubSubTLV{
+				SubSubTLVType: packet.FlexAlgoSubSubIncludeAnyAdminGroup,
+				Value:         []byte{0, 0, 0, 1, 0x80, 0, 0, 0},
+			},
+			want: "include-any-admin-group 0x00000001,0x80000000",
+		},
+		{
+			name: "include-all admin group",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubIncludeAllAdminGroup, Value: []byte{0, 0, 0x10, 0}},
+			want: "include-all-admin-group 0x00001000",
+		},
+		{
+			name: "definition flags name the M-flag",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubDefinitionFlags, Value: []byte{packet.FlexAlgoFlagM}},
+			want: "flags M",
+		},
+		{
+			// RFC 9350 section 6.4 makes an unsupported flag bit a reason to
+			// stop participating, so a bit goisis does not know must still be
+			// visible.
+			name: "an unassigned flag bit is named by position",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubDefinitionFlags, Value: []byte{0x80, 0x20}},
+			want: "flags M,bit 10",
+		},
+		{
+			name: "flags with nothing set",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubDefinitionFlags, Value: []byte{0x00}},
+			want: "flags none",
+		},
+		{
+			name: "exclude SRLG",
+			ss: packet.FlexAlgoSubSubTLV{
+				SubSubTLVType: packet.FlexAlgoSubSubExcludeSRLG,
+				Value:         []byte{0, 0, 0, 100, 0, 0, 0x03, 0xe8},
+			},
+			want: "exclude-srlg 100,1000",
+		},
+		{
+			name: "an unrecognised sub-sub-TLV falls back to type and length",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: 99, Value: []byte{1, 2, 3}},
+			want: "sub-sub-TLV 99: 3 octets",
+		},
+		{
+			name: "an admin group that is not a whole number of 4-octet units falls back too",
+			ss:   packet.FlexAlgoSubSubTLV{SubSubTLVType: packet.FlexAlgoSubSubExcludeAdminGroup, Value: []byte{0, 0, 5}},
+			want: "sub-sub-TLV 1: 3 octets",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flexAlgoConstraintSummary(tc.ss); got != tc.want {
+				t.Errorf("flexAlgoConstraintSummary = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestTLVSummariesSplitsEntries: a list TLV contributes one line per entry, so
 // the rendered slice is longer than the TLV count; an empty list contributes
 // nothing rather than a blank line.

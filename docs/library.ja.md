@@ -67,6 +67,10 @@ go s.Serve(ctx)                            // ctx がキャンセルされるま
 `EndXSIDs` を持ちます — グローバルな on-link アドレスを持ち、Flexible Algorithm に
 紐づく locator ならそのアルゴリズムにも参加している Up の隣接ごとに 1 つの End.X SID
 で、その隣接のシステム ID と、隣接が乗っているサーキットが付きます。
+`FlexAlgoInfo.Definition` は勝者 FAD の `Constraints`、すなわち受信したままの
+制約 sub-sub-TLV(RFC 9350 §6)を持ちます。goisis はこれで枝刈りはしませんが
+報告はするので、admin group や SRLG の制約を要求しているエリアが、何も要求して
+いないエリアと同じには見えません。
 
 ## 経路ポリシー
 

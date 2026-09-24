@@ -292,8 +292,10 @@ Two invariants matter beyond the codec:
   participation prunes the topology per algorithm — and, because an End.X SID
   carries its locator's algorithm (RFC 9352 §8.1), it also gates which
   adjacencies a Flex-Algo locator hands an End.X SID to, on the same predicate
-  SPF prunes with. Only the IGP metric is computed today; constraint
-  sub-sub-TLVs are preserved on the wire for a later ASLA-aware computation.
+  SPF prunes with. Only the IGP metric is computed today; the winning
+  definition's constraint sub-sub-TLVs are preserved on the wire for a later
+  ASLA-aware computation, and reported by `ListFlexAlgos` and `goisis
+  flex-algo`, so a constrained area is visible as one.
 
 ## Security posture
 
@@ -334,7 +336,7 @@ Deliberate scope for the current milestone; the design keeps them reachable.
 | No BFD | Failure detection is hello-based (hold time). |
 | No runtime circuit add/remove | Prefixes, locators, Flex-Algos, the overload bit and adjacency resets change at runtime, and a circuit's addresses and carrier are followed live (`SetCircuitAddresses` / `SetCircuitLinkState`). `SIGHUP` re-reads the configuration file and applies that same set, naming every difference it leaves behind. Adding or removing a circuit, and changing the System ID, the area or an authentication key, still need a restart — accept lists (`*-accept-passwords`) make a key change a rolling restart rather than a flag day. |
 | Sequence-number exhaustion costs an outage of that LSP ID | Natural refreshes never reach 2³²−1 (~120k years at the 900s rate), but one forged LSP does it in a packet, so the ISO 10589 7.3.16.1 procedure is implemented (`exhaustSeq`): flood a purge at 2³²−1 — which supersedes the live copy at equal sequence under 7.3.16.2, so no higher number is needed — then hold the ID down for ZeroAgeLifetime plus a margin until every node has dropped that purge, and re-originate it from 1. That hold-down is an area-wide outage of that one LSP ID; authentication is what keeps the forgery off the wire. |
-| Flex-Algo computes IGP metric only | FAD constraints (admin groups, SRLG, delay) are preserved on the wire, not evaluated. |
+| Flex-Algo computes IGP metric only | FAD constraints (admin groups, SRLG, delay) are preserved on the wire and reported — the elected definition's constraint sub-sub-TLVs come out of `ListFlexAlgos` and `goisis flex-algo` — but never evaluated: nothing is pruned on them. |
 | Synchronous egress/FIB on the loop | See [Sink contracts](#sink-contracts): non-blocking is a contract on implementations, not enforced by structure. |
 | No RFC 8405 LONG_WAIT | SPF back-off is two-state (recompute immediately, then coalesce for 200 ms). The escalation to a long wait under sustained churn is deliberately omitted: a second threshold would only delay convergence further at MVP scale. |
 | Full recompute per change | No incremental SPF; every topology change rebuilds the `(level, algo)` topologies. Fine for MVP-scale areas. |

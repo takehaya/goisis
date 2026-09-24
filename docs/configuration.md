@@ -283,6 +283,13 @@ of a table, for scripts and `jq`. `goisis database --detail` additionally prints
 each LSP's TLVs under its row, so a peer's advertisement can be read without a
 packet capture.
 
+`goisis flex-algo`'s `CONSTRAINTS` column lists the elected definition's
+constraint sub-sub-TLVs (RFC 9350 §6) — exclude and include admin groups as the
+4-octet units RFC 7308 defines them in, the definition flags, excluded SRLGs.
+goisis reports them but does not prune on them: the computation is
+IGP-metric-only, so a constrained definition still yields a plain IGP-metric
+path.
+
 `database`'s `LIFETIME` column is this node's own view, not the originator's: a
 received LSP is aged from MaxAge whenever it arrived with less (RFC 7987, see
 [Metrics](#metrics)), so the column says how long *this* node will hold the

@@ -169,10 +169,11 @@ func (h *connectHandler) ListFlexAlgos(
 		}
 		if fi.Definition != nil {
 			fa.Definition = &goisisv1.FlexAlgoDefinition{
-				MetricType: uint32(fi.Definition.MetricType),
-				CalcType:   uint32(fi.Definition.CalcType),
-				Priority:   uint32(fi.Definition.Priority),
-				Advertiser: fi.Definition.Advertiser.String(),
+				MetricType:  uint32(fi.Definition.MetricType),
+				CalcType:    uint32(fi.Definition.CalcType),
+				Priority:    uint32(fi.Definition.Priority),
+				Advertiser:  fi.Definition.Advertiser.String(),
+				Constraints: flexAlgoConstraintSummaries(fi.Definition.Constraints),
 			}
 		}
 		for _, p := range fi.Participants {

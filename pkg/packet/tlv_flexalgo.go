@@ -41,6 +41,21 @@ func decodeSRAlgorithm(value []byte) (SubTLV, error) {
 	return s, nil
 }
 
+// Flex-Algorithm Definition sub-sub-TLV code points (RFC 9350 section 6). The
+// values stay opaque here — the codec does not interpret a constraint — but
+// the code points are what a caller keys off to report one.
+const (
+	FlexAlgoSubSubExcludeAdminGroup    uint8 = 1 // exclude admin group (EAG, RFC 7308)
+	FlexAlgoSubSubIncludeAnyAdminGroup uint8 = 2 // include-any admin group
+	FlexAlgoSubSubIncludeAllAdminGroup uint8 = 3 // include-all admin group
+	FlexAlgoSubSubDefinitionFlags      uint8 = 4 // definition flags
+	FlexAlgoSubSubExcludeSRLG          uint8 = 5 // exclude SRLG (RFC 5307 values)
+)
+
+// FlexAlgoFlagM is the M-flag of the FAD definition flags sub-sub-TLV (RFC
+// 9350 section 6.4): bit 0, the most significant bit of the first flags octet.
+const FlexAlgoFlagM uint8 = 0x80
+
 // FlexAlgoSubSubTLV is a sub-sub-TLV of the FAD (admin-group constraints, the
 // definition flags, exclude-SRLG). goisis preserves these opaquely: the
 // initial computation is IGP-metric-only, but byte-exact round-tripping keeps

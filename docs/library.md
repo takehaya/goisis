@@ -67,7 +67,10 @@ the rest of the snapshot. Each `LocatorInfo` carries the locator's End
 SID and its `EndXSIDs` — one End.X SID per Up adjacency that has a global
 on-link neighbor address and, for a locator bound to a Flexible Algorithm,
 participates in that algorithm; each carries the neighbor's System ID and the
-circuit it sits on.
+circuit it sits on. Each `FlexAlgoInfo.Definition` carries the winning FAD's
+`Constraints` — its constraint sub-sub-TLVs (RFC 9350 §6) as received. goisis
+does not prune on them, but it reports them, so an area asking for admin-group
+or SRLG constraints does not read like one asking for none.
 
 ## Route policy
 

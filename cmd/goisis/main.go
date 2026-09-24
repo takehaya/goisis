@@ -430,16 +430,19 @@ func newFlexAlgoCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "ALGO\tLEVEL\tMETRIC-TYPE\tPRIORITY\tADVERTISER\tPARTICIPANTS")
+				_, _ = fmt.Fprintln(w, "ALGO\tLEVEL\tMETRIC-TYPE\tPRIORITY\tADVERTISER\tCONSTRAINTS\tPARTICIPANTS")
 				for _, fa := range res.Msg.GetFlexAlgos() {
-					mt, prio, adv := "-", "-", "-"
+					mt, prio, adv, cons := "-", "-", "-", "-"
 					if d := fa.GetDefinition(); d != nil {
 						mt = metricTypeStr(d.GetMetricType())
 						prio = fmt.Sprintf("%d", d.GetPriority())
 						adv = d.GetAdvertiser()
+						if len(d.GetConstraints()) > 0 {
+							cons = strings.Join(d.GetConstraints(), "; ")
+						}
 					}
-					_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n",
-						fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, strings.Join(fa.GetParticipants(), ", "))
+					_, _ = fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+						fa.GetAlgorithm(), levelStr(fa.GetLevel()), mt, prio, adv, cons, strings.Join(fa.GetParticipants(), ", "))
 				}
 				return w.Flush()
 			})

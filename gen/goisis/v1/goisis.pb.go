@@ -807,7 +807,12 @@ type FlexAlgoDefinition struct {
 	CalcType   uint32 `protobuf:"varint,2,opt,name=calc_type,json=calcType,proto3" json:"calc_type,omitempty"`
 	Priority   uint32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
 	// advertiser is the System ID of the node whose definition won the election.
-	Advertiser    string `protobuf:"bytes,4,opt,name=advertiser,proto3" json:"advertiser,omitempty"`
+	Advertiser string `protobuf:"bytes,4,opt,name=advertiser,proto3" json:"advertiser,omitempty"`
+	// constraints are the winning definition's constraint sub-sub-TLVs (RFC 9350
+	// section 6: exclude/include admin groups, definition flags, exclude-SRLG),
+	// rendered one line each in wire order. goisis reports them but does not
+	// prune on them; the computation is IGP-metric-only.
+	Constraints   []string `protobuf:"bytes,5,rep,name=constraints,proto3" json:"constraints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -868,6 +873,13 @@ func (x *FlexAlgoDefinition) GetAdvertiser() string {
 		return x.Advertiser
 	}
 	return ""
+}
+
+func (x *FlexAlgoDefinition) GetConstraints() []string {
+	if x != nil {
+		return x.Constraints
+	}
+	return nil
 }
 
 // FlexAlgo is one Flexible Algorithm's state at a level.
@@ -2422,7 +2434,7 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x03sid\x18\x01 \x01(\tR\x03sid\x12\x1a\n" +
 	"\bneighbor\x18\x02 \x01(\tR\bneighbor\x12\x1c\n" +
 	"\tinterface\x18\x03 \x01(\tR\tinterface\x12\x1c\n" +
-	"\talgorithm\x18\x04 \x01(\rR\talgorithm\"\x8e\x01\n" +
+	"\talgorithm\x18\x04 \x01(\rR\talgorithm\"\xb0\x01\n" +
 	"\x12FlexAlgoDefinition\x12\x1f\n" +
 	"\vmetric_type\x18\x01 \x01(\rR\n" +
 	"metricType\x12\x1b\n" +
@@ -2430,7 +2442,8 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\bpriority\x18\x03 \x01(\rR\bpriority\x12\x1e\n" +
 	"\n" +
 	"advertiser\x18\x04 \x01(\tR\n" +
-	"advertiser\"\xb3\x01\n" +
+	"advertiser\x12 \n" +
+	"\vconstraints\x18\x05 \x03(\tR\vconstraints\"\xb3\x01\n" +
 	"\bFlexAlgo\x12\x1c\n" +
 	"\talgorithm\x18\x01 \x01(\rR\talgorithm\x12&\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12=\n" +
