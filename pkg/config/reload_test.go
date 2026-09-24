@@ -451,6 +451,7 @@ circuits:
 		"accept passwords with no primary":      {"    hello-accept-passwords:\n      - old\n", false},
 		"a key rotation that keeps its primary": {"    hello-password: new\n    hello-accept-passwords:\n      - old\n", true},
 		"a circuit entry with no interface key": {"  - level: \"2\"\n", false},
+		"the same interface named twice":        {"  - interface: mock0\n    level: \"2\"\n", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			next := base + tc.added
@@ -1225,7 +1226,10 @@ circuits:
 
 	// Both rotations are named -- the area password by key, the hello password
 	// as the circuit that is rebuilt to carry it -- so the log really did have
-	// both values in reach when it wrote the warnings.
+	// both values in reach when it wrote the warnings. The second string is
+	// also the only test of the rebuild warning itself, which is an acceptance
+	// criterion of its own (Changes.addCircuit): keep it even if this test's
+	// subject ever narrows to redaction alone.
 	for _, key := range []string{"area-password", "its adjacencies will drop"} {
 		if !strings.Contains(logs.String(), key) {
 			t.Fatalf("the log does not name %q, so it never came near either secret:\n%s", key, logs.String())

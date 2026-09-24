@@ -410,9 +410,11 @@ func TestClearAdjacency(t *testing.T) {
 	if err := a.ClearAdjacency(ctx, "a", &absent); err != nil {
 		t.Errorf("ClearAdjacency for an absent neighbor: %v", err)
 	}
-	// An unknown circuit is an error.
-	if err := a.ClearAdjacency(ctx, "nope", nil); err == nil {
-		t.Error("expected error clearing adjacencies on an unknown circuit")
+	// A circuit that does not exist is ErrUnknownCircuit, the classification a
+	// caller reads to tell "not mine" from a fault -- not the bare error that
+	// left it reverse-engineering the wording.
+	if err := a.ClearAdjacency(ctx, "nope", nil); !errors.Is(err, ErrUnknownCircuit) {
+		t.Errorf("ClearAdjacency on an unknown circuit = %v, want ErrUnknownCircuit", err)
 	}
 }
 

@@ -529,7 +529,10 @@ func (ch Changes) addCircuit(ctx context.Context, s *server.IsisServer, cc Circu
 	}
 	// The adjacencies go with the circuit, so the operator is told before they
 	// drop rather than reading it off a neighbor count -- and only on the
-	// signal that drops them.
+	// signal that drops them. Pinned by
+	// TestReloadNamesAChangedSecretWithoutLoggingIt, which needs a rebuild to
+	// have a hello key to redact and so asserts this line as well; its name
+	// does not say so, hence this reference.
 	logger.Warn("configuration reload: this circuit is rebuilt to apply the change, and its adjacencies will drop", "circuit", cc.Interface)
 	if err := s.DeleteCircuit(ctx, cc.Interface); err != nil && !errors.Is(err, server.ErrAlreadyInState) {
 		return err

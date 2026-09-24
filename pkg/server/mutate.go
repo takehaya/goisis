@@ -222,12 +222,13 @@ func (s *IsisServer) SetOverload(ctx context.Context, on bool) error {
 // ClearAdjacency tears down adjacencies on a circuit so hellos re-form them:
 // every adjacency on the circuit, or only the one to systemID when it is
 // non-nil. Clearing an adjacency that does not exist is a no-op, so a repeated
-// clear is harmless.
+// clear is harmless; naming a circuit that does not exist is ErrUnknownCircuit,
+// the same classification the other per-circuit mutators answer with.
 func (s *IsisServer) ClearAdjacency(ctx context.Context, circuit string, systemID *packet.SystemID) error {
 	return s.mgmtOperation(ctx, func() error {
 		c := s.circuitNamed(circuit)
 		if c == nil {
-			return fmt.Errorf("goisis: circuit %s is not configured", circuit)
+			return fmt.Errorf("%w: %q", ErrUnknownCircuit, circuit)
 		}
 		s.dropAdjacencies(c, "adjacency cleared", func(adj *adjacency) bool {
 			return systemID == nil || *systemID == adj.systemID

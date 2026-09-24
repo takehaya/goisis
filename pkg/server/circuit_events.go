@@ -17,6 +17,12 @@ import (
 // netlink, which reports every interface on the box, so an event for one we do
 // not run is the ordinary case rather than a fault, and telling the two apart
 // is what keeps an unrelated NIC out of the warning log.
+//
+// DeleteCircuit is deliberately not this. A call that asks a circuit to be gone
+// and finds it gone is the node already being in the state the call asks for,
+// which is what lets a refused reload be retried whole (ErrAlreadyInState); a
+// call that asks something *of* a circuit has nothing to work on and means it.
+// Every mutator of the second kind answers this one.
 var ErrUnknownCircuit = errors.New("goisis: no such circuit")
 
 // SetCircuitAddresses replaces a circuit's interface addresses (CircuitConfig
@@ -269,19 +275,26 @@ func circuitDifferences(a, b CircuitConfig) []string {
 // bits make never reusing it free.
 //
 // A pseudonode octet is one byte, so it has to be reusable, and what protects a
-// reuse is already there rather than in a hold-down: originate takes the next
-// sequence number from this node's own database entry for the LSP ID (ISO 10589
-// 7.3.16), and the purge deleteCircuit left against that octet stays there
-// until it ages out — so a circuit that inherits the octet originates above the
-// copy the area still holds, and the area's own reclaim path covers it after
-// that. The cursor is not that protection; it only means the octet handed back
-// is the last one handed out again rather than the first.
+// reuse is ISO 10589 7.3.16.4 b) rather than a hold-down. The purge
+// deleteCircuit left is not that protection, because a reuse needs a full sweep
+// of the cursor to reach it: an octet comes back at allocation 254, four
+// minutes on a box taking one SIGHUP a second, against a ZeroAgeLifetime of 60
+// seconds. By then our own copy has aged out and originate restarts the reused
+// ID at sequence 1 (the reuse inside the minute is the exception, and there
+// seq = purge + 1 does come out of our own database). What covers the rest is
+// the reclaim: a peer that missed the purge — partitioned while it flooded —
+// still holds the old copy at a higher sequence number and floods it back, and
+// because we originate that LSP ID again handleOwnSystemID takes the b) branch
+// and reoriginateOwn re-issues above what the peer held. One exchange, from
+// whichever direction the stale copy arrives. The cursor is not the protection
+// either; it only means a freed octet comes back after a full sweep rather than
+// immediately.
 //
-// ponytail: the reuse window is one sweep of the 255 octets wide, which is also
-// the whole space, so a box that keeps 255 circuits busy hands one straight
-// back. Past that the sequence-number rule is the only protection; a free list
-// timestamped against ZeroAgeLifetime is the upgrade if that is ever not
-// enough.
+// ponytail: it is 255 allocations, not 255 concurrent circuits — circuitChanges
+// turns any field change into a delete plus an add, so a two-circuit box burns
+// an octet per SIGHUP that touches one and wraps within minutes. A free list
+// timestamped against ZeroAgeLifetime is the upgrade if the reclaim exchange is
+// ever not enough.
 func (s *IsisServer) allocCircuitIDs() (pseudonode uint8, extCircID uint32, err error) {
 	used := make(map[uint8]bool, len(s.circuits))
 	for _, c := range s.circuits {

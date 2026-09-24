@@ -98,6 +98,7 @@ func TestValidateOptionsRunsEveryCircuitCheckThatNeedsNoTransport(t *testing.T) 
 		"hello accept passwords with no primary": {circuits(CircuitConfig{Name: "c", HelloAcceptPasswords: []string{"old"}}), false},
 		"a hello key rotation that keeps one":    {circuits(CircuitConfig{Name: "c", HelloPassword: "new", HelloAcceptPasswords: []string{"old"}}), true},
 		"more circuits than pseudonode octets":   {circuits(many...), false},
+		"the same interface named twice":         {circuits(CircuitConfig{Name: "c"}, CircuitConfig{Name: "c"}), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := ValidateOptions(tc.opts...); (err == nil) != tc.ok {
