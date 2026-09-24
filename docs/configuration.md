@@ -34,6 +34,12 @@ silence, so `area-pasword` — one transposed letter — left the node
 unauthenticated with nothing to report it. **A file carrying keys goisisd does
 not define no longer loads**; comment them out or delete them.
 
+The file holds one YAML document. A second one, after a `---` separator, is
+refused rather than dropped: the check above only sees the document it decodes,
+so a correctly spelled `area-password` appended by a template or a secrets tool
+would have left the node unauthenticated in the same silence. A separator at
+the top of the file is not a second document and still loads.
+
 ## `circuits[]`
 
 | Key | Type | Description |

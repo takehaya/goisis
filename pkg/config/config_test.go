@@ -368,3 +368,93 @@ circuits:
 		}
 	}
 }
+
+// TestLoadNeverReportsTheValueForTheShapesThatWalkedPastTheRedaction pins the
+// same promise as the test above for the three yaml.v3 messages a blocklist
+// over the parser's text could not cover: a backtick inside the secret ends
+// the quoted run early, a tag that is not "!!"-prefixed matches no known
+// shape, and an explicit resolvable tag is reported outside a *yaml.TypeError
+// altogether, so it never reached the sanitiser and was logged whole.
+func TestLoadNeverReportsTheValueForTheShapesThatWalkedPastTheRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		// leak is what must not appear: yaml.v3 quotes a scalar longer than
+		// ten characters by its first seven, so a shape that leaks part of a
+		// long secret is checked on that part.
+		leak string
+	}{
+		{"a backtick inside the secret", "area-accept-passwords: \"`hunter2\"", "hunter2"},
+		{"a tag the schema does not define", "area-accept-passwords: !vault hunter2", "hunter2"},
+		{"an explicit resolvable tag", "area-password: !!int SUPERSECRETKEY12345", "SUPERSECRETKEY12345"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "c.yaml")
+			if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+`+tc.line+`
+circuits:
+  - interface: mock0
+`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load accepted a value it cannot convert")
+			}
+			// What goisisd does with the error on a failed reload.
+			var logs bytes.Buffer
+			slog.New(slog.NewTextHandler(&logs, nil)).Error("configuration reload failed", "error", err)
+			if strings.Contains(logs.String(), tc.leak) {
+				t.Errorf("the mistyped secret reached the log:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// TestLoadRejectsASecondYAMLDocument pins that a file carrying more than one
+// YAML document is refused rather than read to the first separator. KnownFields
+// only sees the document it decodes, so a second one -- appended by a template
+// or a secrets tool -- was dropped whole, and a correctly spelled area-password
+// there left the node unauthenticated exactly as a misspelling used to.
+func TestLoadRejectsASecondYAMLDocument(t *testing.T) {
+	const secret = "R0tationKey2026"
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+circuits:
+  - interface: mock0
+---
+area-password: `+secret+`
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted a second document: its keys are dropped, and area-password among them leaves the node unauthenticated")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("the error carries the value written under a password key: %v", err)
+	}
+}
+
+// TestLoadNamesTheKeyAndBothTypesOfAnOrdinaryMistake pins that withholding the
+// value costs the operator nothing else: an int key written as a word still
+// reports where it is, which key it is, and both type names.
+func TestLoadNamesTheKeyAndBothTypesOfAnOrdinaryMistake(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.yaml")
+	if err := os.WriteFile(path, []byte(`net: 49.0001.0000.0000.0001.00
+circuits:
+  - interface: mock0
+    hold-multiplier: many
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted a word where an int is required")
+	}
+	for _, want := range []string{"line 4", "hold-multiplier", "!!str", "int"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not name %q: %v", want, err)
+		}
+	}
+}
