@@ -31,6 +31,9 @@ func TestFRRAcceptsThePurgeOfACircuitARemovedBySIGHUP(t *testing.T) {
 		frVeth  = "frhupv"
 		lspHost = "goisis.01-00"
 		lspID   = "0000.0000.0001.01-00"
+		// This node's own LSP, which the removal must leave alone.
+		nodeHost = "goisis.00-00"
+		nodeID   = "0000.0000.0001.00-00"
 	)
 
 	dir := t.TempDir()
@@ -132,6 +135,17 @@ router isis 1
 		return !frr.databaseContains(t, lspHost) && !frr.databaseContains(t, lspID)
 	}) {
 		t.Errorf("FRR still holds our pseudonode LSP after the circuit was removed:\n%s\ngoisisd log:\n%s",
+			run(t, "docker", "exec", fr, "vtysh", "-c", "show isis database"), goisisLog())
+	}
+	// The positive control the negative assertion above needs. databaseContains
+	// reports false when vtysh fails, so an FRR that has died satisfies it; and
+	// a purge that took this node's own LSP with it -- the worse regression, and
+	// the one the kept-level computation in deleteCircuit exists to prevent --
+	// satisfies it too. Our node LSP is still ours to hold: the node kept a
+	// circuit at both levels, so nothing purged it, and MaxAge is twenty minutes
+	// away.
+	if !frr.databaseContains(t, nodeHost) && !frr.databaseContains(t, nodeID) {
+		t.Errorf("FRR no longer holds our node LSP either: the removal purged more than the circuit, or FRR stopped answering and the assertion above proved nothing:\n%s\ngoisisd log:\n%s",
 			run(t, "docker", "exec", fr, "vtysh", "-c", "show isis database"), goisisLog())
 	}
 }

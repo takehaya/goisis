@@ -138,6 +138,39 @@ func TestDeleteCircuitRestoresTheLSPBufferSize(t *testing.T) {
 	}
 }
 
+// TestDeleteCircuitRepacksTheFragmentsTheWiderBufferAllows guarantees that the
+// re-packing that wider buffer allows is in the database by the time the call
+// returns, not queued behind the throttle.
+//
+// The fragments were split for the departed circuit's budget, and asking the
+// throttle for a regeneration would leave that split in place for up to
+// minLSPGenInterval — so for that long this node floods, and every peer in the
+// area stores and checksums, a fragment count no circuit needs any more. The
+// addition states the same reason for regenerating directly (addCircuit).
+func TestDeleteCircuitRepacksTheFragmentsTheWiderBufferAllows(t *testing.T) {
+	s := mustServer(t, mtuOptions(1500, 700)...)
+	now := time.Now()
+	s.regenerateLSPs(false, now)
+	narrow := s.lspBufferSize
+	if narrow != 700-3 {
+		t.Fatalf("LSP buffer size with a 700-octet circuit = %d, want %d", narrow, 700-3)
+	}
+	if n := len(ownFragments(s)); n < 2 {
+		t.Fatalf("the fixture originated %d fragments, want the reachability to span >= 2", n)
+	}
+
+	if err := s.deleteCircuit("c1", now); err != nil {
+		t.Fatalf("deleteCircuit: %v", err)
+	}
+	for _, e := range ownFragments(s) {
+		if len(e.raw) > narrow {
+			return
+		}
+	}
+	t.Errorf("every own fragment still fits the %d octets the departed circuit forced, over %d fragments: the database holds its packing until the throttle lets a regeneration through",
+		narrow, len(ownFragments(s)))
+}
+
 // TestDeleteCircuitTearsDownItsAdjacencies guarantees that the circuit's
 // neighbors are reported down rather than dropped on the floor with it: a
 // subscriber that saw each adjacency come up has to see it go away, and the DIS
