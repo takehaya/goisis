@@ -270,10 +270,12 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	// The other direction (ISO 10589 7.2.9 / RFC 5305 §4.1 / RFC 5308 §2): the
 	// Level-1 LSP of an L1L2 IS carries the Level-2 prefixes an operator asked
 	// it to leak down (updateRIB's l2Leak), each with the up/down bit set so no
-	// L1L2 IS sends it back up. The leak policy has already decided the set and
-	// clamped the metric; the advertise policy is deliberately not applied on
-	// top, so an allowlist of this node's own prefixes does not silently empty
-	// the leak as well.
+	// L1L2 IS sends it back up. The leak policy has already decided the set;
+	// the metric is clamped here, where it goes on the wire, for the reason the
+	// upward export's is: a ceiling guard belongs at the boundary it protects,
+	// where it holds for whoever produced the set. The advertise policy is
+	// deliberately not applied on top, so an allowlist of this node's own
+	// prefixes does not silently empty the leak as well.
 	if level == packet.Level1 && s.levelCap.has(packet.Level2) {
 		for _, p := range slices.SortedFunc(maps.Keys(s.l2Leak), netip.Prefix.Compare) {
 			m := min(s.l2Leak[p], maxPathMetric-1)

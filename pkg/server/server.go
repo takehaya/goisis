@@ -75,14 +75,14 @@ type IsisServer struct {
 	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 
-	// What this node originates has exactly two owners: optionPrefixes, the
-	// prefixes the configuration and AddPrefix name (with their metric), and
-	// circuitPrefixes, the connected subnets each circuit contributes (keyed by
-	// circuit name, originated at that circuit's metric). The advertised set is
-	// derived from both at every origination (originatedPrefixes) and the
-	// directly-connected set from circuitPrefixes plus optionConnected
-	// (setCircuitPrefixes), so neither depends on who advertised a prefix
-	// first. See SetCircuitAddresses.
+	// What this node originates from its configuration and its circuits has
+	// exactly two owners: optionPrefixes, the prefixes the configuration and
+	// AddPrefix name (with their metric), and circuitPrefixes, the connected
+	// subnets each circuit contributes (keyed by circuit name, originated at
+	// that circuit's metric). The advertised set is derived from both at every
+	// origination (originatedPrefixes) and the directly-connected set from
+	// circuitPrefixes plus optionConnected (setCircuitPrefixes), so neither
+	// depends on who advertised a prefix first. See SetCircuitAddresses.
 	circuitPrefixes map[string][]netip.Prefix
 	optionPrefixes  map[netip.Prefix]AdvertisedPrefix
 	optionConnected map[netip.Prefix]bool

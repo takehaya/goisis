@@ -3,6 +3,16 @@
 ## [0.5.0](https://github.com/takehaya/goisis/compare/v0.4.0...v0.5.0) (2026-09-24)
 
 
+### Upgrade notes for operators
+
+* A key the configuration schema does not define is now a load error, so a file
+  that started under 0.4.0 can stop `goisisd` from starting, and `SIGHUP`
+  refuses it rather than applying part of it. The silence this replaces is what
+  it was for: a transposed `area-pasword` left the node unauthenticated with
+  nothing to report it. It also ends YAML anchors as an idiom, since an anchor
+  block is an undefined key. Comment the key out or delete it.
+
+
 ### Features
 
 * **goisisd:** apply the runtime-capable part of a config change on SIGHUP ([099f7de](https://github.com/takehaya/goisis/commit/099f7de030dc247770ae54a4b4eaf54d62a50b11))

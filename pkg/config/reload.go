@@ -34,16 +34,16 @@ type Changes struct {
 	Ignored []string
 }
 
-// ErrPartiallyApplied reports that a reload issued some of its calls before
-// the server refused one. It is the outcome that distinguishes a reload from a
-// restart: the node is then in neither configuration, since the batch has to
-// withdraw a resource before it can re-add it and nothing puts back what the
-// refusal came after. A daemon that gets this has to say so — the node is not
-// in the state the file describes, and only another SIGHUP, once whatever was
-// refused is no longer refused, will make it so. That retry re-issues the whole
-// batch: the calls that already landed are satisfied rather than refused (see
-// apply), so a corrected file is adopted on the next signal rather than
-// latching on its own leftovers.
+// ErrPartiallyApplied reports that a reload issued every call in its batch and
+// the server refused at least one of them. It is the outcome that distinguishes
+// a reload from a restart: the node is then in neither configuration, since the
+// batch has to withdraw a resource before it can re-add it and nothing puts
+// back what a refused re-add would have restored. A daemon that gets this has
+// to say so — the node is not in the state the file describes, and only another
+// SIGHUP, once whatever was refused is no longer refused, will make it so. That
+// retry re-issues the whole batch: the calls that already landed are satisfied
+// rather than refused (see apply), so a corrected file is adopted on the next
+// signal rather than latching on its own leftovers.
 var ErrPartiallyApplied = errors.New("the node is not in the state the configuration file describes")
 
 // restartOnly names every configuration key no runtime API expresses, paired
@@ -345,10 +345,11 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	defer cancel()
 	if err := ch.apply(applyCtx, s); err != nil {
 		// No rollback: undoing what landed would need the inverse of every
-		// mutator, and stopping leaves a state the operator can see. What is
-		// owed instead is honesty — the baseline stays where it was, so the
-		// next SIGHUP re-diffs the whole change and reports it again, rather
-		// than recording a file the node never adopted as the truth.
+		// mutator, and the joined error already names every call the server
+		// refused. What is owed instead is honesty — the baseline stays where
+		// it was, so the next SIGHUP re-diffs the whole change and reports it
+		// again, rather than recording a file the node never adopted as the
+		// truth.
 		report(server.ReloadPartial)
 		return cur, fmt.Errorf("%w: %w", ErrPartiallyApplied, err)
 	}
@@ -360,12 +361,16 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 }
 
 // apply pushes the changes through the server's runtime API, in the field
-// order Changes documents.
+// order Changes documents. Every call is issued and the refusals are joined:
+// the batch order is fixed and Diff derives the same batch from the same file
+// every time, so returning at the first refusal would put every call behind it
+// out of reach of any number of signals. Issuing them all costs a refusal only
+// the call it refuses.
 //
 // The file is authoritative for what it names, so a call the server refuses
 // because the node is already in the state it asks for (server.ErrAlreadyInState)
 // is this reload succeeding at that call. That is the whole recovery path: Diff
-// is file against file, so a reload a refusal stopped part way is retried by
+// is file against file, so a reload a refusal left part applied is retried by
 // re-issuing every call in the batch, and without this the calls that already
 // landed are refused again, identically, for as long as the operator keeps
 // signalling. A refusal that reports anything else -- a prefix present at
