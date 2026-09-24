@@ -22,6 +22,7 @@ const (
 	TLVTypeIPInterfaceAddresses   TLVType = 132
 	TLVTypeExtendedIPReachability TLVType = 135
 	TLVTypeDynamicHostname        TLVType = 137
+	TLVTypeRestart                TLVType = 211
 	TLVTypeMTISReachability       TLVType = 222
 	TLVTypeMTopologies            TLVType = 229
 	TLVTypeIPv6InterfaceAddresses TLVType = 232

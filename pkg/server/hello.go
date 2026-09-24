@@ -20,11 +20,11 @@ func (s *IsisServer) sendHellos(c *circuit, now time.Time) {
 		return
 	}
 	if c.cfg.P2P {
-		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
+		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c, nil))
 		return
 	}
 	for _, l := range c.cfg.levels() {
-		s.sendOne(c, datalink.DestForLevel(l), s.buildLANHello(c, l))
+		s.sendOne(c, datalink.DestForLevel(l), s.buildLANHello(c, l, nil))
 	}
 }
 
@@ -115,7 +115,7 @@ func helloIPv6Addrs(addrs []netip.Addr) []netip.Addr {
 	return ll
 }
 
-func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHello {
+func (s *IsisServer) buildLANHello(c *circuit, level packet.Level, ack *packet.RestartTLV) *packet.LANHello {
 	tlvs := s.commonHelloTLVs()
 	// IS Neighbors (TLV 6): echo the SNPAs of neighbors heard at this level
 	// so they can complete the three-way handshake.
@@ -130,6 +130,9 @@ func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHe
 		return &packet.ISNeighborsTLV{Neighbors: chunk}
 	})...)
 	tlvs = append(tlvs, addrTLVs(c)...)
+	// Before finalizeHello, which measures what is left of the MTU: the
+	// Restart TLV comes out of the padding budget, not on top of it.
+	tlvs = append(tlvs, helloRestartTLV(ack))
 
 	h := &packet.LANHello{
 		Level:       level,
@@ -144,7 +147,7 @@ func (s *IsisServer) buildLANHello(c *circuit, level packet.Level) *packet.LANHe
 	return h
 }
 
-func (s *IsisServer) buildP2PHello(c *circuit) *packet.P2PHello {
+func (s *IsisServer) buildP2PHello(c *circuit, ack *packet.RestartTLV) *packet.P2PHello {
 	tlvs := s.commonHelloTLVs()
 
 	// P2P Three-Way Adjacency (TLV 240, RFC 5303): advertise our state and,
@@ -162,6 +165,8 @@ func (s *IsisServer) buildP2PHello(c *circuit) *packet.P2PHello {
 	}
 	tlvs = append(tlvs, adjTLV)
 	tlvs = append(tlvs, addrTLVs(c)...)
+	// See buildLANHello on the ordering.
+	tlvs = append(tlvs, helloRestartTLV(ack))
 
 	h := &packet.P2PHello{
 		CircuitType:    c.cfg.circuitType(),
@@ -344,34 +349,60 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 		adj = &adjacency{systemID: h.SourceID}
 		c.adjs[level][h.SourceID] = adj
 	}
+	now := s.clock.Now()
 	prev := adj.state
+	rt := restartTLVOf(h.TLVs)
+	// RFC 5306 §3.2.1's precondition: an adjacency already in state Up to this
+	// System ID on this circuit, from the same source LAN address. Under it an
+	// IIH with the RR bit set leaves the adjacency state alone "irrespective of
+	// the other contents of the Intermediate System Neighbors option" — a
+	// restarting router has no adjacency database left to echo us from, and
+	// reading that silence as a lost handshake is what turns a neighbor's
+	// planned maintenance into an area-wide outage.
+	holdForRestart := rt != nil && rt.RestartRequest && existed && prev == AdjUp && adj.snpa == src
+	if holdForRestart {
+		newState = AdjUp
+	}
 	// Detect changes to election-relevant fields on an established adjacency
 	// so a preemption or a newly-learned DIS LAN ID triggers re-election.
 	electionChanged := existed && (adj.priority != h.Priority || adj.snpa != src || adj.lanID != h.LANID)
+	wasSuppressed := adj.suppressed
 	adj.snpa = src
 	adj.priority = h.Priority
 	adj.areaAddrs = areas
 	adj.lanID = h.LANID
 	adj.holding = h.HoldingTime
-	adj.lastHeard = s.clock.Now()
+	if noteRestart(adj, rt) {
+		adj.lastHeard = now
+	}
 	if prev != AdjUp && newState == AdjUp {
 		// Only the transition starts the clock RFC 7987 §3.2 reads; every
 		// later hello re-assigns the same state.
-		adj.upSince = adj.lastHeard
+		adj.upSince = now
 	}
 	adj.state = newState
 	adj.levels.add(level)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 
+	// §3.2.1b, and its "Otherwise" clause: every IIH with RR set is answered,
+	// whether or not there was an Up adjacency to hold.
+	var ack *packet.RestartTLV
+	if rt != nil && rt.RestartRequest {
+		ack = restartAck(c, adj, now)
+	}
 	if prev != newState {
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(level), newState.String())
 		s.emitAdjacency(c.infoFor(adj, level))
-		// Triggered hello so the neighbor sees our echo promptly (speeds the
-		// three-way handshake); harmless even when no DIS decision changes.
-		s.sendOne(c, datalink.DestForLevel(level), s.buildLANHello(c, level))
+	}
+	// A triggered hello when the state moved, so the neighbor sees our echo
+	// promptly (it speeds the three-way handshake); and §3.2.1b's "immediately"
+	// when there is an acknowledgement to carry, which is exactly the case
+	// where the state deliberately did not move.
+	if prev != newState || ack != nil {
+		s.sendOne(c, datalink.DestForLevel(level), s.buildLANHello(c, level, ack))
 	}
 	// Re-run DIS election only when the set of Up adjacencies changes, or an
 	// Up neighbor's election attributes change. Electing while a neighbor is
@@ -382,7 +413,14 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 		s.electDIS(c, level)
 		s.requestLSPRegen()
 	}
-	if newState == AdjUp && addrsChanged {
+	// §3.2.1c, after the acknowledgement has gone out: hand the restarter the
+	// database it asked for, from the one router the clause elects for the job.
+	if holdForRestart && s.restartSyncEligible(c, level) {
+		s.syncCircuitLevel(c, level, now)
+	}
+	// Suppression changes what our LSP may advertise (§3.2.2) without anything
+	// about the adjacency's state having moved.
+	if newState == AdjUp && (addrsChanged || adj.suppressed != wasSuppressed) {
 		s.requestLSPRegen()
 	}
 }
@@ -414,11 +452,23 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	}
 
 	three := threeWayTLV(h.TLVs)
+	rt := restartTLVOf(h.TLVs)
+	// RFC 5306 §3.2.1's precondition on a point-to-point circuit: an adjacency
+	// already in state Up to this System ID. Under it an IIH with the RR bit
+	// set holds that adjacency "irrespective of the other contents of the
+	// Point-to-Point Three-Way Adjacency option". A restarting router has lost
+	// its adjacency database, so a TLV 240 that echoes nobody — or a stale
+	// circuit ID from its previous incarnation, which §3.3.1 says to ignore
+	// while a restart is in progress — is the restart itself, not a peer that
+	// has moved on to some other router.
+	held := c.p2pAdj
+	holdForRestart := rt != nil && rt.RestartRequest &&
+		held != nil && held.systemID == h.SourceID && held.state == AdjUp
 	// RFC 5303 3.2: a TLV 240 echoing someone other than us describes a
 	// different adjacency, which puts ours in Down — not Init. Staying in Init
 	// would leave a stale Up adjacency to a peer now talking to another router
 	// alive until the hold timer expires.
-	if three != nil && three.HasNeighbor &&
+	if !holdForRestart && three != nil && three.HasNeighbor &&
 		(three.NeighborSystemID != s.systemID || three.NeighborExtLocalCircuitID != c.extCircID) {
 		// Only the current neighbor can take our adjacency down this way; a
 		// third router's hello on a misconfigured shared segment is ignored.
@@ -429,9 +479,9 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	}
 	// We reach Up only when the neighbor echoes our system ID + circuit ID.
 	newState := AdjInit
-	if three != nil && three.HasNeighbor &&
+	if holdForRestart || (three != nil && three.HasNeighbor &&
 		three.NeighborSystemID == s.systemID &&
-		three.NeighborExtLocalCircuitID == c.extCircID {
+		three.NeighborExtLocalCircuitID == c.extCircID) {
 		newState = AdjUp
 	}
 
@@ -447,16 +497,20 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		adj = &adjacency{systemID: h.SourceID}
 		c.p2pAdj = adj
 	}
+	now := s.clock.Now()
 	prev := adj.state
 	prevLevels := adj.levels
+	wasSuppressed := adj.suppressed
 	adj.snpa = src
 	adj.areaAddrs = areas
 	adj.holding = h.HoldingTime
-	adj.lastHeard = s.clock.Now()
+	if noteRestart(adj, rt) {
+		adj.lastHeard = now
+	}
 	adj.levels = common
 	if prev != AdjUp && newState == AdjUp {
 		// See processLANHello: the transition, not every hello.
-		adj.upSince = adj.lastHeard
+		adj.upSince = now
 	}
 	adj.state = newState
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
@@ -468,8 +522,8 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	// React to a state change, or to the common-level set changing while Up
 	// (e.g. the neighbor reconfigured its circuit type): otherwise our own LSP
 	// would keep advertising IS reachability for a level the peer dropped.
-	if prev != newState || (newState == AdjUp && prevLevels != common) {
-		now := s.clock.Now()
+	changed := prev != newState || (newState == AdjUp && prevLevels != common)
+	if changed {
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {
@@ -485,21 +539,39 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 				}
 			}
 		}
-		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c))
 		s.requestLSPRegen()
-		// Every level that just became usable is synchronized from scratch
-		// (ISO 10589 7.3.17); a level already Up keeps the flags it has. Our own
-		// regeneration is still pending, so the CSNP may describe a stale copy of
-		// our LSP; the fresh one is flooded via SRM as soon as it is generated.
-		if newState == AdjUp {
-			for _, l := range common.levels() {
-				if prev != AdjUp || !prevLevels.has(l) {
-					s.syncCircuitLevel(c, l, now)
-				}
+	}
+	// §3.2.1b, and its "Otherwise" clause: every IIH with RR set is answered.
+	// §3.2.1b also wants the IIH updated to reflect the new values the
+	// restarter just sent, which buildP2PHello reads back off the adjacency.
+	var ack *packet.RestartTLV
+	if rt != nil && rt.RestartRequest {
+		ack = restartAck(c, adj, now)
+	}
+	if changed || ack != nil {
+		s.sendOne(c, datalink.AllISs, s.buildP2PHello(c, ack))
+	}
+	// Every level that just became usable is synchronized from scratch
+	// (ISO 10589 7.3.17); a level already Up keeps the flags it has. Our own
+	// regeneration is still pending, so the CSNP may describe a stale copy of
+	// our LSP; the fresh one is flooded via SRM as soon as it is generated.
+	if changed && newState == AdjUp {
+		for _, l := range common.levels() {
+			if prev != AdjUp || !prevLevels.has(l) {
+				s.syncCircuitLevel(c, l, now)
 			}
 		}
 	}
-	if newState == AdjUp && addrsChanged {
+	// §3.2.1c: on a point-to-point circuit the one neighbor's request is the
+	// whole election, and §3.3.3 keeps the two LSPDBs' synchronizations
+	// separate even though a single IIH covers both.
+	if holdForRestart {
+		for _, l := range adj.levels.levels() {
+			s.syncCircuitLevel(c, l, now)
+		}
+	}
+	// See processLANHello: suppression changes what our LSP may advertise.
+	if newState == AdjUp && (addrsChanged || adj.suppressed != wasSuppressed) {
 		s.requestLSPRegen()
 	}
 }
