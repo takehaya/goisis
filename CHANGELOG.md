@@ -2,6 +2,31 @@
 
 ## [0.7.0](https://github.com/takehaya/goisis/compare/v0.6.1...v0.7.0) (2026-09-24)
 
+### Upgrade notes for operators
+
+* `goisis <command> -o json` now writes to standard output. It had been going
+  to standard error, so the one format that exists to be piped into `jq` had
+  never reached a pipe. A script that was working around it by redirecting
+  standard error needs that redirection removed.
+* A circuit can carry `admin-group`, and a Flexible Algorithm whose definition
+  constrains on admin groups is now computed with those constraints instead of
+  without them. **A node that advertises no colours is pruned by an
+  include-any or include-all definition**, which is correct and is also a
+  change in the paths such an area computes: give the circuits their colours
+  before upgrading, or the algorithm goes dark on them.
+* A definition carrying a constraint goisis cannot evaluate — an excluded
+  SRLG, a metric type other than IGP — is refused rather than computed as
+  though the constraint were absent, and says so once per level and algorithm.
+* IPv6 prefixes a peer advertises for the IPv6 unicast topology are now
+  learned. They were being dropped in silence, so an area running that
+  topology will see routes appear that were not there before.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `LSPLifetimeCorrupt`. An
+  implementation that embeds `server.NoopMetrics` is unaffected; one that does
+  not needs the method.
+
 
 ### Features
 
