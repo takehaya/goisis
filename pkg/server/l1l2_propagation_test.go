@@ -234,6 +234,61 @@ func TestOwnPrefixesAreNotDuplicatedIntoL2Export(t *testing.T) {
 	}
 }
 
+// A connected subnet is this node's own advertisement, at the metric of the
+// circuit that has it. The Level-1 neighbour on that link advertises the subnet
+// too -- the ordinary case for any shared link -- and that copy must not become
+// a second entry for the same prefix in our Level-2 LSP, at a second metric,
+// for a Level-2 receiver to resolve however it happens to.
+func TestAConnectedSubnetIsNotDuplicatedIntoL2Export(t *testing.T) {
+	conn := netip.MustParsePrefix("10.0.0.0/24")
+	s := l1l2Server(t, true)
+	now := time.Now()
+	s.setCircuitPrefixes("c", []netip.Prefix{conn})
+	area := netip.MustParsePrefix("10.1.0.0/24")
+	injectB(s, now, &packet.ExtendedIPReachabilityTLV{
+		Prefixes: []packet.ExtendedIPReachEntry{{Prefix: conn, Metric: 5}, {Prefix: area, Metric: 5}},
+	})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	// 10 is the circuit's metric, which is what we originate the subnet at; an
+	// export of B's copy would land beside it at 10 + 5 -- which is what B's
+	// other prefix, the one that is not ours, comes out at.
+	got := l2OwnReach(t, s)
+	if want := []uint32{15}; !slices.Equal(got[area], want) {
+		t.Fatalf("L2 LSP metrics for %s = %v, want %v; the topology under test exports nothing", area, got[area], want)
+	}
+	if want := []uint32{10}; !slices.Equal(got[conn], want) {
+		t.Errorf("L2 LSP metrics for the connected %s = %v, want %v (ours, once)", conn, got[conn], want)
+	}
+}
+
+// An SRv6 locator is originated at every level this node runs, mirrored into
+// IPv6 reachability at metric 0 (RFC 9352 SHOULD). A Level-1 neighbour
+// advertising the same locator -- what an anycast locator means -- must not add
+// a second entry for it to our Level-2 LSP.
+func TestOurOwnLocatorIsNotDuplicatedIntoL2Export(t *testing.T) {
+	loc := netip.MustParsePrefix("fc00:1::/48")
+	s := l1l2Server(t, true, WithSRv6Locator(loc))
+	now := time.Now()
+	area := netip.MustParsePrefix("2001:db8:1::/64")
+	injectB(s, now, &packet.IPv6ReachabilityTLV{
+		Prefixes: []packet.IPv6ReachEntry{{Prefix: loc, Metric: 5}, {Prefix: area, Metric: 5}},
+	})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := l2OwnReach(t, s)
+	if want := []uint32{15}; !slices.Equal(got[area], want) {
+		t.Fatalf("L2 LSP metrics for %s = %v, want %v; the topology under test exports nothing", area, got[area], want)
+	}
+	if want := []uint32{0}; !slices.Equal(got[loc], want) {
+		t.Errorf("L2 LSP metrics for our own locator %s = %v, want %v (ours, once)", loc, got[loc], want)
+	}
+}
+
 // A default route is not area reachability: whoever advertised it, it is never
 // propagated upward.
 func TestDefaultRouteIsNotExportedToL2(t *testing.T) {
@@ -658,6 +713,15 @@ func TestInterLevelPrefixCountsAreReportedOnEveryRecompute(t *testing.T) {
 	if n, _ := m.gauge("inter_level_prefixes", "l2_to_l1"); n != 0 {
 		t.Errorf("leaked into Level 1 = %d after the Level-2 route went away, want 0", n)
 	}
+
+	// The same for the export direction, which the name of this test promises
+	// too: a node that stops exporting reports 0 rather than leaving its last
+	// count on the gauge for an operator to read as reachability it still has.
+	delete(s.dbs[packet.Level1].entries, lspID(l1l2PeerB, 0))
+	s.updateRIB(now)
+	if n, _ := m.gauge("inter_level_prefixes", "l1_to_l2"); n != 0 {
+		t.Errorf("exported into Level 2 = %d after the Level-1 route went away, want 0", n)
+	}
 }
 
 // l1OwnSeq returns the sequence number of this node's own Level-1 LSP.
@@ -727,6 +791,60 @@ func TestOurOwnPrefixIsNotLeakedBackIntoOurLevel1LSP(t *testing.T) {
 	}
 	if want := []ownReach{{metric: 20}}; !slices.Equal(got[own], want) {
 		t.Errorf("L1 LSP entries for our own %s = %v, want %v (ours, once, not down-marked)", own, got[own], want)
+	}
+}
+
+// A connected subnet is ours whoever else advertises it: a Level-2 peer with a
+// route to the same subnet must not have it leaked back into the Level-1 LSP
+// that already carries it, where the area would see the one prefix twice, at
+// two metrics and with two different up/down bits.
+func TestOurOwnConnectedSubnetIsNotLeakedBackIntoOurLevel1LSP(t *testing.T) {
+	conn := netip.MustParsePrefix("10.0.0.0/24")
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	s.setCircuitPrefixes("c", []netip.Prefix{conn})
+	injectB(s, now) // a Level-1 neighbour with no reachability of its own
+	injectBL2(s, now, &packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+		{Prefix: conn, Metric: 5},
+		{Prefix: leakV4, Metric: 5},
+	}})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakV4]; !ok {
+		t.Fatalf("%s was not leaked; the topology under test is wrong", leakV4)
+	}
+	if want := []ownReach{{metric: 10}}; !slices.Equal(got[conn], want) {
+		t.Errorf("L1 LSP entries for the connected %s = %v, want %v (ours, once, not down-marked)",
+			conn, got[conn], want)
+	}
+}
+
+// The same, for the other set this node originates without an operator naming
+// it in a prefix list: an SRv6 locator a Level-2 peer also advertises is not
+// leaked back into the Level-1 LSP that already mirrors it at metric 0.
+func TestOurOwnLocatorIsNotLeakedBackIntoOurLevel1LSP(t *testing.T) {
+	loc := netip.MustParsePrefix("fc00:1::/48")
+	s := l1l2Server(t, true, WithSRv6Locator(loc), WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	injectB(s, now)
+	injectBL2(s, now, &packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{
+		{Prefix: loc, Metric: 5},
+		{Prefix: leakV6, Metric: 5},
+	}})
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if _, ok := got[leakV6]; !ok {
+		t.Fatalf("%s was not leaked; the topology under test is wrong", leakV6)
+	}
+	if want := []ownReach{{metric: 0}}; !slices.Equal(got[loc], want) {
+		t.Errorf("L1 LSP entries for our own locator %s = %v, want %v (ours, once, not down-marked)",
+			loc, got[loc], want)
 	}
 }
 
