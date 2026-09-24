@@ -322,21 +322,30 @@ func TestL1L2NodeDoesNotInstallDefaultFromATT(t *testing.T) {
 
 // An explicitly advertised default competes with the ATT default under the
 // ordinary prefix rule: a lower metric wins outright, an equal one merges.
-func TestExplicitDefaultWithLowerMetricBeatsATTDefault(t *testing.T) {
+// An advertised default carries a metric; the ATT-derived one does not. RFC
+// 5302 §1.1 calls the ATT fallback "a default route without metric information"
+// and the resulting computation "similarly suboptimal", and RFC 1195 §3.10.1
+// scopes it to destinations not reachable within the area at all. So the
+// advertised default wins on metric, wins the tie at equal metric, and — the
+// case this pins — is not displaced merely because it was leaked down from
+// Level 2 and the synthesized fallback was not.
+func TestAnAdvertisedDefaultIsNotDisplacedByTheATTDefault(t *testing.T) {
 	self := packet.SystemID{0, 0, 0, 0, 0, 1}
 	b := packet.SystemID{0, 0, 0, 0, 0, 2}
 	d := packet.SystemID{0, 0, 0, 0, 0, 4}
 
 	// B is attached at distance 10; D is dLink away and advertises 0.0.0.0/0
-	// at metric 0, so the explicit default's total metric is dLink.
-	defaultVia := func(t *testing.T, dLink uint32) route {
+	// at metric 0, so the advertised default's total metric is dLink.
+	defaultVia := func(t *testing.T, dLink uint32, down bool) route {
 		t.Helper()
 		s := attServer(t, false)
 		now := time.Now()
 		injectL1(s, self, false, false, []packet.TLV{isReach(b), isReachMetric(d, dLink)}, now)
 		injectL1(s, b, true, false, []packet.TLV{isReach(self)}, now)
 		injectL1(s, d, false, false, []packet.TLV{isReach(self),
-			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{v4("0.0.0.0/0", 0)}}}, now)
+			&packet.ExtendedIPReachabilityTLV{Prefixes: []packet.ExtendedIPReachEntry{
+				{Prefix: netip.MustParsePrefix("0.0.0.0/0"), Metric: 0, Down: down},
+			}}}, now)
 		routes := s.computeSPF(packet.Level1, 0, now)
 		r, ok := routes[defaultV4]
 		if !ok {
@@ -345,20 +354,25 @@ func TestExplicitDefaultWithLowerMetricBeatsATTDefault(t *testing.T) {
 		return r
 	}
 
-	r := defaultVia(t, 5)
-	if r.metric != 5 {
-		t.Errorf("metric = %d, want 5 (the cheaper explicit default)", r.metric)
-	}
-	if len(r.nextHops) != 1 || r.nextHops[0] != d {
-		t.Errorf("nextHops = %v, want [..04] only", r.nextHops)
-	}
-
-	r = defaultVia(t, 10)
-	if r.metric != 10 {
-		t.Errorf("metric = %d, want 10", r.metric)
-	}
-	if len(r.nextHops) != 2 || r.nextHops[0] != b || r.nextHops[1] != d {
-		t.Errorf("nextHops = %v, want the merged [..02 ..04] at equal metric", r.nextHops)
+	for _, tc := range []struct {
+		name   string
+		dLink  uint32
+		down   bool
+		metric uint32
+	}{
+		{"cheaper than the ATT exit", 5, false, 5},
+		{"as cheap as the ATT exit", 10, false, 10},
+		{"leaked down from Level 2, cheaper than the ATT exit", 5, true, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := defaultVia(t, tc.dLink, tc.down)
+			if r.metric != tc.metric {
+				t.Errorf("metric = %d, want %d (the advertised default via ..04)", r.metric, tc.metric)
+			}
+			if len(r.nextHops) != 1 || r.nextHops[0] != d {
+				t.Errorf("nextHops = %v, want [..04] only; the ATT exit ..02 must not displace or join it", r.nextHops)
+			}
+		})
 	}
 }
 

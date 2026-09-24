@@ -333,6 +333,17 @@ var (
 
 // addAttachedDefault adds a default route toward the nearest attached IS,
 // with every equidistant attached IS contributing its first hops (ECMP).
+//
+// The synthesized route carries the down bit, which is what puts it in RFC 5302
+// §3.2 preference class 3 — below every advertised route. That is deliberate
+// and not a hack: an attached IS "is effectively injecting a default route
+// without metric information into the L1 area", and the computation this node
+// performs on it is "similarly suboptimal" (RFC 5302 §1.1), while RFC 1195
+// §3.10.1 scopes the fallback to destinations "not reachable within an area" at
+// all. Domain-wide prefix distribution exists to replace the heuristic with
+// metric-bearing reachability, so the heuristic must never outrank it. The bit
+// also describes the route honestly — see route.down: this is reachability that
+// came down from Level 2 and must never travel back up.
 func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*spfNode,
 	done map[packet.NodeID]bool, dist map[packet.NodeID]uint32, hops map[packet.NodeID]map[packet.SystemID]bool,
 ) {
@@ -361,7 +372,7 @@ func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*
 		return
 	}
 	for _, p := range []netip.Prefix{defaultV4, defaultV6} {
-		addRoute(routes, p, route{metric: best, level: packet.Level1, algo: 0, nextHops: sortedHops(nh)})
+		addRoute(routes, p, route{metric: best, level: packet.Level1, algo: 0, down: true, nextHops: sortedHops(nh)})
 	}
 }
 
