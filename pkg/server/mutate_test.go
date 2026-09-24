@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -558,5 +559,76 @@ func TestConfigPrefixDeletedThenConnectedIsAdvertisedOnce(t *testing.T) {
 	})
 	if got := v4ReachMetrics(ownLSPTLVs(t, s), p); len(got) != 1 || got[0] != 33 {
 		t.Errorf("once %s is connected: TLV 135 metrics = %v, want exactly [33] (the circuit's metric)", p, got)
+	}
+}
+
+// TestARedundantMutationReportsErrAlreadyInState pins the classification a
+// configuration reload's recovery rests on. Every mutator refuses a call whose
+// effect is already present, and that refusal has to stay a refusal -- an
+// operator who types one twice is told so. What it must also do is say which
+// refusal it is: a batch being replayed after one of its calls was refused
+// re-issues the calls that already landed, and a caller that cannot tell "it is
+// already so" from "it is something else" can never finish the batch.
+//
+// The differing cases are the other half of the same guarantee. The caller
+// asked for a value the node does not have, so reporting the call satisfied
+// would leave the old value in place and say nothing.
+func TestARedundantMutationReportsErrAlreadyInState(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+
+	prefix := netip.MustParsePrefix("10.9.9.0/24")
+	locator := netip.MustParsePrefix("fc00:9::/48")
+	algo := FlexAlgoConfig{Algo: 128, MetricType: packet.FlexAlgoMetricIGP, Priority: 100, AdvertiseDefinition: true}
+	if err := s.AddPrefix(ctx, AdvertisedPrefix{Prefix: prefix, Metric: 10}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	if err := s.AddFlexAlgo(ctx, algo); err != nil {
+		t.Fatalf("AddFlexAlgo: %v", err)
+	}
+	if err := s.AddLocator(ctx, SRv6LocatorConfig{Prefix: locator, Algo: algo.Algo}); err != nil {
+		t.Fatalf("AddLocator: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		call    func() error
+		already bool
+	}{
+		{"the same prefix at the same metric", func() error {
+			return s.AddPrefix(ctx, AdvertisedPrefix{Prefix: prefix, Metric: 10})
+		}, true},
+		{"the same prefix at another metric", func() error {
+			return s.AddPrefix(ctx, AdvertisedPrefix{Prefix: prefix, Metric: 20})
+		}, false},
+		{"the same Flex-Algo definition", func() error { return s.AddFlexAlgo(ctx, algo) }, true},
+		{"the same Flex-Algo at another priority", func() error {
+			other := algo
+			other.Priority = 200
+			return s.AddFlexAlgo(ctx, other)
+		}, false},
+		{"the same locator for the same algorithm", func() error {
+			return s.AddLocator(ctx, SRv6LocatorConfig{Prefix: locator, Algo: algo.Algo})
+		}, true},
+		{"the same locator for another algorithm", func() error {
+			return s.AddLocator(ctx, SRv6LocatorConfig{Prefix: locator, Algo: 0})
+		}, false},
+		{"a prefix that is not advertised", func() error {
+			return s.DeletePrefix(ctx, netip.MustParsePrefix("10.9.8.0/24"))
+		}, true},
+		{"a locator that is not advertised", func() error {
+			return s.DeleteLocator(ctx, netip.MustParsePrefix("fc00:8::/48"))
+		}, true},
+		{"a Flex-Algo that is not configured", func() error { return s.DeleteFlexAlgo(ctx, 129) }, true},
+	} {
+		err := tc.call()
+		if err == nil {
+			t.Errorf("%s: no error; a redundant call stays a refusal", tc.name)
+			continue
+		}
+		if got := errors.Is(err, ErrAlreadyInState); got != tc.already {
+			t.Errorf("%s: errors.Is(err, ErrAlreadyInState) = %v, want %v: %v", tc.name, got, tc.already, err)
+		}
 	}
 }

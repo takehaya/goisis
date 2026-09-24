@@ -39,8 +39,11 @@ type Changes struct {
 // restart: the node is then in neither configuration, since the batch has to
 // withdraw a resource before it can re-add it and nothing puts back what the
 // refusal came after. A daemon that gets this has to say so — the node is not
-// in the state the file describes, and nothing but another SIGHUP, or a
-// restart, will make it so.
+// in the state the file describes, and only another SIGHUP, once whatever was
+// refused is no longer refused, will make it so. That retry re-issues the whole
+// batch: the calls that already landed are satisfied rather than refused (see
+// apply), so a corrected file is adopted on the next signal rather than
+// latching on its own leftovers.
 var ErrPartiallyApplied = errors.New("the node is not in the state the configuration file describes")
 
 // restartOnly names every configuration key no runtime API expresses, paired
@@ -343,25 +346,40 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 
 // apply pushes the changes through the server's runtime API, in the field
 // order Changes documents.
+//
+// The file is authoritative for what it names, so a call the server refuses
+// because the node is already in the state it asks for (server.ErrAlreadyInState)
+// is this reload succeeding at that call. That is the whole recovery path: Diff
+// is file against file, so a reload a refusal stopped part way is retried by
+// re-issuing every call in the batch, and without this the calls that already
+// landed are refused again, identically, for as long as the operator keeps
+// signalling. A refusal that reports anything else -- a prefix present at
+// another metric, a locator bound to another algorithm -- is still an error,
+// because the file asks for a value the node does not have.
 func (ch Changes) apply(ctx context.Context, s *server.IsisServer) error {
 	var errs []error
+	call := func(err error) {
+		if err != nil && !errors.Is(err, server.ErrAlreadyInState) {
+			errs = append(errs, err)
+		}
+	}
 	for _, prefix := range ch.DeleteLocators {
-		errs = append(errs, s.DeleteLocator(ctx, prefix))
+		call(s.DeleteLocator(ctx, prefix))
 	}
 	for _, algo := range ch.DeleteFlexAlgos {
-		errs = append(errs, s.DeleteFlexAlgo(ctx, algo))
+		call(s.DeleteFlexAlgo(ctx, algo))
 	}
 	for _, fa := range ch.AddFlexAlgos {
-		errs = append(errs, s.AddFlexAlgo(ctx, fa))
+		call(s.AddFlexAlgo(ctx, fa))
 	}
 	for _, lc := range ch.AddLocators {
-		errs = append(errs, s.AddLocator(ctx, lc))
+		call(s.AddLocator(ctx, lc))
 	}
 	for _, prefix := range ch.DeletePrefixes {
-		errs = append(errs, s.DeletePrefix(ctx, prefix))
+		call(s.DeletePrefix(ctx, prefix))
 	}
 	for _, p := range ch.AddPrefixes {
-		errs = append(errs, s.AddPrefix(ctx, p))
+		call(s.AddPrefix(ctx, p))
 	}
 	return errors.Join(errs...)
 }
