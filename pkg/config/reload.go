@@ -280,6 +280,16 @@ func flexAlgoSet(c *Config) (map[uint8]server.FlexAlgoConfig, error) {
 	return out, nil
 }
 
+// applyTimeout bounds a reload's calls into the server, and reportTimeout the
+// one call that records how the reload went. Both are generous: the management
+// loop answers in microseconds unless something is wrong, and the point is to
+// fail a wedged reload loudly rather than to police latency. They are variables
+// so a test can shorten them; nothing else writes them.
+var (
+	applyTimeout  = 30 * time.Second
+	reportTimeout = 5 * time.Second
+)
+
 // Reload re-reads path, applies the part of the difference the runtime API
 // expresses, and logs every other difference by name. It is what a daemon
 // wires SIGHUP to; everything it applies goes through the server's public
@@ -295,17 +305,22 @@ func flexAlgoSet(c *Config) (map[uint8]server.FlexAlgoConfig, error) {
 // a typo in an edited configuration must not take down a running IGP. A call
 // the server refuses once the batch has begun is ErrPartiallyApplied, the one
 // outcome that does change the node without adopting the file.
-// applyTimeout bounds a reload's calls into the server. It is generous: the
-// management loop answers in microseconds unless something is wrong, and the
-// point is to fail a wedged reload loudly rather than to police latency.
-const applyTimeout = 30 * time.Second
-
 func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string, logger *slog.Logger) (*Config, error) {
 	// Counting the reload must not be able to fail one: the management loop
 	// may already be shutting down, and a node that applied its file did so
 	// whether or not the report landed.
+	//
+	// It gets its own deadline rather than the apply's, for two reasons that
+	// pull the same way. The outcome most worth recording is the one a wedged
+	// loop produces, and that is exactly when the apply's context is already
+	// done -- sharing it would drop the "partial" the deadline exists to
+	// expose. And the calls made before the apply has a deadline at all sit
+	// behind the signal handler, so an unbounded one would hold every later
+	// SIGHUP for as long as the loop stays wedged.
 	report := func(outcome server.ReloadOutcome) {
-		if err := s.ReportConfigReload(ctx, outcome); err != nil {
+		rctx, cancel := context.WithTimeout(ctx, reportTimeout)
+		defer cancel()
+		if err := s.ReportConfigReload(rctx, outcome); err != nil {
 			logger.Debug("configuration reload: outcome not recorded", "outcome", outcome, "error", err)
 		}
 	}
@@ -326,9 +341,9 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	// call below queues behind the Serve loop, so a loop wedged on a slow sink
 	// would otherwise hold the reload — and the signal handler behind it —
 	// until the process ends, with nothing said.
-	ctx, cancel := context.WithTimeout(ctx, applyTimeout)
+	applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)
 	defer cancel()
-	if err := ch.apply(ctx, s); err != nil {
+	if err := ch.apply(applyCtx, s); err != nil {
 		// No rollback: undoing what landed would need the inverse of every
 		// mutator, and stopping leaves a state the operator can see. What is
 		// owed instead is honesty — the baseline stays where it was, so the
