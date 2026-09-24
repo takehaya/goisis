@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.6.0](https://github.com/takehaya/goisis/compare/v0.5.0...v0.6.0) (2026-09-24)
+
+### Upgrade notes for operators
+
+* Startup now refuses a `prefixes:` entry that no unicast forwarding entry can
+  serve — multicast, unspecified, link-local, IPv4-mapped — or one whose metric
+  is at the RFC 5305 reachability ceiling. Through 0.5.0 only `goisis prefix
+  add` refused these, so a file carrying one started and then could not be
+  reloaded. Remove the entry or give it a usable metric.
+* A configuration file holds one YAML document. Anything past a `---` separator
+  was being dropped in silence, including a correctly spelled `area-password`,
+  so it is now a load error. A leading separator is still one document.
+* A circuit can be added or removed with `SIGHUP`. A circuit whose settings
+  change is rebuilt rather than mutated, so **its adjacency drops and re-forms**;
+  the reload warns by name before it happens.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `ConfigReloadUnapplied` and
+  `ForgetCircuit`. An implementation that embeds `server.NoopMetrics` is
+  unaffected; one that does not needs both methods.
+* `config.WatchInterfaces` no longer takes a `*Config`. It reads the circuit set
+  from the server, because a startup snapshot stops being correct once circuits
+  change at runtime.
+
+
+### Features
+
+* **cli:** show the preference class a route was selected on ([4bd0927](https://github.com/takehaya/goisis/commit/4bd092752c68dd53492509008213e746b2a90743))
+* **config:** add and remove circuits on SIGHUP ([25e7f31](https://github.com/takehaya/goisis/commit/25e7f31d4c499ebdf0ea62f04ba6a33455869c33))
+* **metrics:** count the differences a reload left for the next restart ([1d3b37c](https://github.com/takehaya/goisis/commit/1d3b37c63218697008aa24f9898e6118b49e7e0e))
+* **server:** add a circuit at runtime ([0dc8d2f](https://github.com/takehaya/goisis/commit/0dc8d2f7a978e6eae1e693f4a23a9aca6ebbe1b9))
+* **server:** remove a circuit at runtime ([f315b21](https://github.com/takehaya/goisis/commit/f315b21ffdd83baddc1f0141d07b2630b02fa051))
+
+
+### Bug Fixes
+
+* **config:** bound the reload's outcome report separately from its apply ([81c7d7d](https://github.com/takehaya/goisis/commit/81c7d7d9dce4f2eff2a43b785a85201785d43387))
+* **config:** build the parse error from parts instead of redacting one ([6e8fec9](https://github.com/takehaya/goisis/commit/6e8fec951246c6eecaf702d6f547300bbdb83adc))
+* **config:** let a refused reload be repaired by the next signal ([f92e5e4](https://github.com/takehaya/goisis/commit/f92e5e4264b5471f7e9f333084d8fcec7f96ad40))
+* **config:** validate a reload the way a restart validates ([b485c75](https://github.com/takehaya/goisis/commit/b485c758fd4d1868e4031f88728e04bf008b84a4))
+* **flexalgo:** report the elected definition's constraints ([abd37d0](https://github.com/takehaya/goisis/commit/abd37d05632df94552a79fcf1f2f08104979a435))
+* **rib:** ignore the up/down bit in a Level-2 advertisement ([04a101b](https://github.com/takehaya/goisis/commit/04a101b722e1896af21ffff46c8ed7a6b3ee512c))
+* **spf:** rank the ATT-derived default below any advertised default ([699f680](https://github.com/takehaya/goisis/commit/699f68040e182b0a79a1d79a76b8d20b869e0f11))
+
 ## [0.5.0](https://github.com/takehaya/goisis/compare/v0.4.0...v0.5.0) (2026-09-24)
 
 
