@@ -21,11 +21,25 @@ type NextHopInfo struct {
 
 // RouteInfo is one computed route in the RIB.
 type RouteInfo struct {
-	Prefix    netip.Prefix
-	Metric    uint32
-	Level     packet.Level
-	Algorithm uint8
-	NextHops  []NextHopInfo
+	Prefix netip.Prefix
+	Metric uint32
+	Level  packet.Level
+	// Preference is the RFC 5302 §3.2 class this route was selected on
+	// (preferenceClass), which is ranked ahead of the metric — so a route with
+	// the worse metric can be the one in the RIB, and this is the field that
+	// says why.
+	//
+	// The class is reported rather than the up/down bit preferenceClass reads
+	// it from. The bit alone does not explain the ranking: at Level 2 it is
+	// deliberately ignored (RFC 5302 §3.3), so reporting it there would invite
+	// exactly the wrong conclusion, and the ATT-derived default carries it as a
+	// marker rather than as a decoded advertisement (addAttachedDefault) — an
+	// operator reading that bit would go looking for a neighbor's LSP that does
+	// not exist. The class is true of every route: 3 says "ranked below
+	// anything advertised intra-area", which is precisely what that fallback is.
+	Preference uint8
+	Algorithm  uint8
+	NextHops   []NextHopInfo
 }
 
 // updateRIB recomputes SPF for every level and algorithm, resolves next hops,
@@ -115,7 +129,8 @@ func (s *IsisServer) updateRIB(now time.Time) {
 			}
 			continue
 		}
-		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level, Algorithm: r.algo, NextHops: nhs}
+		next[p] = RouteInfo{Prefix: p, Metric: r.metric, Level: r.level,
+			Preference: preferenceClass(r), Algorithm: r.algo, NextHops: nhs}
 	}
 
 	// s.rib always holds the DESIRED route set: the diff, withdrawals, and
@@ -312,7 +327,7 @@ func betterRoute(candidate, incumbent route) bool {
 // forwarding plane: without it, two L1L2 border routers leaking the same prefix
 // into their area each prefer the other's leaked copy over their own Level-2
 // path, and forward to each other until the TTL runs out.
-func preferenceClass(r route) int {
+func preferenceClass(r route) uint8 {
 	switch {
 	case r.level == packet.Level2:
 		// The up/down bit is defined for a Level-1 advertisement (RFC 5305

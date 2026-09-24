@@ -115,6 +115,16 @@ func levelStr(l goisisv1.Level) string {
 	}
 }
 
+// prefStr renders a route's RFC 5302 §3.2 preference class. Zero is not a
+// class: it is what a daemon too old to send the field leaves behind, and
+// printing it as 0 would read as "most preferred of all".
+func prefStr(class uint32) string {
+	if class == 0 {
+		return "-"
+	}
+	return strconv.FormatUint(uint64(class), 10)
+}
+
 func newGlobalCmd(addr *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "global",
@@ -349,9 +359,10 @@ func newRouteCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tALGO\tMETRIC\tNEXT-HOPS")
+				_, _ = fmt.Fprintln(w, "PREFIX\tLEVEL\tALGO\tPREF\tMETRIC\tNEXT-HOPS")
 				for _, r := range res.Msg.GetRoutes() {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()), r.GetAlgorithm(), r.GetMetric(), nextHops(r))
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\n", r.GetPrefix(), levelStr(r.GetLevel()),
+						r.GetAlgorithm(), prefStr(r.GetPreference()), r.GetMetric(), nextHops(r))
 				}
 				return w.Flush()
 			})

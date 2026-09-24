@@ -452,11 +452,12 @@ func routeToProto(r RouteInfo) *goisisv1.Route {
 		nhs = append(nhs, &goisisv1.NextHop{Interface: nh.Interface, Gateway: nh.Gateway.String()})
 	}
 	return &goisisv1.Route{
-		Prefix:    r.Prefix.String(),
-		Metric:    r.Metric,
-		Level:     levelToProto(r.Level),
-		NextHops:  nhs,
-		Algorithm: uint32(r.Algorithm),
+		Prefix:     r.Prefix.String(),
+		Metric:     r.Metric,
+		Level:      levelToProto(r.Level),
+		NextHops:   nhs,
+		Algorithm:  uint32(r.Algorithm),
+		Preference: uint32(r.Preference),
 	}
 }
 

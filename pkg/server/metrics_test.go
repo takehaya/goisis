@@ -583,13 +583,14 @@ func (m *countingMetrics) AdjacencyTransition(circuit, level, state string) {
 	m.inc("adj_transition", circuit, level, state)
 }
 
-// TestAFlooredLifetimeIsCountedPerCircuit pins the only signal left once the
-// RFC 7987 floor is in place. The floor removed the symptom a corrupted
-// Remaining Lifetime used to produce -- a premature purge and the originator's
-// re-origination behind it -- so nothing else says the field is being rewritten
-// in flight. A single event is normal, since any re-flood from a mid-area node
-// carries an aged value; what diagnoses a link is the rate on one circuit
-// against its neighbors, which is why this is counted and never logged.
+// TestAFlooredLifetimeIsCountedPerCircuit pins what the counter counts, which
+// is every lifetime the RFC 7987 floor raises and not corruption: an ordinary
+// aged value is indistinguishable here, because separating the two needs how
+// long the receiving adjacency has been Up (§3.2's false-positive filter) and
+// the update process does not carry that down to the LSP it installs. So the
+// baseline is normal flooding, no absolute value means anything, and the
+// counter is read as one circuit's rate against the others -- which is why it
+// is counted and never logged.
 func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
@@ -597,7 +598,7 @@ func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
 		remaining uint16
 		want      int
 	}{
-		{"a lifetime below MaxAge is raised, and counted", 30, 1},
+		{"any lifetime below MaxAge is raised, and counted, corrupt or merely aged", 30, 1},
 		{"MaxAge itself is not raised", maxAgeSeconds, 0},
 		{"a lifetime above MaxAge is kept as advertised", maxAgeSeconds + 100, 0},
 		{"a purge is never a floored lifetime", 0, 0},

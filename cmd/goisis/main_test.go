@@ -148,6 +148,25 @@ func TestLevelStr(t *testing.T) {
 	}
 }
 
+// TestPrefStr: the route table prints the RFC 5302 §3.2 class as its number,
+// lower being the more preferred, and prints a daemon that sends no class at
+// all as "-" rather than as a class better than 1.
+func TestPrefStr(t *testing.T) {
+	for _, tc := range []struct {
+		in   uint32
+		want string
+	}{
+		{1, "1"},
+		{2, "2"},
+		{3, "3"},
+		{0, "-"},
+	} {
+		if got := prefStr(tc.in); got != tc.want {
+			t.Errorf("prefStr(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCircuitTypeAndLevels(t *testing.T) {
 	for _, tc := range []struct {
 		c          *goisisv1.Circuit
