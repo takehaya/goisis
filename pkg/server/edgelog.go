@@ -1,5 +1,7 @@
 package server
 
+import "maps"
+
 // edgeLog logs the edge of a condition that persists instead of every
 // occurrence of it: warn runs fn the first time it is called for a key and
 // stays quiet until clear re-arms that key. Conditions here are driven by
@@ -35,6 +37,13 @@ func (e *edgeLog[K]) any() bool { return len(e.fired) > 0 }
 
 // clear re-arms a key: the condition went away, so its return is worth logging.
 func (e *edgeLog[K]) clear(key K) { delete(e.fired, key) }
+
+// clearFunc re-arms every key the predicate selects, for a condition whose key
+// says more than what went away — a (circuit, LSP ID) pair when it is the
+// circuit that is gone.
+func (e *edgeLog[K]) clearFunc(pred func(K) bool) {
+	maps.DeleteFunc(e.fired, func(k K, _ bool) bool { return pred(k) })
+}
 
 // recovered re-arms a key and runs fn if that key had fired, so the end of a
 // condition is logged exactly once per occurrence of it — and not at all for a

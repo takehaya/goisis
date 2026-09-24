@@ -156,6 +156,19 @@ s.SetCircuitLinkState(ctx, "eth0", false)
 イベント源は利用者側のものです。`goisisd` は netlink を購読します
 (`config.WatchInterfaces`、Linux のみ)。コア自体は netlink をリンクしません。
 
+サーキットそのものを削除することもできます。`DeleteCircuit` はそのサーキットの
+隣接を落として報告し、保持していた pseudonode LSP を purge して MaxAge を待たず
+にピアから消させ、直結サブネットのマークを外し、トランスポートを閉じます
+(トランスポートの所有権は `Serve` 以降インスタンス側にあります)。サーキットの
+リーダ goroutine は待ちません。1 秒以内に自分で終了し、既にキューに入っていた
+フレームは捨てられます。設定に無いサーキットの削除はエラーです。`AddCircuit` は
+ありません。サーキットは今も構築時(`WithCircuit`)に与えるものなので、追加には
+再起動が必要です。
+
+```go
+s.DeleteCircuit(ctx, "eth0")
+```
+
 ## 変更の監視
 
 ```go
