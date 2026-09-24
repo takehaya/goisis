@@ -527,12 +527,18 @@ func TestRIBWithdrawsOnPeerLoss(t *testing.T) {
 
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	dst := netip.MustParsePrefix("10.9.9.0/24")
-	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, HelloInterval: 50 * time.Millisecond, HoldingMultiplier: 3}
-	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}, HelloInterval: 50 * time.Millisecond, HoldingMultiplier: 3}
+	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(), IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
+	// A stepped clock, so the adjacency this rests on cannot expire because a
+	// loaded machine stalled a housekeeping tick; steadyHello for the reason
+	// steadyHello gives.
+	steadyHello(&cfgA)
+	steadyHello(&cfgB)
 
-	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithAdvertisedPrefix(dst, 10))
+	clk := newFakeClock()
+	a := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithAdvertisedPrefix(dst, 10), WithClock(clk))
 	bfib := newRecordFIB()
-	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithFIB(bfib))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithFIB(bfib), WithClock(clk))
 
 	actx, acancel := context.WithCancel(context.Background())
 	go a.Serve(actx) //nolint:errcheck // ctx shutdown
@@ -540,12 +546,13 @@ func TestRIBWithdrawsOnPeerLoss(t *testing.T) {
 	go b.Serve(bctx) //nolint:errcheck // ctx shutdown
 	defer bcancel()
 
-	waitFor(t, "b FIB has route", func() bool { _, ok := bfib.get(dst); return ok })
+	waitClock(t, clk, "b FIB has route", func() bool { _, ok := bfib.get(dst); return ok })
 
 	// Stop A; once its LSP ages/adjacency drops, B must withdraw the route.
 	acancel()
+	stopped(t, a) // A's loop takes its timers off the clock on the way out
 	_ = ta.Close()
-	waitFor(t, "b FIB withdraws route after peer loss", func() bool { _, ok := bfib.get(dst); return !ok })
+	waitClock(t, clk, "b FIB withdraws route after peer loss", func() bool { _, ok := bfib.get(dst); return !ok })
 }
 
 // TestUpdateRIBFIBFailureRetries drives a real route computation against a FIB

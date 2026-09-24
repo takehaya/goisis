@@ -56,7 +56,7 @@ func (s *IsisServer) SetCircuitAddresses(ctx context.Context, name string, v4, v
 		c.cfg.IPv4Addrs, c.cfg.IPv6Addrs = v4, v6
 		s.setCircuitPrefixes(name, masked)
 
-		s.sendHellos(c, time.Now())
+		s.sendHellos(c, s.clock.Now())
 		s.requestLSPRegen()
 		return nil
 	})
@@ -78,7 +78,7 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 		}
 		c.linkDown = !up
 		s.logger.Info("circuit link state change", "circuit", name, "up", up)
-		now := time.Now()
+		now := s.clock.Now()
 		if !up {
 			s.dropAdjacencies(c, "adjacency down: circuit link down", func(*adjacency) bool { return true })
 			return nil
@@ -122,7 +122,7 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 // report it up and it could never transmit, for the life of the process.
 func (s *IsisServer) AddCircuit(ctx context.Context, cfg CircuitConfig) error {
 	queued, err := s.mgmtOperationQueued(ctx, func() error {
-		err := s.addCircuit(cfg, time.Now())
+		err := s.addCircuit(cfg, s.clock.Now())
 		if err != nil {
 			closeUnaddedTransport(s.logger, cfg)
 		}
@@ -330,7 +330,7 @@ func (s *IsisServer) allocCircuitIDs() (pseudonode uint8, extCircID uint32, err 
 // use straight off s.circuits, and never reuses an extended circuit ID at all
 // (allocCircuitIDs).
 func (s *IsisServer) DeleteCircuit(ctx context.Context, name string) error {
-	return s.mgmtOperation(ctx, func() error { return s.deleteCircuit(name, time.Now()) })
+	return s.mgmtOperation(ctx, func() error { return s.deleteCircuit(name, s.clock.Now()) })
 }
 
 // deleteCircuit is DeleteCircuit's body, on the Serve goroutine.

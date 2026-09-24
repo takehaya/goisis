@@ -265,15 +265,15 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 		}
 	case *packet.LSP:
 		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, true) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
-			s.processLSP(c, raw, h, time.Now())
+			s.processLSP(c, raw, h, s.clock.Now())
 		}
 	case *packet.CSNP:
 		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
-			s.processCSNP(c, h, time.Now())
+			s.processCSNP(c, h, s.clock.Now())
 		}
 	case *packet.PSNP:
 		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
-			s.processPSNP(c, h, time.Now())
+			s.processPSNP(c, h, s.clock.Now())
 		}
 	}
 }
@@ -350,7 +350,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.areaAddrs = areas
 	adj.lanID = h.LANID
 	adj.holding = h.HoldingTime
-	adj.lastHeard = time.Now()
+	adj.lastHeard = s.clock.Now()
 	adj.state = newState
 	adj.levels.add(level)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
@@ -444,7 +444,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	adj.snpa = src
 	adj.areaAddrs = areas
 	adj.holding = h.HoldingTime
-	adj.lastHeard = time.Now()
+	adj.lastHeard = s.clock.Now()
 	adj.levels = common
 	adj.state = newState
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
@@ -457,7 +457,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	// (e.g. the neighbor reconfigured its circuit type): otherwise our own LSP
 	// would keep advertising IS reachability for a level the peer dropped.
 	if prev != newState || (newState == AdjUp && prevLevels != common) {
-		now := time.Now()
+		now := s.clock.Now()
 		s.logger.Info("p2p adjacency state change", "circuit", c.cfg.Name,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {

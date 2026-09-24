@@ -38,6 +38,7 @@ purges this node's own LSPs, removes local SIDs, closes transports, and returns.
 | `WithL2LeakFilter(func(AdvertisedPrefix) bool)` | Leak policy: which Level-2 prefixes an L1L2 node originates into its Level-1 LSP, with the up/down bit set. Absent, nothing is leaked. |
 | `WithFIBFilter(func(RouteInfo) bool)` | FIB policy: which computed routes to program (rejected ones stay in the RIB). |
 | `WithMetrics(server.Metrics)` | Telemetry sink (default `NoopMetrics`). |
+| `WithClock(server.Clock)` | Where the server reads time (default: the wall clock). Supply one to run an instance against simulated time; the reader goroutines' retry delay and the SPF stopwatch stay on the wall clock. |
 | `WithLogger(*slog.Logger)` | Structured logger. |
 
 `CircuitConfig` carries `Name`, an injected `datalink.Transport` (use

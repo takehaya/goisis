@@ -411,7 +411,7 @@ func TestConnectSetOverloadIsReportedByGetIsis(t *testing.T) {
 // through, against a converged pair. ClearAdjacency then proves the mutator's
 // success path over the wire: the adjacency re-forms from hellos alone.
 func TestConnectListAdjacenciesRendersEveryAdjacencyField(t *testing.T) {
-	a, _, cancel := mutatePair(t, false)
+	a, _, clk, cancel := mutatePair(t, false)
 	defer cancel()
 	client := connectClient(t, a)
 	ctx := context.Background()
@@ -451,7 +451,7 @@ func TestConnectListAdjacenciesRendersEveryAdjacencyField(t *testing.T) {
 	if _, err := client.ClearAdjacency(ctx, connect.NewRequest(&goisisv1.ClearAdjacencyRequest{Interface: "a"})); err != nil {
 		t.Fatalf("ClearAdjacency: %v", err)
 	}
-	waitFor(t, "the cleared adjacency re-forms", func() bool {
+	waitClock(t, clk, "the cleared adjacency re-forms", func() bool {
 		adjs := list()
 		return len(adjs) == 1 && adjs[0].GetState() == AdjUp.String()
 	})

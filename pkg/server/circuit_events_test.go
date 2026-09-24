@@ -45,8 +45,11 @@ func neighborAddrs(t *testing.T, s *IsisServer, circuitName string) []netip.Addr
 }
 
 // lanPair starts two servers on one mock LAN segment, each with the given
-// circuit customization applied, and waits for the Level-2 adjacency.
-func lanPair(t *testing.T, ctx context.Context, tune func(a, b *CircuitConfig), optsA ...ServerOption) (*IsisServer, *IsisServer) {
+// circuit customization applied, and waits for the Level-2 adjacency. Both run
+// on the fake clock it returns, so the seconds these tests are about pass when
+// they say so; steadyHello rather than fastHello because a stepped clock's
+// hellos are a whole tick apart (see steadyHello).
+func lanPair(t *testing.T, ctx context.Context, tune func(a, b *CircuitConfig), optsA ...ServerOption) (*IsisServer, *IsisServer, *fakeClock) {
 	t.Helper()
 	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
 	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
@@ -56,22 +59,23 @@ func lanPair(t *testing.T, ctx context.Context, tune func(a, b *CircuitConfig), 
 	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse()}
 	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(),
 		IPv4Addrs: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
-	fastHello(&cfgA)
-	fastHello(&cfgB)
+	steadyHello(&cfgA)
+	steadyHello(&cfgB)
 	if tune != nil {
 		tune(&cfgA, &cfgB)
 	}
 
+	clk := newFakeClock()
 	a := mustServer(t, append([]ServerOption{
-		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA),
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area), WithCircuit(cfgA), WithClock(clk),
 	}, optsA...)...)
-	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB))
+	b := mustServer(t, WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 2}), WithAreaAddresses(area), WithCircuit(cfgB), WithClock(clk))
 	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
 	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
 
-	waitFor(t, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
-	waitFor(t, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
-	return a, b
+	waitClock(t, clk, "a sees b Up", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "b sees a Up", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+	return a, b, clk
 }
 
 // TestSetCircuitAddressesReachesHellosAndLSP renumbers a live circuit: the
@@ -88,13 +92,13 @@ func TestSetCircuitAddressesReachesHellosAndLSP(t *testing.T) {
 	oldAddr := netip.MustParseAddr("10.0.0.1")
 	newAddr := netip.MustParseAddr("10.9.0.1")
 
-	a, b := lanPair(t, ctx, func(cfgA, _ *CircuitConfig) {
+	a, b, clk := lanPair(t, ctx, func(cfgA, _ *CircuitConfig) {
 		cfgA.Metric = 42
 		cfgA.IPv4Addrs = []netip.Addr{oldAddr}
 		cfgA.ConnectedPrefixes = []netip.Prefix{old}
 	}, WithAdvertisedPrefix(static, 10))
 
-	waitFor(t, "b learns a's original address", func() bool {
+	waitClock(t, clk, "b learns a's original address", func() bool {
 		return slices.Contains(neighborAddrs(t, b, "b"), oldAddr)
 	})
 
@@ -102,7 +106,7 @@ func TestSetCircuitAddressesReachesHellosAndLSP(t *testing.T) {
 		t.Fatalf("SetCircuitAddresses: %v", err)
 	}
 
-	waitFor(t, "b learns a's new address", func() bool {
+	waitClock(t, clk, "b learns a's new address", func() bool {
 		return slices.Contains(neighborAddrs(t, b, "b"), newAddr)
 	})
 	if addrs := neighborAddrs(t, b, "b"); slices.Contains(addrs, oldAddr) {
@@ -111,7 +115,7 @@ func TestSetCircuitAddressesReachesHellosAndLSP(t *testing.T) {
 
 	// The push asks for a re-origination rather than making one, so the LSP
 	// follows within minLSPGenInterval instead of before the RPC returns.
-	waitFor(t, "own LSP advertises the renumbered subnet", func() bool {
+	waitClock(t, clk, "own LSP advertises the renumbered subnet", func() bool {
 		_, ok := v4Reach(ownLSPTLVs(t, a))[renumbered]
 		return ok
 	})
@@ -146,7 +150,7 @@ func TestSetCircuitLinkStateTearsDownAndSilences(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	a, b := lanPair(t, ctx, nil)
+	a, b, clk := lanPair(t, ctx, nil)
 
 	sub, err := a.Subscribe(ctx)
 	if err != nil {
@@ -177,7 +181,10 @@ func TestSetCircuitLinkStateTearsDownAndSilences(t *testing.T) {
 	}
 
 	// Nothing may leave the circuit while the link is down: a sink joined to
-	// the segment must stay empty across several hello intervals (50ms).
+	// the segment must stay empty across several housekeeping ticks, which is
+	// when hellos actually leave. On a stepped clock those ticks are three
+	// advances rather than three seconds of waiting, so the window the sink is
+	// watched over is the whole of the one a hello could have left in.
 	sink := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
 	if err := a.mgmtOperation(ctx, func() error { // circuits are the loop's to read
 		datalink.Link(a.circuits[0].cfg.Transport.(*datalink.MockTransport), sink)
@@ -185,8 +192,12 @@ func TestSetCircuitLinkStateTearsDownAndSilences(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mgmtOperation: %v", err)
 	}
-	time.Sleep(300 * time.Millisecond)
-	_ = sink.Close() // buffered frames still drain; Recv then reports ErrClosed
+	for range 3 {
+		clk.Advance(housekeepInterval)
+	}
+	loopSync(t, a)
+	time.Sleep(stepDelay) // the frames a tick sends cross the segment in real time
+	_ = sink.Close()      // buffered frames still drain; Recv then reports ErrClosed
 	for {
 		f, err := sink.Recv()
 		if err != nil {
@@ -202,8 +213,8 @@ func TestSetCircuitLinkStateTearsDownAndSilences(t *testing.T) {
 	if err := a.SetCircuitLinkState(ctx, "a", true); err != nil {
 		t.Fatalf("SetCircuitLinkState(true): %v", err)
 	}
-	waitFor(t, "a sees b Up again", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
-	waitFor(t, "b sees a Up again", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "a sees b Up again", func() bool { st, ok := adjState(t, a, packet.Level2); return ok && st == AdjUp })
+	waitClock(t, clk, "b sees a Up again", func() bool { st, ok := adjState(t, b, packet.Level2); return ok && st == AdjUp })
 }
 
 // TestCircuitEventsUnknownCircuit checks both setters reject a circuit name the
@@ -270,6 +281,7 @@ func TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet(t *testing.T
 	privacy := netip.MustParseAddr("2001:db8::dead")
 
 	spf := &spfCounter{}
+	clk := newFakeClock()
 	s := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
@@ -280,14 +292,16 @@ func TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet(t *testing.T
 			ConnectedPrefixes: []netip.Prefix{subnet, subnet},
 		}),
 		WithMetrics(spf),
+		WithClock(clk),
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
-	if err := s.mgmtOperation(ctx, func() error { return nil }); err != nil {
-		t.Fatalf("waiting for the loop to start: %v", err)
-	}
-	time.Sleep(2 * spfHold) // let startup origination's own recompute drain
+	// The loop arms its timers before it serves anything, so this barrier is
+	// also what gives the clock something to fire.
+	loopSync(t, s)
+	clk.Advance(2 * spfHold) // let startup origination's own recompute drain
+	loopSync(t, s)
 	before := spf.count()
 
 	for _, addrs := range [][]netip.Addr{
@@ -302,7 +316,8 @@ func TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet(t *testing.T
 		t.Errorf("stored addresses = %v, want them canonical so a reordered read compares equal", got)
 	}
 	// A change would mark SPF dirty, which the back-off runs within one hold.
-	time.Sleep(2 * spfHold)
+	clk.Advance(2 * spfHold)
+	loopSync(t, s)
 	if got := spf.count() - before; got != 0 {
 		t.Errorf("re-pushing the same addresses ran %d SPF computations, want 0", got)
 	}
@@ -312,7 +327,8 @@ func TestSetCircuitAddressesIsIdempotentWithTwoAddressesInOneSubnet(t *testing.T
 	if err := s.SetCircuitAddresses(ctx, "c", nil, []netip.Addr{stable}, []netip.Prefix{subnet}); err != nil {
 		t.Fatalf("SetCircuitAddresses: %v", err)
 	}
-	time.Sleep(2 * spfHold)
+	clk.Advance(2 * spfHold)
+	loopSync(t, s)
 	if got := spf.count() - before; got == 0 {
 		t.Error("dropping an address ran no SPF computation: the no-op check is swallowing real changes")
 	}

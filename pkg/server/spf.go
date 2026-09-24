@@ -239,6 +239,10 @@ type tentEntry struct {
 // connectivity check, the overload bit (no transit through an overloaded node),
 // and ECMP are honored.
 func (s *IsisServer) computeSPF(level packet.Level, algo uint8, now time.Time) map[netip.Prefix]route {
+	// The wall clock, not s.clock: this is a stopwatch over the computation
+	// itself, and what it reports has to stay the real cost of the run even
+	// when the caller drives the server's own time (see Clock). now, which
+	// the topology is read against, is the server's.
 	t0 := time.Now()
 	defer func() { s.metrics.SPFRun(levelLabel(level), time.Since(t0)) }()
 	nodes := s.buildTopology(level, algo, now)
