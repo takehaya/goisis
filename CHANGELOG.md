@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.7.0](https://github.com/takehaya/goisis/compare/v0.6.1...v0.7.0) (2026-09-24)
+
+### Upgrade notes for operators
+
+* `goisis <command> -o json` now writes to standard output. It had been going
+  to standard error, so the one format that exists to be piped into `jq` had
+  never reached a pipe. A script that was working around it by redirecting
+  standard error needs that redirection removed.
+* A circuit can carry `admin-group`, and a Flexible Algorithm whose definition
+  constrains on admin groups is now computed with those constraints instead of
+  without them. **A node that advertises no colours is pruned by an
+  include-any or include-all definition**, which is correct and is also a
+  change in the paths such an area computes: give the circuits their colours
+  before upgrading, or the algorithm goes dark on them.
+* A definition carrying a constraint goisis cannot evaluate — an excluded
+  SRLG, a metric type other than IGP — is refused rather than computed as
+  though the constraint were absent, and says so once per level and algorithm.
+* IPv6 prefixes a peer advertises for the IPv6 unicast topology are now
+  learned. They were being dropped in silence, so an area running that
+  topology will see routes appear that were not there before.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `LSPLifetimeCorrupt`. An
+  implementation that embeds `server.NoopMetrics` is unaffected; one that does
+  not needs the method.
+
+
+### Features
+
+* **lsdb:** report RFC 7987 3.2's corrupt-lifetime event ([1133c19](https://github.com/takehaya/goisis/commit/1133c195cb4b3d41a44efb11e5f61b7812fb911a))
+* **packet:** read multi-topology reachability, so an MT peer is not silent ([be2353a](https://github.com/takehaya/goisis/commit/be2353a22a0bbdfece2c800a61cd993e8a9b648d))
+* **server:** help a neighbour restart gracefully (RFC 5306) ([2cc27e0](https://github.com/takehaya/goisis/commit/2cc27e004a9447d06cfe45bc3ff8e3be8e239995))
+* **spf:** prune Flexible Algorithm links on their admin groups ([988f478](https://github.com/takehaya/goisis/commit/988f478c6923756ce22248a530df1e4bab99b29e))
+
+
+### Bug Fixes
+
+* **cli:** write JSON to stdout, which is the stream a pipe carries ([ed028b1](https://github.com/takehaya/goisis/commit/ed028b1feee2cb0b995c9dd8fe792517a13917db))
+* **fib:** name the decap table the way the kernel wants it named ([9ff29cd](https://github.com/takehaya/goisis/commit/9ff29cd76e10d8db1394df17af71df085d5a0a14))
+
+
+### Performance Improvements
+
+* **spf:** order the tentative set with a heap ([d368e62](https://github.com/takehaya/goisis/commit/d368e62794a8c997efee145d989deeeff0716875))
+
 ## [0.6.1](https://github.com/takehaya/goisis/compare/v0.6.0...v0.6.1) (2026-09-24)
 
 ### Upgrade notes for operators
