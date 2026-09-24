@@ -108,13 +108,28 @@ type Metrics interface {
 	// It does not separate corruption from ordinary aging: every LSP that has
 	// aged since it left its originator is floored too, so the baseline is the
 	// circuit's LSP arrival rate — an ordinary re-flood, a refresh, and the
-	// whole-database resync behind a new adjacency all count. Separating them
-	// needs how long the receiving adjacency has been Up (RFC 7987 §3.2's
-	// false-positive filter), which the update process does not carry down to
-	// the LSP it is installing. So no absolute value means anything and this is
-	// counted rather than logged: it is read as one circuit's rate against the
-	// other circuits of the node. See docs/configuration.md.
+	// whole-database resync behind a new adjacency all count. So no absolute
+	// value means anything and this is counted rather than logged: it is read
+	// as one circuit's rate against the other circuits of the node.
+	// LSPLifetimeCorrupt is the part of it that can be read on its own. See
+	// docs/configuration.md.
 	LSPLifetimeFloored(circuit string)
+	// LSPLifetimeCorrupt records one received LSP that RFC 7987 §3.2's
+	// algorithm calls a possibly corrupt Remaining Lifetime, on the circuit it
+	// arrived on: a live LSP, newer than the copy held, carrying less than
+	// ZeroAgeLifetime, from an adjacency that has been Up for longer than that
+	// (see corruptLifetime).
+	//
+	// It is the half of the floor an operator can alert on. The floor fires on
+	// every aged LSP, so its baseline is the circuit's LSP arrival rate; this
+	// fires only below ZeroAgeLifetime and only once the adjacency has
+	// outlived the resync that legitimately carries such values, so its
+	// baseline is zero. §3.2 does not claim every report is a real one, so a
+	// sustained rate is a capture to take, not a fault. Counted and not
+	// logged, like the floor but for a different reason: the rate is bounded
+	// only by how fast a neighbor can flood, and a line per event would make
+	// one segment's corruption an amplifier on the management loop.
+	LSPLifetimeCorrupt(circuit string)
 	// InterLevelPrefixes reports the number of prefixes this node originates
 	// because of the level boundary, by direction: "l2_to_l1" is the leak and
 	// "l1_to_l2" the upward export. RouteCount is what this node learned;
@@ -283,6 +298,9 @@ func (NoopMetrics) ConfigReloadUnapplied(int) {}
 
 // LSPLifetimeFloored implements Metrics.
 func (NoopMetrics) LSPLifetimeFloored(string) {}
+
+// LSPLifetimeCorrupt implements Metrics.
+func (NoopMetrics) LSPLifetimeCorrupt(string) {}
 
 // InterLevelPrefixes implements Metrics.
 func (NoopMetrics) InterLevelPrefixes(string, int) {}

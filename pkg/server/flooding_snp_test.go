@@ -383,7 +383,7 @@ func TestProcessLSPAcknowledgesUnknownPurgeWithoutStoringIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, purge, now)
+	s.processLSP(c, raw, purge, nil, now)
 
 	if e := s.dbs[packet.Level2].get(unknown); e != nil {
 		t.Fatalf("purge for an unheld LSP ID was stored: %+v", e)
@@ -424,7 +424,7 @@ func TestProcessLSPIgnoresUnknownPurgeOnLAN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, purge, now)
+	s.processLSP(c, raw, purge, nil, now)
 
 	if e := s.dbs[packet.Level2].get(unknown); e != nil {
 		t.Fatalf("purge for an unheld LSP ID was stored: %+v", e)
@@ -463,7 +463,7 @@ func TestUnknownPurgeDoesNotConsumeLSDBEntryLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.processLSP(c, raw, lsp, now)
+		s.processLSP(c, raw, lsp, nil, now)
 	}
 
 	// Fill the database to the limit.

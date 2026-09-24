@@ -264,31 +264,34 @@ func (s *IsisServer) handleRx(c *circuit, frame datalink.Frame) {
 			s.processP2PHello(c, frame.Src, h)
 		}
 	case *packet.LSP:
-		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, true) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
-			s.processLSP(c, raw, h, s.clock.Now())
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, true) {
+			if adj := s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src); adj != nil {
+				s.processLSP(c, raw, h, adj, s.clock.Now())
+			}
 		}
 	case *packet.CSNP:
-		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) != nil {
 			s.processCSNP(c, h, s.clock.Now())
 		}
 	case *packet.PSNP:
-		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) {
+		if s.pduAuthOK(c, raw, h.PDUType(), h.Level, false) && s.adjacencyGate(c, h.PDUType(), h.Level, frame.Src) != nil {
 			s.processPSNP(c, h, s.clock.Now())
 		}
 	}
 }
 
 // adjacencyGate admits an LSP or SNP only from a source with an Up adjacency
-// at that level (ISO 10589 7.3.15.1/7.3.15.2). Hellos are exempt: they are how
-// adjacencies form in the first place.
-func (s *IsisServer) adjacencyGate(c *circuit, pt packet.PDUType, level packet.Level, src packet.SNPA) bool {
-	if c.upAdjacencyFrom(level, src) {
-		return true
+// at that level (ISO 10589 7.3.15.1/7.3.15.2), and returns that adjacency so
+// the caller need not resolve the source a second time. Hellos are exempt:
+// they are how adjacencies form in the first place.
+func (s *IsisServer) adjacencyGate(c *circuit, pt packet.PDUType, level packet.Level, src packet.SNPA) *adjacency {
+	if adj := c.upAdjacencyFrom(level, src); adj != nil {
+		return adj
 	}
 	s.logger.Debug("drop PDU from a source without an Up adjacency",
 		"circuit", c.cfg.Name, "pdu", pt, "level", level, "src", src)
 	s.metrics.PDUDrop(c.cfg.Name, dropNoAdjacency)
-	return false
+	return nil
 }
 
 // dropHello counts one hello the adjacency state machine cannot use and logs
@@ -351,6 +354,11 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.lanID = h.LANID
 	adj.holding = h.HoldingTime
 	adj.lastHeard = s.clock.Now()
+	if prev != AdjUp && newState == AdjUp {
+		// Only the transition starts the clock RFC 7987 §3.2 reads; every
+		// later hello re-assigns the same state.
+		adj.upSince = adj.lastHeard
+	}
 	adj.state = newState
 	adj.levels.add(level)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
@@ -446,6 +454,10 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	adj.holding = h.HoldingTime
 	adj.lastHeard = s.clock.Now()
 	adj.levels = common
+	if prev != AdjUp && newState == AdjUp {
+		// See processLANHello: the transition, not every hello.
+		adj.upSince = adj.lastHeard
+	}
 	adj.state = newState
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)

@@ -63,8 +63,10 @@ func (s *IsisServer) ownsLSP(level packet.Level, id packet.LSPID) bool {
 	return false
 }
 
-// processLSP applies the ISO 10589 7.3 update process to a received LSP.
-func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now time.Time) {
+// processLSP applies the ISO 10589 7.3 update process to a received LSP. adj
+// is the adjacency the LSP arrived on, which adjacencyGate has already
+// resolved; nil only where a caller bypasses that gate.
+func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, adj *adjacency, now time.Time) {
 	level := lsp.Level
 	db := s.dbs[level]
 	if db == nil {
@@ -175,6 +177,12 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, now tim
 		// re-flood from a mid-area node legitimately carries, so no single
 		// event means anything — only one circuit's rate against the others.
 		s.metrics.LSPLifetimeFloored(c.cfg.Name)
+	}
+	if corruptLifetime(adj, lsp.RemainingTime, now) {
+		// The same field, reported under RFC 7987 §3.2's narrower algorithm:
+		// this one is rare enough to alert on. The two conditions it does not
+		// test are the two this position already settles — see corruptLifetime.
+		s.metrics.LSPLifetimeCorrupt(c.cfg.Name)
 	}
 	db.entries[id] = &lspEntry{
 		lsp:      lsp,

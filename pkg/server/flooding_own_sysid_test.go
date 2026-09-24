@@ -27,7 +27,7 @@ func TestLSPWithOurSystemIDForPseudonodeWeDoNotOwnIsPurged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 
 	e := s.dbs[packet.Level2].get(id)
 	if e == nil {
@@ -70,7 +70,7 @@ func TestLSPForPseudonodeWeAreDISForIsReoriginated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, foreign, now)
+	s.processLSP(c, raw, foreign, nil, now)
 
 	e := s.dbs[packet.Level2].get(id)
 	if e.remaining(now) == 0 || !e.own {
@@ -93,7 +93,7 @@ func TestForeignLSPIsStillInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 
 	if e := s.dbs[packet.Level2].get(id); e == nil || e.remaining(now) == 0 {
 		t.Errorf("foreign LSP not installed live: %+v", e)
@@ -114,7 +114,7 @@ func TestForgedFragmentOfOurNodeLSPIsPurged(t *testing.T) {
 		Level: packet.Level2, RemainingTime: 1000, LSPID: id, SequenceNumber: 4, ISType: 2,
 		TLVs: []packet.TLV{&packet.AreaAddressesTLV{Addresses: []packet.AreaAddress{{0x49, 0x00, 0x01}}}},
 	}
-	s.processLSP(c, serialize(t, lsp), lsp, now)
+	s.processLSP(c, serialize(t, lsp), lsp, nil, now)
 
 	e := s.dbs[packet.Level2].get(id)
 	if e == nil {
@@ -181,12 +181,12 @@ func TestForgedOwnLSPAtMaxSequenceIsPurgedAndReoriginated(t *testing.T) {
 		},
 	}
 	fraw := serialize(t, forged)
-	peer.processLSP(pc, fraw, decodeLSP(t, fraw), now)
+	peer.processLSP(pc, fraw, decodeLSP(t, fraw), nil, now)
 	if !lspHasPrefix(peer.dbs[packet.Level2].get(own), attacker) {
 		t.Fatal("setup: the peer did not take the forged copy")
 	}
 
-	victim.processLSP(vc, fraw, decodeLSP(t, fraw), now)
+	victim.processLSP(vc, fraw, decodeLSP(t, fraw), nil, now)
 
 	ve := victim.dbs[packet.Level2].get(own)
 	if ve == nil {
@@ -267,7 +267,7 @@ func deliverEntry(t *testing.T, dst *IsisServer, c *circuit, e *lspEntry, now ti
 		t.Fatal("nothing to deliver: the source holds no such LSP")
 	}
 	raw := e.wire(now)
-	dst.processLSP(c, raw, decodeLSP(t, raw), now)
+	dst.processLSP(c, raw, decodeLSP(t, raw), nil, now)
 }
 
 // lspHasPrefix reports whether an LSDB entry advertises a prefix.

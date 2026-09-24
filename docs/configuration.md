@@ -394,7 +394,8 @@ on: remove the address, or suppress it with `policy.advertise`.
 `remove_sid`), `goisis_event_queue_depth`,
 `goisis_config_reloads_total{outcome}` (outcomes: `applied`, `refused`,
 `partial`), `goisis_config_reload_unapplied`,
-`goisis_lsp_lifetime_floored_total{circuit}` and
+`goisis_lsp_lifetime_floored_total{circuit}`,
+`goisis_lsp_lifetime_corrupt_total{circuit}` and
 `goisis_inter_level_prefixes{direction}` (directions: `l2_to_l1`, `l1_to_l2`).
 
 An adjacency that will not come up is one of three drop reasons.
@@ -465,11 +466,8 @@ The counter does not separate that corruption from ordinary aging, and no
 absolute value of it means anything. Every LSP that has aged since it left its
 originator is floored the same way, so the baseline is the circuit's LSP arrival
 rate: an ordinary re-flood, a refresh, and the whole-database resync a new
-adjacency triggers all count, the resync as one burst. The clean separation
-would need how long the receiving adjacency has been Up (RFC 7987 §3.2's
-false-positive filter), and the update process does not carry that down to the
-LSP it is installing, so there is no threshold to alert on — including "greater
-than zero".
+adjacency triggers all count, the resync as one burst. There is no threshold to
+alert on — including "greater than zero".
 
 Read it comparatively instead: one circuit's rate against the other circuits of
 the same node, over a window with no adjacency change in it, allowing for how
@@ -481,6 +479,25 @@ adjacency coming up is the resync.
 ```
 rate(goisis_lsp_lifetime_floored_total[1h])   # compare circuits, not a threshold
 ```
+
+`goisis_lsp_lifetime_corrupt_total` is the same field under the narrower test
+RFC 7987 §3.2 defines, and it is the one that can be alerted on. It counts a
+live LSP, newer than the copy held, whose remaining lifetime is below
+ZeroAgeLifetime (60s), received on an adjacency that has itself been Up for at
+least ZeroAgeLifetime. That last condition is what the floor counter has no way
+to apply, and it is what removes the resync — the one event that legitimately
+delivers near-expiry LSPs in bulk. What is left has a baseline of zero, so this
+counter has the threshold the other one cannot have:
+
+```
+increase(goisis_lsp_lifetime_corrupt_total[1h]) > 0
+```
+
+§3.2 promises neither that every corrupt lifetime is caught nor that every
+report is a real one, so treat a sustained rate as the circuit to take a capture
+on. Which LSP it was is deliberately not in the log: the rate is bounded only by
+how fast a neighbour can flood, and a line per event would turn one segment's
+corruption into an amplifier on the management loop.
 
 `goisis_inter_level_prefixes` is what this node injects across the level
 boundary, where `goisis_routes` is what it learned. It is the gauge a

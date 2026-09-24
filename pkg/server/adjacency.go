@@ -43,6 +43,11 @@ type adjacency struct {
 	lanID     packet.NodeID // neighbor's advertised LAN ID (broadcast)
 	holding   uint16        // neighbor's advertised holding time (seconds)
 	lastHeard time.Time
+	// upSince is when the adjacency last entered Up, and is read only while it
+	// is Up — the update process reaches it through adjacencyGate, which
+	// admits nothing else. RFC 7987 §3.2 gates its corrupt-lifetime report on
+	// Up having lasted at least ZeroAgeLifetime; see corruptLifetime.
+	upSince time.Time
 
 	// p2p three-way (RFC 5303): the neighbor's extended local circuit ID.
 	neighborExtCircID uint32

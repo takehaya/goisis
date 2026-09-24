@@ -46,6 +46,7 @@ func (m *countingMetrics) PDURxError(circuit string)         { m.inc("pdu_rx_err
 func (m *countingMetrics) FloodDrop(circuit, reason string) { m.inc("flood_drop", circuit, reason) }
 
 func (m *countingMetrics) LSPLifetimeFloored(circuit string) { m.inc("lsp_lifetime_floored", circuit) }
+func (m *countingMetrics) LSPLifetimeCorrupt(circuit string) { m.inc("lsp_lifetime_corrupt", circuit) }
 
 func (m *countingMetrics) InterLevelPrefixes(direction string, n int) {
 	m.set(n, "inter_level_prefixes", direction)
@@ -126,21 +127,25 @@ func metricsServer(t *testing.T, p2p bool, opts ...ServerOption) (*IsisServer, *
 }
 
 // addUpAdjacency attaches an Up L2 adjacency to the peer, heard just now so
-// housekeeping does not expire it.
-func addUpAdjacency(c *circuit, now time.Time) {
+// housekeeping does not expire it, and Up only as of now so RFC 7987 §3.2's
+// filter reads it as too young to judge. It returns the adjacency for the
+// tests that need to age it.
+func addUpAdjacency(c *circuit, now time.Time) *adjacency {
 	adj := &adjacency{
 		systemID:  metricsPeerID,
 		snpa:      metricsPeerSNPA,
 		state:     AdjUp,
 		holding:   30,
 		lastHeard: now,
+		upSince:   now,
 	}
 	adj.levels.add(packet.Level2)
 	if c.cfg.P2P {
 		c.p2pAdj = adj
-		return
+		return adj
 	}
 	c.adjs[packet.Level2][metricsPeerID] = adj
+	return adj
 }
 
 func serialize(t *testing.T, pdu packet.PDU) []byte {
@@ -628,6 +633,70 @@ func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough pins RFC 7987
+// §3.2's algorithm. Two of its four conditions are decided by where the report
+// sits -- the acceptance tests, which handleRx and processLSP have already run,
+// and "newer than the copy in the local LSPDB", which the update process
+// returns above. The other two are the subject here: a lifetime below
+// ZeroAgeLifetime, from an adjacency that has been Up for at least that long.
+// The last case is the false-positive filter §3.2 exists for: the resync a new
+// adjacency triggers legitimately carries lifetimes that small.
+func TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough(t *testing.T) {
+	now := time.Now()
+	aged := now.Add(-2 * zeroAgeSeconds * time.Second)
+	for _, tc := range []struct {
+		name      string
+		remaining uint16
+		upSince   time.Time
+		want      int
+	}{
+		{"a lifetime below ZeroAgeLifetime on an adjacency older than it is the event", 30, aged, 1},
+		{"ZeroAgeLifetime itself is not below ZeroAgeLifetime", zeroAgeSeconds, aged, 0},
+		{"a merely aged lifetime is not corruption, though the floor still raises it", 600, aged, 0},
+		{"an adjacency younger than ZeroAgeLifetime is still resyncing", 30, now, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, c, m := metricsServer(t, true)
+			addUpAdjacency(c, now).upSince = tc.upSince
+			s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(tc.remaining)), Src: metricsPeerSNPA})
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != tc.want {
+				t.Errorf("corrupt lifetimes on c = %d, want %d", got, tc.want)
+			}
+		})
+	}
+
+	// A purge has to be driven against a copy we already hold. Sent for an LSP
+	// we do not, ISO 10589 7.3.16.4 a) drops it as unknown_purge long before
+	// the install path, so the case would pass without the guard that excludes
+	// it -- and RFC 7987 §2 leaves purge handling alone precisely so that every
+	// purge in the area does not bury this event.
+	t.Run("a purge of a copy we hold is not a corrupt lifetime", func(t *testing.T) {
+		s, c, m := metricsServer(t, true)
+		addUpAdjacency(c, now).upSince = aged
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
+		purge := peerLSP(0)
+		purge.SequenceNumber = 8
+		s.handleRx(c, datalink.Frame{PDU: serialize(t, purge), Src: metricsPeerSNPA})
+		if got := m.count("pdu_drop", "c", "unknown_purge"); got != 0 {
+			t.Fatalf("the purge was dropped as unknown, so it never reached the report (%d)", got)
+		}
+		if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+			t.Errorf("corrupt lifetimes on c = %d, want 0: a purge is not a corrupt lifetime", got)
+		}
+	})
+
+	t.Run("a re-flood of the copy we already hold is not newer, and is not reported twice", func(t *testing.T) {
+		s, c, m := metricsServer(t, true)
+		addUpAdjacency(c, now).upSince = aged
+		frame := datalink.Frame{PDU: serialize(t, peerLSP(30)), Src: metricsPeerSNPA}
+		s.handleRx(c, frame)
+		s.handleRx(c, frame)
+		if got := m.count("lsp_lifetime_corrupt", "c"); got != 1 {
+			t.Errorf("corrupt lifetimes on c = %d, want 1: the second copy is not newer than the first", got)
+		}
+	})
 }
 
 // TestADeletedCircuitIsRetiredFromTheSinkLast pins the one call that keeps a
