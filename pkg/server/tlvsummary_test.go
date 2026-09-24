@@ -81,6 +81,40 @@ func TestTLVSummary(t *testing.T) {
 			want: []string{"IPv6 Reachability: 2001:db8::/64 metric 10"},
 		},
 		{
+			name: "MT IPv6 reachability names its topology",
+			tlv: &packet.MTIPv6ReachabilityTLV{
+				MTID: packet.MTIDIPv6Unicast,
+				Prefixes: []packet.IPv6ReachEntry{
+					{Prefix: netip.MustParsePrefix("2001:db8::/64"), Metric: 10},
+				},
+			},
+			want: []string{"IPv6 Reachability (MT 2): 2001:db8::/64 metric 10"},
+		},
+		{
+			name: "MT IPv4 reachability names its topology",
+			tlv: &packet.MTIPReachabilityTLV{
+				MTID:     3,
+				Prefixes: []packet.ExtendedIPReachEntry{{Prefix: netip.MustParsePrefix("10.0.0.0/24"), Metric: 10}},
+			},
+			want: []string{"IPv4 Reachability (MT 3): 10.0.0.0/24 metric 10"},
+		},
+		{
+			name: "MT IS reachability names its topology",
+			tlv: &packet.MTISReachabilityTLV{
+				MTID:      packet.MTIDIPv6Unicast,
+				Neighbors: []packet.ExtendedISReachEntry{{NeighborID: packet.NodeID{0, 0, 0, 0, 0, 2, 0}, Metric: 10}},
+			},
+			want: []string{"IS Reachability (MT 2): 0000.0000.0002.00 metric 10"},
+		},
+		{
+			name: "M-Topologies lists the flags that qualify a topology",
+			tlv: &packet.MTopologiesTLV{Topologies: []packet.MTopologyEntry{
+				{MTID: 0},
+				{MTID: 2, Overload: true},
+			}},
+			want: []string{"Topologies: 0 2/overload"},
+		},
+		{
 			name: "SRv6 locator with its End SID",
 			tlv: &packet.SRv6LocatorTLV{Locators: []packet.SRv6Locator{{
 				Locator: netip.MustParsePrefix("fc00:0:1::/48"),

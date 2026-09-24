@@ -131,8 +131,26 @@ func (t *ExtendedIPReachabilityTLV) Type() TLVType { return TLVTypeExtendedIPRea
 
 // Serialize implements TLV.
 func (t *ExtendedIPReachabilityTLV) Serialize() ([]byte, error) {
+	value, err := serializeIPReachEntries(t.Prefixes)
+	if err != nil {
+		return nil, err
+	}
+	return encodeTLV(TLVTypeExtendedIPReachability, value)
+}
+
+func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
+	p, err := decodeIPReachEntries(value)
+	if err != nil {
+		return nil, err
+	}
+	return &ExtendedIPReachabilityTLV{Prefixes: p}, nil
+}
+
+// serializeIPReachEntries renders the prefix list of TLV 135, which RFC 5120
+// section 7.3 reuses verbatim behind an MT ID for TLV 235.
+func serializeIPReachEntries(prefixes []ExtendedIPReachEntry) ([]byte, error) {
 	var value []byte
-	for _, e := range t.Prefixes {
+	for _, e := range prefixes {
 		if !e.Prefix.Addr().Is4() || e.Prefix.Bits() < 0 || e.Prefix.Bits() > 32 {
 			return nil, fmt.Errorf("%w: %s is not a valid IPv4 prefix", errBadTLV, e.Prefix)
 		}
@@ -164,13 +182,14 @@ func (t *ExtendedIPReachabilityTLV) Serialize() ([]byte, error) {
 			value = append(value, sub...)
 		}
 	}
-	return encodeTLV(TLVTypeExtendedIPReachability, value)
+	return value, nil
 }
 
-func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
-	tlv := &ExtendedIPReachabilityTLV{}
+// decodeIPReachEntries decodes the prefix list shared by TLVs 135 and 235.
+func decodeIPReachEntries(value []byte) ([]ExtendedIPReachEntry, error) {
+	var out []ExtendedIPReachEntry
 	err := decodePrefixReach(value, false, func(e prefixReachEntry) {
-		tlv.Prefixes = append(tlv.Prefixes, ExtendedIPReachEntry{
+		out = append(out, ExtendedIPReachEntry{
 			Metric:  e.metric,
 			Down:    e.down,
 			Prefix:  e.prefix,
@@ -180,7 +199,7 @@ func decodeExtendedIPReachabilityTLV(value []byte) (TLV, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tlv, nil
+	return out, nil
 }
 
 // IPv6ReachEntry is one prefix in an IPv6 Reachability TLV.
@@ -204,8 +223,26 @@ func (t *IPv6ReachabilityTLV) Type() TLVType { return TLVTypeIPv6Reachability }
 
 // Serialize implements TLV.
 func (t *IPv6ReachabilityTLV) Serialize() ([]byte, error) {
+	value, err := serializeIPv6ReachEntries(t.Prefixes)
+	if err != nil {
+		return nil, err
+	}
+	return encodeTLV(TLVTypeIPv6Reachability, value)
+}
+
+func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
+	p, err := decodeIPv6ReachEntries(value)
+	if err != nil {
+		return nil, err
+	}
+	return &IPv6ReachabilityTLV{Prefixes: p}, nil
+}
+
+// serializeIPv6ReachEntries renders the prefix list of TLV 236, which RFC 5120
+// section 7.4 reuses verbatim behind an MT ID for TLV 237.
+func serializeIPv6ReachEntries(prefixes []IPv6ReachEntry) ([]byte, error) {
 	var value []byte
-	for _, e := range t.Prefixes {
+	for _, e := range prefixes {
 		if !e.Prefix.Addr().Is6() || e.Prefix.Bits() < 0 || e.Prefix.Bits() > 128 {
 			return nil, fmt.Errorf("%w: %s is not a valid IPv6 prefix", errBadTLV, e.Prefix)
 		}
@@ -238,13 +275,14 @@ func (t *IPv6ReachabilityTLV) Serialize() ([]byte, error) {
 			value = append(value, sub...)
 		}
 	}
-	return encodeTLV(TLVTypeIPv6Reachability, value)
+	return value, nil
 }
 
-func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
-	tlv := &IPv6ReachabilityTLV{}
+// decodeIPv6ReachEntries decodes the prefix list shared by TLVs 236 and 237.
+func decodeIPv6ReachEntries(value []byte) ([]IPv6ReachEntry, error) {
+	var out []IPv6ReachEntry
 	err := decodePrefixReach(value, true, func(e prefixReachEntry) {
-		tlv.Prefixes = append(tlv.Prefixes, IPv6ReachEntry{
+		out = append(out, IPv6ReachEntry{
 			Metric:   e.metric,
 			Down:     e.down,
 			External: e.external,
@@ -255,7 +293,7 @@ func decodeIPv6ReachabilityTLV(value []byte) (TLV, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tlv, nil
+	return out, nil
 }
 
 // prefixReachEntry is the family-neutral form of one decoded reachability

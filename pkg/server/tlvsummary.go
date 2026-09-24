@@ -61,20 +61,22 @@ func tlvSummary(tlv packet.TLV) []string {
 		return []string{"Dynamic Hostname: " + displayString(t.Hostname)}
 
 	case *packet.ExtendedISReachabilityTLV:
-		lines := make([]string, 0, len(t.Neighbors))
-		for _, n := range t.Neighbors {
-			line := fmt.Sprintf("IS Reachability: %s metric %d", n.NeighborID, n.Metric)
-			if len(n.SubTLVs) > 0 {
-				line += fmt.Sprintf(" (%d sub-TLVs)", len(n.SubTLVs))
-			}
-			lines = append(lines, line)
-		}
-		return lines
+		return isReachSummaries("IS Reachability", t.Neighbors)
+
+	case *packet.MTISReachabilityTLV:
+		return isReachSummaries("IS Reachability"+mtTag(t.MTID), t.Neighbors)
 
 	case *packet.ExtendedIPReachabilityTLV:
 		lines := make([]string, 0, len(t.Prefixes))
 		for _, p := range t.Prefixes {
 			lines = append(lines, "IPv4 Reachability: "+prefixSummary(p.Prefix, p.Metric, p.Down))
+		}
+		return lines
+
+	case *packet.MTIPReachabilityTLV:
+		lines := make([]string, 0, len(t.Prefixes))
+		for _, p := range t.Prefixes {
+			lines = append(lines, "IPv4 Reachability"+mtTag(t.MTID)+": "+prefixSummary(p.Prefix, p.Metric, p.Down))
 		}
 		return lines
 
@@ -84,6 +86,30 @@ func tlvSummary(tlv packet.TLV) []string {
 			lines = append(lines, "IPv6 Reachability: "+prefixSummary(p.Prefix, p.Metric, p.Down))
 		}
 		return lines
+
+	case *packet.MTIPv6ReachabilityTLV:
+		lines := make([]string, 0, len(t.Prefixes))
+		for _, p := range t.Prefixes {
+			lines = append(lines, "IPv6 Reachability"+mtTag(t.MTID)+": "+prefixSummary(p.Prefix, p.Metric, p.Down))
+		}
+		return lines
+
+	case *packet.MTopologiesTLV:
+		if len(t.Topologies) == 0 {
+			break // an empty participation set says nothing; show it as the raw TLV
+		}
+		ids := make([]string, 0, len(t.Topologies))
+		for _, e := range t.Topologies {
+			id := strconv.Itoa(int(e.MTID))
+			if e.Overload {
+				id += "/overload"
+			}
+			if e.Attached {
+				id += "/attached"
+			}
+			ids = append(ids, id)
+		}
+		return []string{"Topologies: " + strings.Join(ids, " ")}
 
 	case *packet.SRv6LocatorTLV:
 		lines := make([]string, 0, len(t.Locators))
@@ -113,6 +139,25 @@ func tlvSummary(tlv packet.TLV) []string {
 	}
 	return []string{rawTLVSummary(tlv)}
 }
+
+// isReachSummaries renders the neighbor list shared by TLVs 22 and 222; label
+// carries the MT tag for the latter.
+func isReachSummaries(label string, neighbors []packet.ExtendedISReachEntry) []string {
+	lines := make([]string, 0, len(neighbors))
+	for _, n := range neighbors {
+		line := fmt.Sprintf("%s: %s metric %d", label, n.NeighborID, n.Metric)
+		if len(n.SubTLVs) > 0 {
+			line += fmt.Sprintf(" (%d sub-TLVs)", len(n.SubTLVs))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+// mtTag names the topology an RFC 5120 TLV advertises for. It is always shown,
+// including for MT #0, because a TLV 222/235/237 carrying MT #0 is one the
+// decision process ignores and an operator reading --detail needs to see why.
+func mtTag(mtid uint16) string { return fmt.Sprintf(" (MT %d)", mtid) }
 
 func prefixSummary(p netip.Prefix, metric uint32, down bool) string {
 	s := fmt.Sprintf("%s metric %d", p, metric)

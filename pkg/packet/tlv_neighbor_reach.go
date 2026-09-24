@@ -25,8 +25,26 @@ func (t *ExtendedISReachabilityTLV) Type() TLVType { return TLVTypeExtendedISRea
 
 // Serialize implements TLV.
 func (t *ExtendedISReachabilityTLV) Serialize() ([]byte, error) {
+	value, err := serializeISReachEntries(t.Neighbors)
+	if err != nil {
+		return nil, err
+	}
+	return encodeTLV(TLVTypeExtendedISReachability, value)
+}
+
+func decodeExtendedISReachabilityTLV(value []byte) (TLV, error) {
+	n, err := decodeISReachEntries(value)
+	if err != nil {
+		return nil, err
+	}
+	return &ExtendedISReachabilityTLV{Neighbors: n}, nil
+}
+
+// serializeISReachEntries renders the neighbor list of TLV 22, which RFC 5120
+// section 7.2 reuses verbatim behind an MT ID for TLV 222.
+func serializeISReachEntries(neighbors []ExtendedISReachEntry) ([]byte, error) {
 	var value []byte
-	for _, n := range t.Neighbors {
+	for _, n := range neighbors {
 		if n.Metric > maxWideMetric {
 			return nil, fmt.Errorf("%w: IS metric %d exceeds 24 bits", errBadTLV, n.Metric)
 		}
@@ -42,11 +60,12 @@ func (t *ExtendedISReachabilityTLV) Serialize() ([]byte, error) {
 		value = append(value, byte(len(sub)))
 		value = append(value, sub...)
 	}
-	return encodeTLV(TLVTypeExtendedISReachability, value)
+	return value, nil
 }
 
-func decodeExtendedISReachabilityTLV(value []byte) (TLV, error) {
-	tlv := &ExtendedISReachabilityTLV{}
+// decodeISReachEntries decodes the neighbor list shared by TLVs 22 and 222.
+func decodeISReachEntries(value []byte) ([]ExtendedISReachEntry, error) {
+	var out []ExtendedISReachEntry
 	for len(value) > 0 {
 		if len(value) < 11 {
 			return nil, fmt.Errorf("extended IS reach entry: %w", ErrTruncated)
@@ -66,10 +85,10 @@ func decodeExtendedISReachabilityTLV(value []byte) (TLV, error) {
 			}
 			e.SubTLVs = subs
 		}
-		tlv.Neighbors = append(tlv.Neighbors, e)
+		out = append(out, e)
 		value = value[11+subLen:]
 	}
-	return tlv, nil
+	return out, nil
 }
 
 func init() {
