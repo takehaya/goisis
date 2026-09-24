@@ -59,6 +59,9 @@ func FuzzDecodeTLVs(f *testing.F) {
 	f.Add(mustHexNoT("81 02 cc 8e"))             // protocols supported
 	f.Add(mustHexNoT("89 02 72 31"))             // dynamic hostname "r1"
 	f.Add(mustHexNoT("87 06 00 00 00 0a 08 0a")) // extended IP reach 10/8
+	// MT IPv6 reach (237), MT #2, 2001:db8::/64 — the MT ID field in front of
+	// a TLV 236 entry list is the shape the RFC 5120 decoders add.
+	f.Add(mustHexNoT("ed 10 00 02 00 00 00 0a 00 40 20 01 0d b8 00 00 00 00"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		tlvs, err := decodeTLVs(data)

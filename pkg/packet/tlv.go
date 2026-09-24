@@ -22,8 +22,12 @@ const (
 	TLVTypeIPInterfaceAddresses   TLVType = 132
 	TLVTypeExtendedIPReachability TLVType = 135
 	TLVTypeDynamicHostname        TLVType = 137
+	TLVTypeMTISReachability       TLVType = 222
+	TLVTypeMTopologies            TLVType = 229
 	TLVTypeIPv6InterfaceAddresses TLVType = 232
+	TLVTypeMTIPReachability       TLVType = 235
 	TLVTypeIPv6Reachability       TLVType = 236
+	TLVTypeMTIPv6Reachability     TLVType = 237
 	TLVTypeP2PThreeWayAdjacency   TLVType = 240
 	TLVTypeRouterCapability       TLVType = 242
 )

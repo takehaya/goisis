@@ -95,6 +95,14 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 	// the masked prefix the FIB installs all agree (a peer may leave host bits
 	// set in a non-byte-aligned prefix; the startup sweep keys on the masked
 	// kernel prefix and would otherwise reap our own routes).
+	addPrefix := func(n *spfNode, nid packet.NodeID, p netip.Prefix, metric uint32, down bool) {
+		if metric >= maxPathMetric {
+			return
+		}
+		pfx := p.Masked()
+		n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: metric, down: down})
+		have[nid][pfx] = true
+	}
 	for id, e := range db.entries {
 		if !live(e, now) {
 			continue
@@ -117,22 +125,42 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, now time.Time
 					continue // plain IP reachability belongs to algorithm 0 only
 				}
 				for _, p := range t.Prefixes {
-					if p.Metric < maxPathMetric {
-						pfx := p.Prefix.Masked()
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric, down: p.Down})
-						have[nid][pfx] = true
-					}
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
 				}
 			case *packet.IPv6ReachabilityTLV:
 				if algo != 0 {
 					continue
 				}
 				for _, p := range t.Prefixes {
-					if p.Metric < maxPathMetric {
-						pfx := p.Prefix.Masked()
-						n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: p.Metric, down: p.Down})
-						have[nid][pfx] = true
-					}
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
+				}
+			case *packet.MTIPv6ReachabilityTLV:
+				// A peer configured for multi-topology IPv6 advertises its IPv6
+				// prefixes here, under MT #2, and none in TLV 236 — so without
+				// this case goisis learns no IPv6 route from it at all. Any
+				// other MT ID is skipped, MT #0 because RFC 5120 §7.4 says a
+				// TLV 237 carrying it MUST be ignored, the rest because they
+				// are other topologies (#4 is IPv6 multicast, #5 IPv6
+				// management) whose prefixes do not belong in the unicast RIB.
+				//
+				// Folding MT #2 into the one RIB, rather than giving it the
+				// separate RIB of §6, is sound only because MT #2 is IPv6 by
+				// definition (§7.5) and this node has exactly one IPv6
+				// forwarding table: the overlapping-address hazard §6 warns
+				// about needs two topologies of the same family both installed,
+				// and MT #0's IPv6 and MT #2 are alternatives — a peer puts its
+				// IPv6 prefixes in one or the other, never both. What breaks
+				// the argument is a peer that runs MT #2 non-congruently with
+				// MT #0, because the path to it is computed over MT #0's edges
+				// (TLV 22): folding TLV 222's MT #2 edges in instead would move
+				// MT #0's own IPv4 paths onto links that carry only IPv6, so
+				// the edges stay MT #0's and the metric and next hop are MT
+				// #0's too. See the Limitations table in docs/design.md.
+				if algo != 0 || t.MTID != packet.MTIDIPv6Unicast {
+					continue
+				}
+				for _, p := range t.Prefixes {
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
 				}
 			case *packet.SRv6LocatorTLV:
 				for _, loc := range t.Locators {
