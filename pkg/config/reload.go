@@ -75,8 +75,20 @@ var restartOnly = []struct {
 //
 // An error means next is unusable and nothing should be applied from it. The
 // first thing it does is run the validation a restart runs, because a reload
-// has no rollback: a defect Options would have caught at startup must not be
-// found out half way through the batch, with the withdrawals already issued.
+// has no rollback: a defect startup would have caught must not be found out
+// half way through the batch, with the withdrawals already issued. That is
+// every check that needs no transport, Options having been given the server's
+// own (server.ValidateOptions): the Flex-Algo range and duplicates, a
+// locator's address family and the algorithm it binds to, what a prefix may
+// be and what metric it may carry.
+//
+// Two things stay outside that line. A circuit's transport is a restart's to
+// open, so what only the socket can answer -- that the interface is there,
+// that its MTU admits our LSPs -- is settled at startup alone, which costs a
+// reload nothing: it applies no circuit key either. And the node's running
+// state is not compared at all. Diff is file against file, so a prefix or
+// locator an operator added through the management API is one the server can
+// still refuse in the middle of the batch.
 func Diff(old, next *Config) (Changes, error) {
 	// Options is the startup path's validation. Opening the circuits is its
 	// one side effect and a restart's job alone, so the probe replaces the

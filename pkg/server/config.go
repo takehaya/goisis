@@ -179,6 +179,84 @@ func (c *CircuitConfig) applyDefaults() error {
 // ServerOption configures an IsisServer.
 type ServerOption func(*options)
 
+// ValidateOptions reports whether NewIsisServer would accept this option set,
+// building nothing and owning nothing. It runs every check that needs no
+// transport; what it leaves out is the circuits, whose transport a restart
+// alone can open (the LSP size the MTU dictates, and applyDefaults' nil-
+// transport check). That split is what lets a configuration reload refuse a
+// file a restart would refuse, without opening a socket per interface — see
+// config.Diff.
+func ValidateOptions(opts ...ServerOption) error {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o.validate()
+}
+
+// validate is the transport-free half of NewIsisServer's checks, kept in one
+// place so the startup path and a reload cannot drift apart on what is valid.
+func (o *options) validate() error {
+	if err := requirePrimaryPassword("goisis: area authentication", o.areaAuth.Secret, o.areaAuth.AcceptSecrets); err != nil {
+		return err
+	}
+	if err := requirePrimaryPassword("goisis: domain authentication", o.domainAuth.Secret, o.domainAuth.AcceptSecrets); err != nil {
+		return err
+	}
+	for _, p := range o.prefixes {
+		if err := checkAdvertisedPrefix(p); err != nil {
+			return err
+		}
+	}
+	participated := map[uint8]bool{}
+	for _, fa := range o.flexAlgos {
+		if fa.Algo < 128 {
+			return fmt.Errorf("goisis: Flex-Algo %d is reserved; use 128-255", fa.Algo)
+		}
+		if participated[fa.Algo] {
+			return fmt.Errorf("goisis: duplicate Flex-Algo %d configuration", fa.Algo)
+		}
+		participated[fa.Algo] = true
+	}
+	for _, lc := range o.locators {
+		if a := lc.Prefix.Addr(); !a.Is6() || a.Is4In6() {
+			return fmt.Errorf("goisis: SRv6 locator %s must be IPv6", lc.Prefix)
+		}
+		// A non-zero-algorithm locator is only reachable if the node also
+		// participates in that Flex-Algo (advertises it in SR-Algorithm and
+		// computes its topology); otherwise the locator is an unreachable black
+		// hole. Require explicit participation rather than advertising silently.
+		if lc.Algo != 0 && !participated[lc.Algo] {
+			return fmt.Errorf("goisis: SRv6 locator %s is bound to Flex-Algo %d but the node does not participate in it (add WithFlexAlgo)", lc.Prefix, lc.Algo)
+		}
+	}
+	return nil
+}
+
+// checkAdvertisedPrefix is the trust boundary on what this node originates:
+// whatever passes is flooded area-wide and installed by every peer. The
+// configuration and AddPrefix share it so that a file the daemon starts on is
+// a file a reload of it can apply.
+func checkAdvertisedPrefix(p AdvertisedPrefix) error {
+	if !p.Prefix.IsValid() {
+		return fmt.Errorf("goisis: prefix %s is not a valid prefix", p.Prefix)
+	}
+	want := p.Prefix.Masked()
+	// Prefixes that no unicast forwarding entry can ever serve are refused
+	// rather than advertised. The default route is not one of them:
+	// default-information origination is legitimate, and suppressing it is
+	// policy.advertise's job.
+	if a := want.Addr(); a.Is4In6() || a.IsMulticast() || a.IsLinkLocalUnicast() || (a.IsUnspecified() && want.Bits() != 0) {
+		return fmt.Errorf("goisis: prefix %s is not routable; multicast, unspecified, link-local and IPv4-mapped prefixes are never originated", want)
+	}
+	// RFC 5305 §4: a metric at or above the ceiling means "not reachable",
+	// so advertising one would be a black hole no SPF would ever use.
+	if p.Metric >= maxPathMetric {
+		return fmt.Errorf("goisis: prefix %s metric %d is at or above the reachability ceiling %d", want, p.Metric, uint32(maxPathMetric))
+	}
+	return nil
+}
+
 // AdvertisedPrefix is a prefix originated in this node's LSP (TLV 135/236).
 type AdvertisedPrefix struct {
 	Prefix netip.Prefix

@@ -263,6 +263,9 @@ func parseError(src []byte, err error) string {
 
 // Options translates the configuration into server options, opening an
 // AF_PACKET transport per circuit and reading interface addresses for hellos.
+// It runs every validation a restart runs but the circuits' own (see
+// server.ValidateOptions), so that a caller which never starts a server --
+// Diff, validating a file for a reload -- still refuses what startup refuses.
 func (c *Config) Options() ([]server.ServerOption, error) {
 	area, sysID, err := packet.ParseNET(c.NET)
 	if err != nil {
@@ -368,6 +371,13 @@ func (c *Config) Options() ([]server.ServerOption, error) {
 		opts = append(opts, server.WithDomainAuth(server.AuthConfig{
 			Algorithm: algo, KeyID: c.DomainKeyID, Secret: c.DomainPassword, AcceptSecrets: c.DomainAcceptPasswords,
 		}))
+	}
+	// The server's own checks, before the first socket: they need no transport,
+	// so a reload reaches them through this same path and refuses a file a
+	// restart would refuse (Diff). Running them here also means a file with a
+	// reserved Flex-Algo number costs a startup no file descriptors.
+	if err := server.ValidateOptions(opts...); err != nil {
+		return nil, err
 	}
 	open := c.OpenCircuit
 	if open == nil {

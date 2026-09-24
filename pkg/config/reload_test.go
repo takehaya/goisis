@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -21,6 +22,7 @@ import (
 // reloadBase is the running configuration every Diff case below starts from.
 const reloadBase = `net: 49.0001.0000.0000.0001.00
 area-password: secret
+domain-password: secret
 prefixes:
   - 192.0.2.0/24
 srv6:
@@ -338,10 +340,101 @@ func TestDiffRefusesAFileARestartWouldRefuse(t *testing.T) {
 		"invalid overload window": reloadBase + "overload-on-startup: 30x\n",
 		"invalid policy rule":     reloadBase + "policy:\n  advertise:\n    rules:\n      - permit: 192.0.2.0\n",
 		"unknown auth algorithm":  reloadBase + "area-auth-algorithm: sha999\n",
+		// The three the server itself checks, and the reload did not: a
+		// reserved Flex-Algo number, the same number twice, and a locator that
+		// is not an IPv6 prefix. Each used to reach apply and detonate there,
+		// with the withdrawals it came after already issued.
+		"reserved flex-algo number":     strings.Replace(reloadBase, "- algo: 128", "- algo: 100", 1),
+		"duplicate flex-algo":           strings.Replace(reloadBase, "flex-algo:\n", "flex-algo:\n  - algo: 128\n    priority: 200\n", 1),
+		"srv6 locator that is not IPv6": strings.Replace(reloadBase, "- fc00:0:1::/48", "- 10.0.0.0/8", 1),
 	} {
 		if _, err := Diff(old, loadConfig(t, next)); err == nil {
 			t.Errorf("%s: Diff accepted a file a restart would refuse", name)
 		}
+	}
+}
+
+// TestReloadAppliesEveryFileAStartupAccepts pins the other direction of the
+// same contract, the one that is easy to forget: a file goisisd starts on has
+// to be a file a reload of that same file applies. Two checks lived in
+// AddPrefix alone -- the routability of the prefix and the reachability
+// ceiling on its metric -- so a node started on such a file could not reload
+// it, and the attempt stopped part way through the batch.
+func TestReloadAppliesEveryFileAStartupAccepts(t *testing.T) {
+	const base = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	for name, entry := range map[string]string{
+		"multicast prefix": "  - 224.0.0.0/4\n",
+		// 0xfe000000 is the RFC 5305 reachability ceiling; a prefix at or
+		// above it is unusable, which is why AddPrefix refuses it.
+		"metric at the reachability ceiling": "  - prefix: 198.51.100.0/24\n    metric: 4261412864\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			next := strings.Replace(base, "  - 192.0.2.0/24\n", "  - 192.0.2.0/24\n"+entry, 1)
+			cfg, s, path := runningServer(t, base)
+			if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Reload(t.Context(), s, cfg, path, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if startupAccepts(t, next) {
+				if err != nil {
+					t.Fatalf("goisisd starts on this file, but a reload of the very same file fails: %v", err)
+				}
+				return
+			}
+			// The other way round is just as much a disagreement, and the
+			// reload must reach it in Diff: refusing in the middle of apply
+			// leaves the node in neither configuration.
+			if err == nil {
+				t.Fatal("the reload applied a file goisisd would not start on")
+			}
+			if errors.Is(err, ErrPartiallyApplied) {
+				t.Fatalf("the reload found the defect only after it had begun mutating: %v", err)
+			}
+		})
+	}
+}
+
+// startupAccepts reports whether goisisd would start on this file: the whole
+// startup path over a mock transport, with the server it builds discarded.
+func startupAccepts(t *testing.T, yaml string) bool {
+	t.Helper()
+	cfg := loadConfig(t, yaml)
+	cfg.OpenCircuit = mockCircuits(map[string]mockCircuit{
+		"mock0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 2}, 1500)},
+	})
+	opts, err := cfg.Options()
+	if err != nil {
+		return false
+	}
+	_, err = server.NewIsisServer(opts...)
+	return err == nil
+}
+
+// TestDiffOpensNoSockets pins what Diff is: a pure function. It validates the
+// whole file, which means it walks the circuits too, and a circuit's transport
+// is a restart's to open -- so the one impure step in Options is replaced, not
+// taken. A Diff that opened sockets would hand every reload a handful of
+// AF_PACKET file descriptors to leak, and a validation that could fail because
+// an interface is down.
+func TestDiffOpensNoSockets(t *testing.T) {
+	old := loadConfig(t, reloadBase)
+	next := loadConfig(t, strings.Replace(reloadBase, "192.0.2.0/24", "198.51.100.0/24", 1))
+	opened := 0
+	next.OpenCircuit = func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error) {
+		opened++
+		return datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 3}, 1500), nil, nil, nil
+	}
+	if _, err := Diff(old, next); err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if opened != 0 {
+		t.Errorf("Diff opened %d circuits; validation must not take a socket", opened)
 	}
 }
 
@@ -354,21 +447,20 @@ func TestDiffRefusesAFileARestartWouldRefuse(t *testing.T) {
 // rather than treating a file the node never adopted as the truth.
 func TestReloadKeepsItsBaselineWhenAnApplyIsRefused(t *testing.T) {
 	const initial = `net: 49.0001.1921.6800.1001.00
-srv6:
-  locators:
-    - fc00:0:1::/48
-flex-algo:
-  - algo: 128
-    priority: 100
-    locator: fc00:128:1::/48
+prefixes:
+  - 192.0.2.0/24
 circuits:
   - interface: mock0
     level: "2"
 `
-	// The operator raises the priority and mistypes the algorithm as a
-	// reserved number. Diff turns that into withdraw-then-re-add: the two
-	// withdrawals land and both additions are refused.
-	next := strings.NewReplacer("priority: 100", "priority: 200", "- algo: 128", "- algo: 100").Replace(initial)
+	// What can still reach apply is state the file cannot describe: Diff
+	// validates the file against the file a restart would run, never against
+	// the node. Here the operator advertised a prefix through the management
+	// API and then wrote that same prefix into the file -- a file a restart
+	// would run perfectly -- so the swap comes out as a withdrawal that lands
+	// and an addition the server refuses as already advertised.
+	next := strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 198.51.100.0/24\n", 1)
+	const runtimePrefix = "198.51.100.0/24"
 
 	path := filepath.Join(t.TempDir(), "goisisd.yaml")
 	write := func(s string) {
@@ -395,6 +487,9 @@ circuits:
 	}
 	ctx := t.Context()
 	go s.Serve(ctx) //nolint:errcheck // shut down via ctx
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{Prefix: netip.MustParsePrefix(runtimePrefix), Metric: 10}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
 
 	write(next)
 	want, err := Diff(cfg, loadConfigFile(t, path))
@@ -411,16 +506,10 @@ circuits:
 		t.Errorf("Reload error is not an ErrPartiallyApplied, so goisisd cannot tell an untouched node from a half-changed one: %v", err)
 	}
 
-	// The refusal is destructive by design: the locator the algorithm needed
-	// was withdrawn before the algorithm was refused. That is what the caller
-	// has to be told, and it is why the baseline must not move.
-	locators, err := s.ListLocators(ctx)
-	if err != nil {
-		t.Fatalf("ListLocators: %v", err)
-	}
-	if slices.ContainsFunc(locators, func(l server.LocatorInfo) bool { return l.Algorithm == 128 }) {
-		t.Errorf("locators = %+v: the test no longer exercises a refusal after a withdrawal", locators)
-	}
+	// The refusal is destructive by design: the prefix the file dropped was
+	// withdrawn before the addition was refused. That is what the caller has
+	// to be told, and it is why the baseline must not move.
+	waitFor(t, "the withdrawn prefix to leave our own LSP", func() bool { return !ownLSPHas(t, s, "192.0.2.0/24") })
 
 	again, err := Diff(running, loadConfigFile(t, path))
 	if err != nil {
@@ -528,9 +617,11 @@ circuits:
 		t.Errorf("refused reloads = %d, want 1", got)
 	}
 
-	// A reserved algorithm number: Diff turns the edit into withdraw-then-
-	// re-add, the withdrawals land and the additions are refused.
-	write(strings.NewReplacer("priority: 100", "priority: 200", "- algo: 128", "- algo: 100").Replace(initial))
+	// A call the running server refuses, which after validation can only be
+	// one the file cannot foresee: the prefix the reload above already
+	// advertised is written into the file, so of the two additions one lands
+	// and one is refused as redundant.
+	write(strings.Replace(initial, "  - 192.0.2.0/24\n", "  - 198.51.100.0/24\n  - 203.0.113.0/24\n", 1))
 	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
 		t.Fatalf("Reload error = %v, want an ErrPartiallyApplied", err)
 	}

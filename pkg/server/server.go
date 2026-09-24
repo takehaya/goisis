@@ -139,10 +139,9 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		optionPrefixes:    map[netip.Prefix]AdvertisedPrefix{},
 		optionConnected:   map[netip.Prefix]bool{},
 	}
-	if err := requirePrimaryPassword("goisis: area authentication", o.areaAuth.Secret, o.areaAuth.AcceptSecrets); err != nil {
-		return nil, err
-	}
-	if err := requirePrimaryPassword("goisis: domain authentication", o.domainAuth.Secret, o.domainAuth.AcceptSecrets); err != nil {
+	// Everything a reload can check too (ValidateOptions); what follows here
+	// is the part that needs the circuits' transports.
+	if err := o.validate(); err != nil {
 		return nil, err
 	}
 	if spec := o.areaAuth.spec(); spec.on() {
@@ -169,28 +168,6 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 	for _, p := range o.connected {
 		s.optionConnected[p] = true
 		s.connected[p] = true
-	}
-	participated := map[uint8]bool{}
-	for _, fa := range o.flexAlgos {
-		if fa.Algo < 128 {
-			return nil, fmt.Errorf("goisis: Flex-Algo %d is reserved; use 128-255", fa.Algo)
-		}
-		if participated[fa.Algo] {
-			return nil, fmt.Errorf("goisis: duplicate Flex-Algo %d configuration", fa.Algo)
-		}
-		participated[fa.Algo] = true
-	}
-	for _, lc := range o.locators {
-		if a := lc.Prefix.Addr(); !a.Is6() || a.Is4In6() {
-			return nil, fmt.Errorf("goisis: SRv6 locator %s must be IPv6", lc.Prefix)
-		}
-		// A non-zero-algorithm locator is only reachable if the node also
-		// participates in that Flex-Algo (advertises it in SR-Algorithm and
-		// computes its topology); otherwise the locator is an unreachable black
-		// hole. Require explicit participation rather than advertising silently.
-		if lc.Algo != 0 && !participated[lc.Algo] {
-			return nil, fmt.Errorf("goisis: SRv6 locator %s is bound to Flex-Algo %d but the node does not participate in it (add WithFlexAlgo)", lc.Prefix, lc.Algo)
-		}
 	}
 	// Pseudonode octets are a single byte and must be nonzero and unique
 	// per box, so at most 255 circuits can be assigned distinct octets.
