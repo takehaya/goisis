@@ -324,6 +324,16 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 			logger.Debug("configuration reload: outcome not recorded", "outcome", outcome, "error", err)
 		}
 	}
+	// The same bounded, non-fatal shape, for the count of what the reload left
+	// in the file. It is separate from report because it is known later: a
+	// file that will not load has an outcome but nothing to count.
+	reportUnapplied := func(n int) {
+		rctx, cancel := context.WithTimeout(ctx, reportTimeout)
+		defer cancel()
+		if err := s.ReportConfigReloadUnapplied(rctx, n); err != nil {
+			logger.Debug("configuration reload: unapplied count not recorded", "count", n, "error", err)
+		}
+	}
 	next, err := Load(path)
 	if err != nil {
 		report(server.ReloadRefused)
@@ -337,6 +347,13 @@ func Reload(ctx context.Context, s *server.IsisServer, cur *Config, path string,
 	for _, key := range ch.Ignored {
 		logger.Warn("configuration reload: this change needs a restart and was not applied", "key", key)
 	}
+	// Counted as well as logged, because the difference outlives the log line.
+	// The file keeps it, so the next restart applies it -- and Restart= makes
+	// that restart something nobody has to ask for. See ConfigReloadUnapplied.
+	// Deferred so it goes out however the apply below ends, and after the
+	// outcome rather than in front of it: the count is the same either way,
+	// and a reload must not spend a second deadline before it applies anything.
+	defer reportUnapplied(len(ch.Ignored))
 	// A deadline, because the caller's context is the daemon's lifetime: every
 	// call below queues behind the Serve loop, so a loop wedged on a slow sink
 	// would otherwise hold the reload — and the signal handler behind it —

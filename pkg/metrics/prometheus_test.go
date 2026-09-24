@@ -25,6 +25,7 @@ func TestPrometheusRecords(t *testing.T) {
 	m.PDUTxError("eth0", "send")
 	m.PDURxError("eth0")
 	m.ConfigReload("partial")
+	m.ConfigReloadUnapplied(2)
 	m.LSPLifetimeFloored("eth0")
 	m.InterLevelPrefixes("l2_to_l1", 3)
 
@@ -52,6 +53,7 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_pdu_tx_errors_total",
 		"goisis_pdu_rx_errors_total",
 		"goisis_config_reloads_total",
+		"goisis_config_reload_unapplied",
 		"goisis_lsp_lifetime_floored_total",
 		"goisis_inter_level_prefixes",
 	} {
@@ -94,6 +96,7 @@ func TestPrometheusRecords(t *testing.T) {
 		{"goisis_pdu_tx_errors_total", 1},
 		{"goisis_pdu_rx_errors_total", 1},
 		{"goisis_config_reloads_total", 1},
+		{"goisis_config_reload_unapplied", 2},
 		{"goisis_lsp_lifetime_floored_total", 1},
 		{"goisis_inter_level_prefixes", 3},
 	} {

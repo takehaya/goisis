@@ -85,6 +85,16 @@ type Metrics interface {
 	// configuration file" needs them apart. The reload runs off a signal,
 	// outside the management goroutine; see ReportConfigReload.
 	ConfigReload(outcome string)
+	// ConfigReloadUnapplied reports how many differences a reload left in the
+	// file: the keys no runtime API expresses, which it names in the log and
+	// declines. Non-zero means the running configuration is not the file, and
+	// the difference is armed — the file is the next restart's configuration,
+	// and systemd's Restart= makes that restart unattended, so the System ID
+	// or authentication key a reload declined can take effect hours later
+	// behind an unrelated crash. Reported on every reload that got as far as
+	// comparing the two files, zero included, so a divergence an operator has
+	// resolved reads as resolved rather than holding its last value.
+	ConfigReloadUnapplied(n int)
 	// LSPLifetimeFloored records one received LSP whose remaining lifetime the
 	// RFC 7987 floor raised to MaxAge, on the circuit it arrived on. The floor
 	// removed the symptom a corrupted lifetime used to produce (a premature
@@ -136,6 +146,19 @@ const (
 func (s *IsisServer) ReportConfigReload(ctx context.Context, outcome ReloadOutcome) error {
 	return s.mgmtOperation(ctx, func() error {
 		s.metrics.ConfigReload(string(outcome))
+		return nil
+	})
+}
+
+// ReportConfigReloadUnapplied records how many differences a reload left
+// unapplied in the file. It is routed onto the management loop for the reason
+// ReportConfigReload is, and is separate from it because the two are known at
+// different points: a file that will not load or will not validate has an
+// outcome but no difference to count, and reporting zero for it would read as
+// a file the node is running.
+func (s *IsisServer) ReportConfigReloadUnapplied(ctx context.Context, n int) error {
+	return s.mgmtOperation(ctx, func() error {
+		s.metrics.ConfigReloadUnapplied(n)
 		return nil
 	})
 }
@@ -239,6 +262,9 @@ func (NoopMetrics) PDURxError(string) {}
 
 // ConfigReload implements Metrics.
 func (NoopMetrics) ConfigReload(string) {}
+
+// ConfigReloadUnapplied implements Metrics.
+func (NoopMetrics) ConfigReloadUnapplied(int) {}
 
 // LSPLifetimeFloored implements Metrics.
 func (NoopMetrics) LSPLifetimeFloored(string) {}
