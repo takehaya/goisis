@@ -74,8 +74,10 @@ test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
   `datalink.Link`; no privileges needed. White-box tests inject LSPs with the
   `injectLSP` helper and call `computeSPF`/`flexAlgoState` directly.
 - A few broadcast/DIS timing tests (e.g. `TestRIBWithdrawsOnPeerLoss`,
-  `TestWatchEmitsAdjacencyAndRoute`) can flake under heavy parallel load; they
-  pass in isolation. Re-run the single test before assuming a regression.
+  `TestWatchEmitsAdjacencyAndRoute`,
+  `TestClearAdjacencyOnP2PClearsFloodingFlagsAndReforms`) can flake under heavy
+  parallel load; they pass in isolation. Re-run the single test before assuming
+  a regression.
 - **FRR interop** (`test/interop`) and **golden-fixture capture**
   (`test/fixturegen/*.sh`) require `docker` + root, so they run in CI, not in a
   sandbox without docker. They are written to run there.

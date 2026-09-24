@@ -488,6 +488,41 @@ func TestLeakPolicyFiltersWhatReachesTheL1LSP(t *testing.T) {
 	}
 }
 
+// The two policies gate different things and are deliberately not stacked: the
+// export policy says what this node claims of its own (and what it carries up
+// from Level 1), the leak policy what it carries down from Level 2. Stacking
+// them would empty the leak the moment an operator writes the common shape of
+// an export policy -- an allowlist of loopbacks -- so unifying the two is a
+// behaviour change and not a tidy-up, and has to argue for itself here.
+func TestTheAdvertisePolicyDoesNotGateTheL2ToL1Leak(t *testing.T) {
+	loopback := netip.MustParsePrefix("192.0.2.1/32")
+	elsewhere := netip.MustParsePrefix("192.0.2.2/32")
+	s := l1l2Server(t, true,
+		WithAdvertisedPrefix(loopback, 10),
+		WithAdvertisedPrefix(elsewhere, 10),
+		WithAdvertiseFilter(func(ap AdvertisedPrefix) bool { return ap.Prefix == loopback }),
+		WithL2LeakFilter(permitEverything()),
+	)
+	now := time.Now()
+	leakFixture(t, s, now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	for _, p := range []netip.Prefix{leakV4, leakV6, leakDeniedV4} {
+		// 10 (the circuit metric to B) + 5 (B's metric for the prefix).
+		if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(got[p], want) {
+			t.Errorf("L1 LSP entries for the leaked %s = %v, want %v: the leak policy is its only gate", p, got[p], want)
+		}
+	}
+	// The same filter, the same LSP: it is denying this node's own prefix, so
+	// the leaks above are not green because nothing consulted it.
+	if _, ok := got[loopback]; !ok {
+		t.Errorf("the allowlisted %s is missing from our own L1 LSP; the policy under test is wrong", loopback)
+	}
+	if e, ok := got[elsewhere]; ok {
+		t.Errorf("%s was originated as %v despite the export policy denying it", elsewhere, e)
+	}
+}
+
 // What the leaker put on the wire is what a Level-1-only IS routes on: replaying
 // its Level-1 reachability TLVs from a neighbour installs the leaked prefixes.
 func TestAnL1OnlyNodeInstallsALeakedPrefix(t *testing.T) {

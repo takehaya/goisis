@@ -711,8 +711,9 @@ circuits:
 // while the test reads it from its own.
 type reloadMetrics struct {
 	server.NoopMetrics
-	mu       sync.Mutex
-	outcomes map[string]int
+	mu        sync.Mutex
+	outcomes  map[string]int
+	unapplied []int
 }
 
 func (m *reloadMetrics) ConfigReload(outcome string) {
@@ -728,6 +729,22 @@ func (m *reloadMetrics) count(outcome string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.outcomes[outcome]
+}
+
+func (m *reloadMetrics) ConfigReloadUnapplied(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unapplied = append(m.unapplied, n)
+}
+
+// unappliedCounts returns every count reported so far, in order. The sequence
+// and not the last value, because a reload that never compared the two files
+// reports nothing at all, which a last value alone cannot tell from one that
+// reported the same number again.
+func (m *reloadMetrics) unappliedCounts() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.unapplied)
 }
 
 // TestReloadReportsEveryOutcome pins the three states an operator has to be
@@ -820,6 +837,69 @@ circuits:
 	}
 	if got := m.count("applied"); got != 1 {
 		t.Errorf("applied reloads = %d after a refusal, want the first one only", got)
+	}
+}
+
+// TestReloadCountsWhatItLeftArmedForTheNextRestart pins the part of a declined
+// change the log does not carry: the difference stays in the file, and the file
+// is the next restart's configuration -- a restart `Restart=on-failure` makes
+// with nobody present, hours after the warning scrolled past. The count is the
+// running configuration's distance from the file, so monitoring can see "this
+// node is not running this file" rather than an operator having to remember.
+func TestReloadCountsWhatItLeftArmedForTheNextRestart(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+hostname: before
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	m := &reloadMetrics{}
+	cfg, s, path := runningServer(t, initial, server.WithMetrics(m))
+	ctx := t.Context()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reload := func(yaml string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		running, err := Reload(ctx, s, cfg, path, logger)
+		if err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+		cfg = running
+	}
+
+	// A restart-only key next to one the reload applies: the reload succeeds,
+	// and the file it leaves behind describes a node this one is not.
+	reload(strings.NewReplacer(
+		"hostname: before", "hostname: after",
+		"192.0.2.0/24", "198.51.100.0/24",
+	).Replace(initial))
+	if got := m.unappliedCounts(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("unapplied counts = %v, want [1]: the hostname change is still in the file", got)
+	}
+
+	// A file that will not load is not a count of zero: nothing was compared,
+	// so the divergence the reload before it left is still there, and a gauge
+	// reset here would read as resolved.
+	if err := os.WriteFile(path, []byte("net: 49.0001.1921.6800.1001\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reload(ctx, s, cfg, path, logger); err == nil {
+		t.Fatal("Reload accepted a file a restart would refuse")
+	}
+	if got := m.unappliedCounts(); !slices.Equal(got, []int{1}) {
+		t.Errorf("unapplied counts = %v, want [1] still: a file that will not load was never compared", got)
+	}
+
+	// Resolved reads as resolved. The operator puts the running hostname back,
+	// so the file and the node agree again and the count has to follow down
+	// rather than hold its last value.
+	reload(strings.Replace(initial, "192.0.2.0/24", "203.0.113.0/24", 1))
+	if got := m.unappliedCounts(); !slices.Equal(got, []int{1, 0}) {
+		t.Errorf("unapplied counts = %v, want [1 0]: the file is what the node runs again", got)
 	}
 }
 

@@ -161,7 +161,7 @@ policy:
 
 | キー | 型 | 説明 |
 |-----|------|-------------|
-| `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。自身の prefix に加え、L1L2 ノードが Level-2 LSP へ伝搬する Level-1 prefix にも適用される。 |
+| `advertise` | prefix-list | export ポリシー:広報する prefix(TLV 135/236)。自身の prefix に加え、L1L2 ノードが Level-2 LSP へ伝搬する Level-1 prefix にも適用される。Level 2 から*下ろす*ぶんは対象外で、その向きを絞るのは `leak-l2-to-l1` だけ。 |
 | `fib` | prefix-list | FIB ポリシー:フォワーディングプレーンに入れる経路。拒否分も RIB には残り `ListRoutes`/`WatchEvent` で見える。 |
 | `leak-l2-to-l1` | prefix-list | リークポリシー:L1L2 ノードが up/down ビット付きで Level-1 LSP に載せる Level-2 prefix。省略すると何もリークしない。 |
 | `<list>.default` | string | `deny`(デフォルト)/ `permit`。どのルールにもマッチしないときに適用。 |
@@ -206,6 +206,13 @@ WARN configuration reload: this change needs a restart and was not applied key="
 再起動が要るもののうち、運用中に繰り返し触るのは `policy` です。prefix-list の
 変更はリロードでは反映されません。ランタイムで変えるには管理 API にフィルタの
 RPC が要りますが、現状ありません。
+
+リロードが見送った差分は取り消されず、ファイルに残ります。そしてファイルは次回
+起動時の設定そのものです。同梱ユニットの `Restart=on-failure` は誰もいないところで
+デーモンを復帰させるので、その「次回起動」は誰かが指示したものとは限りません。
+リロードが名指しして見送った System ID や認証鍵が、無関係なクラッシュをきっかけに
+何時間も後に効き始めることがあります。`goisis_config_reload_unapplied` がこの
+距離で、アラートは上のログ行ではなくこちらに張ります。
 
 パースできないファイル、および回線を開く前の段階で再起動なら弾かれるファイルは、
 デーモンを一切変えません。最初の呼び出しを出す前に、サーバ自身の検査まで含めて
@@ -343,7 +350,8 @@ RFC 5305 の到達不能しきい値 (`0xfe000000`) 以上のメトリックで�
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
 `remove_sid`) / `goisis_event_queue_depth` /
 `goisis_config_reloads_total{outcome}` (outcome は `applied` / `refused` /
-`partial`) / `goisis_lsp_lifetime_floored_total{circuit}` /
+`partial`) / `goisis_config_reload_unapplied` /
+`goisis_lsp_lifetime_floored_total{circuit}` /
 `goisis_inter_level_prefixes{direction}` (direction は `l2_to_l1` /
 `l1_to_l2`)。
 
@@ -388,6 +396,16 @@ rate(goisis_flooding_lsp_drops_total[5m]) > 0
 
 ```
 increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
+```
+
+`goisis_config_reload_unapplied` は、同じ問いをリロードではなくファイルに対して
+投げたものである。直近のリロードがファイルに残した差分の数、すなわち再起動が
+拾ってしまう差分の数を示す([設定のリロード](#設定のリロード))。ゼロを含めて
+毎回のリロードで更新するため、解消した乖離は最後の値を保ったままにならず
+ゼロとして読める:
+
+```
+goisis_config_reload_unapplied > 0
 ```
 
 `goisis_lsp_lifetime_floored_total` は、受信 LSP の remaining lifetime を

@@ -13,23 +13,24 @@ import (
 
 // Prometheus implements server.Metrics by recording into Prometheus collectors.
 type Prometheus struct {
-	adjTransitions *prometheus.CounterVec
-	spfDuration    *prometheus.HistogramVec
-	lsdbSize       *prometheus.GaugeVec
-	floodTx        *prometheus.CounterVec
-	floodDrops     *prometheus.CounterVec
-	fibPending     prometheus.Gauge
-	pduRx          *prometheus.CounterVec
-	pduDrops       *prometheus.CounterVec
-	adjacencies    *prometheus.GaugeVec
-	routes         *prometheus.GaugeVec
-	fibErrors      *prometheus.CounterVec
-	eventQueue     prometheus.Gauge
-	pduTxErrors    *prometheus.CounterVec
-	pduRxErrors    *prometheus.CounterVec
-	configReloads  *prometheus.CounterVec
-	lifetimeFloors *prometheus.CounterVec
-	interLevel     *prometheus.GaugeVec
+	adjTransitions  *prometheus.CounterVec
+	spfDuration     *prometheus.HistogramVec
+	lsdbSize        *prometheus.GaugeVec
+	floodTx         *prometheus.CounterVec
+	floodDrops      *prometheus.CounterVec
+	fibPending      prometheus.Gauge
+	pduRx           *prometheus.CounterVec
+	pduDrops        *prometheus.CounterVec
+	adjacencies     *prometheus.GaugeVec
+	routes          *prometheus.GaugeVec
+	fibErrors       *prometheus.CounterVec
+	eventQueue      prometheus.Gauge
+	pduTxErrors     *prometheus.CounterVec
+	pduRxErrors     *prometheus.CounterVec
+	configReloads   *prometheus.CounterVec
+	configUnapplied prometheus.Gauge
+	lifetimeFloors  *prometheus.CounterVec
+	interLevel      *prometheus.GaugeVec
 }
 
 // NewPrometheus creates the collectors and registers them in reg (e.g.
@@ -98,6 +99,10 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_config_reloads_total",
 			Help: "Count of configuration reloads, by outcome.",
 		}, []string{"outcome"}),
+		configUnapplied: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "goisis_config_reload_unapplied",
+			Help: "Number of configuration-file differences the last reload left unapplied, and so armed for the next restart.",
+		}),
 		lifetimeFloors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "goisis_lsp_lifetime_floored_total",
 			Help: "Count of received LSPs whose remaining lifetime was raised to MaxAge (RFC 7987).",
@@ -109,7 +114,8 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 	}
 	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
 		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue,
-		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.lifetimeFloors, p.interLevel)
+		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.configUnapplied, p.lifetimeFloors,
+		p.interLevel)
 	return p
 }
 
@@ -186,6 +192,11 @@ func (p *Prometheus) PDURxError(circuit string) {
 // ConfigReload implements server.Metrics.
 func (p *Prometheus) ConfigReload(outcome string) {
 	p.configReloads.WithLabelValues(outcome).Inc()
+}
+
+// ConfigReloadUnapplied implements server.Metrics.
+func (p *Prometheus) ConfigReloadUnapplied(n int) {
+	p.configUnapplied.Set(float64(n))
 }
 
 // LSPLifetimeFloored implements server.Metrics.

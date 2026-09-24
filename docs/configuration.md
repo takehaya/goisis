@@ -168,7 +168,7 @@ policy:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236) — its own, and on an L1L2 node the Level-1 prefixes it propagates into its Level-2 LSP. |
+| `advertise` | prefix-list | Export policy: prefixes the node originates (TLV 135/236) — its own, and on an L1L2 node the Level-1 prefixes it propagates into its Level-2 LSP. What it carries *down* from Level 2 is not its business: `leak-l2-to-l1` is that direction's only filter. |
 | `fib` | prefix-list | FIB policy: routes programmed into the forwarding plane. Rejected routes stay in the RIB — `ListRoutes` and `WatchEvent` still report them. |
 | `leak-l2-to-l1` | prefix-list | Leak policy: the Level-2 prefixes an L1L2 node originates into its Level-1 LSP, with the up/down bit set. Absent, nothing is leaked. |
 | `<list>.default` | string | `deny` (default) or `permit`, applied when no rule matches. |
@@ -214,6 +214,13 @@ Of those, `policy` is the one an operator iterates on, and it is the one a
 reload cannot apply: a prefix-list change needs a restart. Reaching it at
 runtime would mean an RPC for the filters, which the management API does not
 have.
+
+A difference a reload declines is not undone — it stays in the file, and the
+file is what the next restart runs, including a restart nobody asked for: the
+shipped unit's `Restart=on-failure` brings the daemon back unattended. So a
+System ID or an authentication key a reload named and left can take effect
+hours later behind an unrelated crash. `goisis_config_reload_unapplied` is that
+distance, so it is the thing to alert on rather than the warning above.
 
 A file that will not parse, or that a restart would refuse before it opens a
 circuit, leaves the daemon exactly as it was: the whole file is validated
@@ -357,7 +364,8 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
 `remove_sid`), `goisis_event_queue_depth`,
 `goisis_config_reloads_total{outcome}` (outcomes: `applied`, `refused`,
-`partial`), `goisis_lsp_lifetime_floored_total{circuit}` and
+`partial`), `goisis_config_reload_unapplied`,
+`goisis_lsp_lifetime_floored_total{circuit}` and
 `goisis_inter_level_prefixes{direction}` (directions: `l2_to_l1`, `l1_to_l2`).
 
 An adjacency that will not come up is one of three drop reasons.
@@ -395,6 +403,16 @@ further signal repairs that by itself.
 
 ```
 increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
+```
+
+`goisis_config_reload_unapplied` asks the same question of the file rather than
+of the reload: how many differences the last one left in it, and so what a
+restart would adopt (see [Reloading](#reloading)). It is set on every reload, so
+a divergence an operator has resolved reads as zero rather than as its last
+value.
+
+```
+goisis_config_reload_unapplied > 0
 ```
 
 `goisis_lsp_lifetime_floored_total` counts received LSPs whose remaining
