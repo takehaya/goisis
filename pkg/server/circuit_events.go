@@ -74,6 +74,134 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 	})
 }
 
+// AddCircuit adds a circuit at runtime, the counterpart of DeleteCircuit: the
+// circuit joins the flooding set and this node's LSPs, contributes its
+// connected subnets, starts receiving, and sends its first hello at once
+// instead of at the next housekeeping tick. A name that is already configured
+// is refused rather than replaced, because replacing would orphan the running
+// circuit's transport with its reader goroutine still on it.
+//
+// The caller opens the transport and puts it in cfg (applyDefaults refuses a
+// nil one). It is deliberately not opened here: net.InterfaceByName, a
+// packet.Listen and the membership setsockopts behind it would run on the Serve
+// goroutine, where every other circuit's hellos and the LSP aging would wait
+// behind them.
+//
+// If this returns an error the transport is still the caller's and the caller
+// must close it — nothing else will. On success the instance owns it, and
+// DeleteCircuit or Serve's exit closes it.
+func (s *IsisServer) AddCircuit(ctx context.Context, cfg CircuitConfig) error {
+	return s.mgmtOperation(ctx, func() error { return s.addCircuit(cfg, time.Now()) })
+}
+
+// addCircuit is AddCircuit's body, on the Serve goroutine.
+//
+// Every check runs before the first mutation. There is no unwind path here or
+// anywhere else in this package — a reload applies what it can and reports what
+// it could not (pkg/config.Reload) — so a circuit half-added is a circuit that
+// stays half-added.
+func (s *IsisServer) addCircuit(cfg CircuitConfig, now time.Time) error {
+	if err := cfg.applyDefaults(); err != nil {
+		return err
+	}
+	if s.circuitNamed(cfg.Name) != nil {
+		return fmt.Errorf("goisis: circuit %s is already configured", cfg.Name)
+	}
+	// setLSPBufferSize only ever lowers the size, and the size is at or above
+	// the minimum already (NewIsisServer refuses less and deleteCircuit only
+	// raises it), so this circuit's own MTU is the one way it can go under.
+	if mtu := cfg.Transport.MTU() - 3; mtu < minLSPMTU { // 3 = LLC header
+		return fmt.Errorf("goisis: circuit %s would hold this node's LSPs to %d octets, below the %d-octet minimum",
+			cfg.Name, mtu, minLSPMTU)
+	}
+	pseudonode, extCircID, err := s.allocCircuitIDs()
+	if err != nil {
+		return err
+	}
+
+	c := newCircuit(cfg, pseudonode, extCircID)
+	// At the end, never anywhere else: endXAdjs walks s.circuits in order and
+	// that order is what hands out End.X function values, so slotting a circuit
+	// in ahead of another moves the SIDs of circuits that did not change and
+	// points traffic at SIDs the neighbors have not learned.
+	s.circuits = append(s.circuits, c)
+	s.setCircuitPrefixes(cfg.Name, maskedSet(cfg.ConnectedPrefixes))
+	for _, l := range cfg.levels() {
+		// The database before the level, not after: a level in levelCap is a
+		// level regenerateLSPs originates at, and originate dereferences
+		// s.dbs[level] with no nil check.
+		if s.dbs[l] == nil {
+			s.dbs[l] = newLSDB(l)
+		}
+		s.levelCap.add(l)
+	}
+	s.setLSPBufferSize()
+	// Before Serve runs there is nothing to start a reader with, and nothing to
+	// start one for: Serve starts one per circuit in s.circuits, so a circuit
+	// added ahead of it is not left without one.
+	if s.serveCtx != nil {
+		s.startReader(c)
+	}
+	s.logger.Info("circuit added", "circuit", cfg.Name, "pseudonode", pseudonode)
+	s.sendHellos(c, now)
+	// Directly rather than through requestLSPRegen, because both halves of what
+	// an addition can change are wrong until it runs. A narrower circuit lowers
+	// the buffer, and originate drops an over-budget fragment and returns
+	// instead of storing it (see the size check there) — so the database would
+	// keep the oversize fragments and this circuit would flood what it cannot
+	// send, once per transmission interval, until the throttle let a
+	// regeneration through. A level this circuit is the first at has no node
+	// LSP at all until then. Neither is the flap minLSPGenInterval exists to
+	// absorb.
+	s.regenerateLSPs(false, now)
+	return nil
+}
+
+// allocCircuitIDs reserves the two identifiers a circuit needs. Both come off
+// the allocation order and not off the index in s.circuits, because a removal
+// must not renumber what stays: a pseudonode octet is half of a pseudonode LSP
+// ID, so moving it orphans that LSP area-wide (see deleteCircuit), and an
+// extended circuit ID is what a p2p neighbor echoes, so moving it takes every
+// p2p adjacency down (processP2PHello, RFC 5303 3.2).
+//
+// The two then want opposite policies. An extended circuit ID is never reused:
+// an adjacency comes Up the moment a hello echoes (our system ID, our extended
+// circuit ID), so a hello still in flight from a circuit that is gone would
+// complete the handshake of whichever circuit inherited the number. Thirty-two
+// bits make never reusing it free.
+//
+// A pseudonode octet is one byte, so it has to be reusable, and what protects a
+// reuse is already there rather than in a hold-down: originate takes the next
+// sequence number from this node's own database entry for the LSP ID (ISO 10589
+// 7.3.16), and the purge deleteCircuit left against that octet stays there
+// until it ages out — so a circuit that inherits the octet originates above the
+// copy the area still holds, and the area's own reclaim path covers it after
+// that. The cursor is not that protection; it only means the octet handed back
+// is the last one handed out again rather than the first.
+//
+// ponytail: the reuse window is one sweep of the 255 octets wide, which is also
+// the whole space, so a box that keeps 255 circuits busy hands one straight
+// back. Past that the sequence-number rule is the only protection; a free list
+// timestamped against ZeroAgeLifetime is the upgrade if that is ever not
+// enough.
+func (s *IsisServer) allocCircuitIDs() (pseudonode uint8, extCircID uint32, err error) {
+	used := make(map[uint8]bool, len(s.circuits))
+	for _, c := range s.circuits {
+		used[c.pseudonodeID] = true
+	}
+	// A full sweep leaves the cursor where it started, so a refusal here
+	// changes nothing — which is what lets this run as the last step before the
+	// mutations rather than needing an unwind.
+	for range 255 {
+		s.pseudonodeCursor = s.pseudonodeCursor%255 + 1 // 1..255; 0 names the node itself
+		if !used[s.pseudonodeCursor] {
+			s.nextExtCircID++
+			return s.pseudonodeCursor, s.nextExtCircID, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("goisis: all 255 pseudonode octets are in use")
+}
+
 // DeleteCircuit removes a circuit at runtime. It is the rest of what
 // SetCircuitLinkState(false) already does on the wire — hellos stop, received
 // frames are refused, the circuit leaves the flooding set and this node's LSPs,
@@ -84,9 +212,10 @@ func (s *IsisServer) SetCircuitLinkState(ctx context.Context, name string, up bo
 // issues the same delete twice has a bug, and a reload derives its deletions
 // from a difference, so it cannot issue one.
 //
-// The circuit's pseudonode octet is not handed back to anything. Nothing
-// allocates one at runtime yet (see NewIsisServer), so there is nobody to hand
-// it to.
+// The circuit's pseudonode octet and extended circuit ID are not handed back to
+// anything. There is nothing to hand them to: the allocator reads the octets in
+// use straight off s.circuits, and never reuses an extended circuit ID at all
+// (allocCircuitIDs).
 func (s *IsisServer) DeleteCircuit(ctx context.Context, name string) error {
 	return s.mgmtOperation(ctx, func() error { return s.deleteCircuit(name, time.Now()) })
 }

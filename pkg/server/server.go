@@ -36,6 +36,14 @@ type IsisServer struct {
 	eventCh chan event
 	done    chan struct{}
 
+	// serveCtx and readers belong to Serve: it fills serveCtx before it starts
+	// a reader per circuit and waits on readers at shutdown. addCircuit starts
+	// one more, and its Add is ordered against that Wait because both run on
+	// the Serve goroutine. serveCtx is nil until Serve runs, which is what
+	// tells addCircuit that Serve will start the reader itself.
+	serveCtx context.Context
+	readers  sync.WaitGroup
+
 	// The following are owned by the Serve loop after Serve starts.
 	circuits      []*circuit
 	dbs           map[packet.Level]*lsdb
@@ -75,6 +83,8 @@ type IsisServer struct {
 	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 	lspMTUCap         int                       // WithLSPMTU's cap, kept because losing a circuit re-derives the size
+	nextExtCircID     uint32                    // last extended circuit ID handed out (see allocCircuitIDs)
+	pseudonodeCursor  uint8                     // last pseudonode octet handed out (see allocCircuitIDs)
 
 	// What this node originates from its configuration and its circuits has
 	// exactly two owners: optionPrefixes, the prefixes the configuration and
@@ -170,19 +180,20 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 		s.optionConnected[p] = true
 		s.connected[p] = true
 	}
-	// Pseudonode octets are a single byte and must be nonzero and unique
-	// per box, so at most 255 circuits can be assigned distinct octets.
-	if len(o.circuits) > 255 {
-		return nil, fmt.Errorf("goisis: %d circuits exceeds the 255 pseudonode limit", len(o.circuits))
-	}
 	for i := range o.circuits {
 		cfg := o.circuits[i]
 		if err := cfg.applyDefaults(); err != nil {
 			return nil, err
 		}
-		// Pseudonode / extended-circuit IDs must be nonzero and unique
-		// per box; the 1-based circuit index serves both.
-		c := newCircuit(cfg, uint8(i+1), uint32(i+1)) //nolint:gosec // bounded by the 255 check above
+		// The same allocator a runtime addition uses, so a configuration a
+		// restart accepts and one AddCircuit builds up cannot end up with
+		// different identifiers. Starting from a fresh cursor it hands out
+		// 1, 2, 3, ... and refuses the 256th circuit.
+		pseudonode, extCircID, err := s.allocCircuitIDs()
+		if err != nil {
+			return nil, err
+		}
+		c := newCircuit(cfg, pseudonode, extCircID)
 		s.circuits = append(s.circuits, c)
 		s.setCircuitPrefixes(cfg.Name, maskedSet(cfg.ConnectedPrefixes))
 		for _, l := range cfg.levels() {
@@ -228,14 +239,12 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	s.logger.Info("goisis server started",
 		"net", s.netString(), "circuits", len(s.circuits))
 
-	// One reader goroutine per circuit feeds decoded frames to the loop.
-	var readers sync.WaitGroup
+	// One reader goroutine per circuit feeds decoded frames to the loop. The
+	// context is kept so a circuit added later gets a reader with the same
+	// lifetime (addCircuit).
+	s.serveCtx = ctx
 	for _, c := range s.circuits {
-		readers.Add(1)
-		go func(c *circuit) {
-			defer readers.Done()
-			s.readLoop(ctx, c)
-		}(c)
+		s.startReader(c)
 	}
 
 	// Send an initial hello burst and originate our LSPs so neighbors and
@@ -290,7 +299,7 @@ func (s *IsisServer) Serve(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			s.shutdown(&readers)
+			s.shutdown()
 			return nil
 		case op := <-s.mgmtCh:
 			op.errCh <- op.f()
@@ -420,7 +429,7 @@ func (s *IsisServer) purgeOwnLSPs(now time.Time) {
 // shutdown purges our own LSPs and flushes them, closes transports (unblocking
 // the reader goroutines' Recv), removes local SIDs, waits for the readers to
 // exit, and fails any queued management ops.
-func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
+func (s *IsisServer) shutdown() {
 	// Purge our own LSPs and flush the purges on the wire before the transports
 	// close, so neighbors reconverge without us promptly (clean shutdown).
 	now := time.Now()
@@ -431,7 +440,7 @@ func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
 	}
 	s.removeLocalSIDs()
 	s.closeWatchers()
-	readers.Wait()
+	s.readers.Wait()
 	for {
 		select {
 		case op := <-s.mgmtCh:
@@ -446,6 +455,17 @@ func (s *IsisServer) shutdown(readers *sync.WaitGroup) {
 // readerRetryDelay paces the retries after a transient Recv error, so a
 // circuit whose socket keeps failing does not spin.
 const readerRetryDelay = time.Second
+
+// startReader runs the reader goroutine for one circuit. Serve starts one per
+// configured circuit and addCircuit starts one more; both run on the Serve
+// goroutine, and that is what orders every Add against shutdown's Wait.
+func (s *IsisServer) startReader(c *circuit) {
+	s.readers.Add(1)
+	go func() {
+		defer s.readers.Done()
+		s.readLoop(s.serveCtx, c)
+	}()
+}
 
 // readLoop receives frames on a circuit and forwards them to the event loop
 // until the transport closes or the context is cancelled. Any other Recv
