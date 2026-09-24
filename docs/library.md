@@ -159,6 +159,19 @@ s.SetCircuitLinkState(ctx, "eth0", false)
 You own that event source. `goisisd` subscribes to netlink
 (`config.WatchInterfaces`, Linux only); the core links no netlink of its own.
 
+A circuit can be removed outright. `DeleteCircuit` takes its adjacencies down
+and reports them, purges the pseudonode LSPs it owned so peers drop them now
+rather than at MaxAge, stops its subnets being directly connected, and closes
+its transport — the instance owns that transport from `Serve` on. It does not
+wait for the circuit's reader goroutine, which ends on its own within a second;
+the frames that goroutine has already queued are discarded. Deleting a circuit
+that is not configured is an error. There is no `AddCircuit`: a circuit is still
+named at construction (`WithCircuit`), so adding one needs a restart.
+
+```go
+s.DeleteCircuit(ctx, "eth0")
+```
+
 ## Watching changes
 
 ```go

@@ -74,6 +74,7 @@ type IsisServer struct {
 	txFailWarned      edgeLog[txFailKey]        // (circuit,step) whose transmit failure was already logged
 	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
+	lspMTUCap         int                       // WithLSPMTU's cap, kept because losing a circuit re-derives the size
 
 	// What this node originates from its configuration and its circuits has
 	// exactly two owners: optionPrefixes, the prefixes the configuration and
@@ -191,23 +192,30 @@ func NewIsisServer(opts ...ServerOption) (*IsisServer, error) {
 			}
 		}
 	}
-	// Size our own LSPs so every circuit can actually transmit them. A
-	// fragment a circuit cannot send is retried forever and its content never
-	// reaches that peer, and a transit node cannot re-fragment what it
-	// receives, so the sizing has to happen here, at origination.
+	s.lspMTUCap = o.lspMTU
+	s.setLSPBufferSize()
+	if s.lspBufferSize < minLSPMTU {
+		return nil, fmt.Errorf("goisis: LSP MTU %d is below the %d-octet minimum", s.lspBufferSize, minLSPMTU)
+	}
+	return s, nil
+}
+
+// setLSPBufferSize sizes our own LSPs so every circuit can actually transmit
+// them. A fragment a circuit cannot send is retried forever and its content
+// never reaches that peer, and a transit node cannot re-fragment what it
+// receives, so the sizing has to happen at origination. DeleteCircuit calls it
+// again: the smallest MTU on the box can only rise when a circuit leaves, so
+// there the result never falls below minLSPMTU.
+func (s *IsisServer) setLSPBufferSize() {
 	s.lspBufferSize = packet.ReceiveLSPBufferSize
-	if o.lspMTU > 0 && o.lspMTU < s.lspBufferSize {
-		s.lspBufferSize = o.lspMTU
+	if s.lspMTUCap > 0 && s.lspMTUCap < s.lspBufferSize {
+		s.lspBufferSize = s.lspMTUCap
 	}
 	for _, c := range s.circuits {
 		if mtu := c.cfg.Transport.MTU() - 3; mtu < s.lspBufferSize { // 3 = LLC header
 			s.lspBufferSize = mtu
 		}
 	}
-	if s.lspBufferSize < minLSPMTU {
-		return nil, fmt.Errorf("goisis: LSP MTU %d is below the %d-octet minimum", s.lspBufferSize, minLSPMTU)
-	}
-	return s, nil
 }
 
 // Serve runs the management and protocol event loop until ctx is cancelled.

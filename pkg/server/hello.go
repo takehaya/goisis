@@ -213,6 +213,15 @@ func (s *IsisServer) padHello(c *circuit, pdu packet.PDU, tlvs *[]packet.TLV) {
 
 // handleEvent dispatches one event on the Serve loop.
 func (s *IsisServer) handleEvent(ev event) {
+	// A deleted circuit is no longer ours, but its reader goroutine outlives
+	// DeleteCircuit by up to readerRetryDelay and has queued events already.
+	// The guard belongs here and not in handleRx: this is the one point both
+	// event kinds pass, and it must not touch Metrics — the delete has just
+	// dropped this circuit's label series, and counting the drop would build
+	// them again.
+	if ev.on().detached {
+		return
+	}
 	switch e := ev.(type) {
 	case *rxEvent:
 		s.handleRx(e.circuit, e.frame)

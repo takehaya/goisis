@@ -25,6 +25,14 @@ type circuit struct {
 	// waiting out the neighbor's holding time.
 	linkDown bool
 
+	// detached is set by DeleteCircuit once the circuit is no longer ours. Its
+	// reader goroutine outlives that call by up to readerRetryDelay, so events
+	// it has already queued still name this circuit; handleEvent refuses them
+	// on this flag. It is deliberately not linkDown, which means the carrier is
+	// down and the circuit is still ours: reusing it would let
+	// SetCircuitLinkState(up) resurrect a deleted circuit.
+	detached bool
+
 	// Flooding flags per level (ISO 10589 7.3): srm[level][lspid] holds the
 	// earliest time to (re)send that LSP on this circuit; ssn[level][lspid]
 	// marks an LSP to report in the next PSNP. ssnAck holds the header to

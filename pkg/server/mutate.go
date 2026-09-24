@@ -225,7 +225,7 @@ func (s *IsisServer) SetOverload(ctx context.Context, on bool) error {
 // clear is harmless.
 func (s *IsisServer) ClearAdjacency(ctx context.Context, circuit string, systemID *packet.SystemID) error {
 	return s.mgmtOperation(ctx, func() error {
-		c := s.circuitByName(circuit)
+		c := s.circuitNamed(circuit)
 		if c == nil {
 			return fmt.Errorf("goisis: circuit %s is not configured", circuit)
 		}
@@ -234,15 +234,4 @@ func (s *IsisServer) ClearAdjacency(ctx context.Context, circuit string, systemI
 		})
 		return nil
 	})
-}
-
-// circuitByName returns the configured circuit with the given interface name,
-// or nil if there is none.
-func (s *IsisServer) circuitByName(name string) *circuit {
-	for _, c := range s.circuits {
-		if c.cfg.Name == name {
-			return c
-		}
-	}
-	return nil
 }
