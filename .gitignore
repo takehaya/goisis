@@ -8,3 +8,8 @@ coverage.out
 
 # Logs
 *.log
+
+# Agent tooling for tools this repository does not commit shims for
+# (ocr init regenerates them per configured tool)
+/.codex/
+/.github/commands/
