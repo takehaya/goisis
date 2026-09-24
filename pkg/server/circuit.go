@@ -203,21 +203,26 @@ func (c *circuit) infoFor(adj *adjacency, l packet.Level) AdjacencyInfo {
 	}
 }
 
-// upAdjacencyFrom reports whether src is the SNPA of an adjacency that is Up
-// at this level on the circuit. ISO 10589 7.3.15.1/7.3.15.2 accept an LSP or
-// an SNP only from such a source: a station that never sent a hello must not
-// be able to reach the update process.
-func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) bool {
+// upAdjacencyFrom returns the adjacency that is Up at this level on the
+// circuit and has src as its SNPA, or nil if there is none. ISO 10589
+// 7.3.15.1/7.3.15.2 accept an LSP or an SNP only from such a source: a station
+// that never sent a hello must not be able to reach the update process. The
+// adjacency itself and not a bool, because the update process needs how long
+// it has been Up (RFC 7987 §3.2, see corruptLifetime).
+func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) *adjacency {
 	if c.cfg.P2P {
 		adj := c.p2pAdj
-		return adj != nil && adj.state == AdjUp && adj.levels.has(level) && adj.snpa == src
+		if adj != nil && adj.state == AdjUp && adj.levels.has(level) && adj.snpa == src {
+			return adj
+		}
+		return nil
 	}
 	for _, adj := range c.adjs[level] {
 		if adj.snpa == src && adj.state == AdjUp {
-			return true
+			return adj
 		}
 	}
-	return false
+	return nil
 }
 
 // atAdjacencyLimit reports whether admitting id as a new neighbor would take

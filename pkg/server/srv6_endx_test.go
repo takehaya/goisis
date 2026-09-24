@@ -467,14 +467,14 @@ func TestEndXFollowsNeighborFragmentZeroLSP(t *testing.T) {
 	}
 
 	stranger, raw := lsp(packet.SystemID{0, 0, 0, 0, 0, 9})
-	s.processLSP(c, raw, stranger, now)
+	s.processLSP(c, raw, stranger, nil, now)
 	if s.lspGenPending {
 		t.Error("an LSP from a system we hold no adjacency to asked for a regeneration")
 	}
 
 	onLink := netip.MustParseAddr("2001:db8::2")
 	neighbor, raw := lsp(endXNeighbor, &packet.IPv6InterfaceAddressesTLV{Addresses: []netip.Addr{onLink}})
-	s.processLSP(c, raw, neighbor, now)
+	s.processLSP(c, raw, neighbor, nil, now)
 	if !s.lspGenPending {
 		t.Fatal("the neighbor's fragment 0 did not ask for a regeneration")
 	}

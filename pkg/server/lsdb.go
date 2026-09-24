@@ -47,6 +47,36 @@ func receivedLifetime(remaining uint16) uint16 {
 	return max(remaining, maxAgeSeconds)
 }
 
+// corruptLifetime reports whether a received Remaining Lifetime should raise
+// RFC 7987 §3.2's CorruptRemainingLifetime event. §3.2 lists four conditions;
+// two of them are settled by where this is called from, on the install path of
+// processLSP:
+//
+//   - the LSP has passed the ISO 10589 7.3.15.1 acceptance tests — handleRx
+//     has authenticated it and the adjacency gate has admitted it, and
+//     processLSP has validated its checksum;
+//   - it is newer than the copy in the local LSPDB — processLSP returns above
+//     on anything that is not, the absent copy included.
+//
+// The two tested here are the ones a caller cannot settle. A lifetime below
+// ZeroAgeLifetime is the symptom; the adjacency having been Up for at least
+// ZeroAgeLifetime is §3.2's false-positive filter, and it is what makes the
+// count worth alerting on. A younger adjacency is still being caught up on a
+// database whose LSPs may genuinely have aged that far, and the whole-database
+// resync behind a new adjacency delivers exactly those in bulk.
+//
+// A purge is not a corrupt lifetime, however far below ZeroAgeLifetime zero
+// is: §2 leaves the handling of purged LSPs alone, and every purge in the area
+// would otherwise bury the event this exists to make legible. nil adj is the
+// fourth condition unsatisfiable rather than satisfied: with no adjacency there
+// is nothing to have been Up.
+func corruptLifetime(adj *adjacency, remaining uint16, now time.Time) bool {
+	if remaining == 0 || remaining >= zeroAgeSeconds {
+		return false
+	}
+	return adj != nil && now.Sub(adj.upSince) >= zeroAgeSeconds*time.Second
+}
+
 // maxLSPSeq is the highest sequence number an LSP can carry. Reaching it
 // exhausts the ID's sequence number space (ISO 10589 7.3.16.1); see exhaustSeq.
 const maxLSPSeq = uint32(math.MaxUint32)

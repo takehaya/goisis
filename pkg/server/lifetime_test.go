@@ -118,7 +118,7 @@ func TestExpirePurgeHeaderOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil {
 		t.Fatal("foreign LSP not installed")
@@ -154,7 +154,7 @@ func TestProcessLSPDropsBadChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode corrupted: %v", err)
 	}
-	s.processLSP(c, raw, corrupt.(*packet.LSP), now)
+	s.processLSP(c, raw, corrupt.(*packet.LSP), nil, now)
 	if s.dbs[packet.Level2].get(foreign) != nil {
 		t.Error("LSP with invalid checksum was installed")
 	}
@@ -174,7 +174,7 @@ func TestProcessLSPEqualSeqDifferentChecksumPurges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, araw, a, now)
+	s.processLSP(c, araw, a, nil, now)
 	if s.dbs[packet.Level2].get(foreign) == nil {
 		t.Fatal("first copy not installed")
 	}
@@ -189,7 +189,7 @@ func TestProcessLSPEqualSeqDifferentChecksumPurges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, braw, b, now)
+	s.processLSP(c, braw, b, nil, now)
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil || e.purgedAt.IsZero() {
 		t.Fatalf("equal-seq/different-checksum did not purge stored copy: %+v", e)
@@ -216,7 +216,7 @@ func TestReceivedLSPBelowMaxAgeAgesFromMaxAge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil {
@@ -254,7 +254,7 @@ func TestDuplicateLSPWithSmallerLifetimeKeepsStoredLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, firstRaw, first, now)
+	s.processLSP(c, firstRaw, first, nil, now)
 
 	// Same sequence number and same body — the checksum does not cover the
 	// remaining lifetime, so this is exactly what a corrupted duplicate looks
@@ -265,7 +265,7 @@ func TestDuplicateLSPWithSmallerLifetimeKeepsStoredLifetime(t *testing.T) {
 		t.Fatal(err)
 	}
 	later := now.Add(600 * time.Second)
-	s.processLSP(c, dupRaw, dup, later)
+	s.processLSP(c, dupRaw, dup, nil, later)
 
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil {
@@ -300,7 +300,7 @@ func TestReceivedLSPAboveMaxAgeKeepsAdvertisedLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil {
@@ -327,14 +327,14 @@ func TestReceivedPurgeKeepsZeroLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, liveRaw, live, now)
+	s.processLSP(c, liveRaw, live, nil, now)
 
 	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: foreign, SequenceNumber: 7, ISType: 2}
 	purgeRaw, err := purge.Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, purgeRaw, purge, now)
+	s.processLSP(c, purgeRaw, purge, nil, now)
 
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil {
@@ -345,5 +345,35 @@ func TestReceivedPurgeKeepsZeroLifetime(t *testing.T) {
 	}
 	if e.purgedAt.IsZero() {
 		t.Error("purge not recorded as purged")
+	}
+}
+
+// TestAnAdjacencyRemembersWhenItCameUp pins the clock RFC 7987 §3.2's
+// false-positive filter reads. It starts on the transition into Up and must
+// not restart on the hellos that follow: a filter re-armed by every hello
+// would read an adjacency of any age as too young to judge, and the event
+// would never be raised at all.
+func TestAnAdjacencyRemembersWhenItCameUp(t *testing.T) {
+	s, c, local := disServer(t, nil)
+	id, snpa := packet.SystemID{0, 0, 0, 0, 0, 0x10}, packet.SNPA{0, 0, 0, 0, 0, 0x10}
+	other := packet.SNPA{0, 0, 0, 0, 0, 0xee}
+
+	// A hello echoing somebody else's SNPA reaches Init, not Up.
+	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, other))
+	adj := c.adjs[packet.Level2][id]
+	if adj == nil || adj.state != AdjInit || !adj.upSince.IsZero() {
+		t.Fatalf("adjacency in Init: %+v, want no upSince yet", adj)
+	}
+
+	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
+	if adj.state != AdjUp || adj.upSince.IsZero() {
+		t.Fatalf("adjacency Up with upSince %v, want it set", adj.upSince)
+	}
+
+	came := time.Now().Add(-time.Hour)
+	adj.upSince = came
+	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
+	if !adj.upSince.Equal(came) {
+		t.Errorf("a refreshing hello moved upSince to %v, want it left at %v", adj.upSince, came)
 	}
 }

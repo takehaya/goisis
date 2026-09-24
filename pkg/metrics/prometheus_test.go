@@ -28,6 +28,7 @@ func TestPrometheusRecords(t *testing.T) {
 	m.ConfigReload("partial")
 	m.ConfigReloadUnapplied(2)
 	m.LSPLifetimeFloored("eth0")
+	m.LSPLifetimeCorrupt("eth0")
 	m.InterLevelPrefixes("l2_to_l1", 3)
 
 	mfs, err := reg.Gather()
@@ -56,6 +57,7 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_config_reloads_total",
 		"goisis_config_reload_unapplied",
 		"goisis_lsp_lifetime_floored_total",
+		"goisis_lsp_lifetime_corrupt_total",
 		"goisis_inter_level_prefixes",
 	} {
 		if !got[want] {
@@ -99,6 +101,7 @@ func TestPrometheusRecords(t *testing.T) {
 		{"goisis_config_reloads_total", 1},
 		{"goisis_config_reload_unapplied", 2},
 		{"goisis_lsp_lifetime_floored_total", 1},
+		{"goisis_lsp_lifetime_corrupt_total", 1},
 		{"goisis_inter_level_prefixes", 3},
 	} {
 		if v, ok := singleValue(tc.name); !ok || v != tc.want {
@@ -147,14 +150,15 @@ func TestForgetCircuitDropsEverySeriesThatNamesIt(t *testing.T) {
 		m.PDUTxError(c, "send")
 		m.PDURxError(c)
 		m.LSPLifetimeFloored(c)
+		m.LSPLifetimeCorrupt(c)
 	}
 
 	before := circuitSeries(t, reg)
 	// Every collector that carries a circuit label has to be in the fixture,
 	// or this proves the retirement only of the ones that are.
 	for _, c := range []string{"eth0", "eth1"} {
-		if n := len(before[c]); n != 9 {
-			t.Fatalf("%s has %d circuit-labelled series (%v), want the 9 collectors that carry the label: a collector was added without a line in this fixture or in ForgetCircuit", c, n, before[c])
+		if n := len(before[c]); n != 10 {
+			t.Fatalf("%s has %d circuit-labelled series (%v), want the 10 collectors that carry the label: a collector was added without a line in this fixture or in ForgetCircuit", c, n, before[c])
 		}
 	}
 

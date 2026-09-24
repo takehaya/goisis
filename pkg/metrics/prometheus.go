@@ -30,6 +30,7 @@ type Prometheus struct {
 	configReloads   *prometheus.CounterVec
 	configUnapplied prometheus.Gauge
 	lifetimeFloors  *prometheus.CounterVec
+	lifetimeCorrupt *prometheus.CounterVec
 	interLevel      *prometheus.GaugeVec
 }
 
@@ -107,6 +108,10 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_lsp_lifetime_floored_total",
 			Help: "Count of received LSPs whose remaining lifetime was raised to MaxAge (RFC 7987).",
 		}, []string{"circuit"}),
+		lifetimeCorrupt: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_lsp_lifetime_corrupt_total",
+			Help: "Count of received LSPs whose remaining lifetime is possibly corrupt (RFC 7987 3.2).",
+		}, []string{"circuit"}),
 		interLevel: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "goisis_inter_level_prefixes",
 			Help: "Number of prefixes this node originates across the level boundary, by direction.",
@@ -115,7 +120,7 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
 		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue,
 		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.configUnapplied, p.lifetimeFloors,
-		p.interLevel)
+		p.lifetimeCorrupt, p.interLevel)
 	return p
 }
 
@@ -204,6 +209,11 @@ func (p *Prometheus) LSPLifetimeFloored(circuit string) {
 	p.lifetimeFloors.WithLabelValues(circuit).Inc()
 }
 
+// LSPLifetimeCorrupt implements server.Metrics.
+func (p *Prometheus) LSPLifetimeCorrupt(circuit string) {
+	p.lifetimeCorrupt.WithLabelValues(circuit).Inc()
+}
+
 // InterLevelPrefixes implements server.Metrics.
 func (p *Prometheus) InterLevelPrefixes(direction string, n int) {
 	p.interLevel.WithLabelValues(direction).Set(float64(n))
@@ -224,7 +234,7 @@ func (p *Prometheus) ForgetCircuit(circuit string) {
 		DeletePartialMatch(prometheus.Labels) int
 	}{
 		p.adjTransitions, p.floodTx, p.floodDrops, p.pduRx, p.pduDrops,
-		p.adjacencies, p.pduTxErrors, p.pduRxErrors, p.lifetimeFloors,
+		p.adjacencies, p.pduTxErrors, p.pduRxErrors, p.lifetimeFloors, p.lifetimeCorrupt,
 	} {
 		v.DeletePartialMatch(labels)
 	}

@@ -95,7 +95,7 @@ func TestLSPAndSNPsFromSourceWithoutAdjacencyAreIgnored(t *testing.T) {
 			// process directly, so the drop above is the adjacency gate and not
 			// a malformed PDU.
 			if err := v.mgmtOperation(ctx, func() error {
-				v.processLSP(v.circuits[0], raw, lsp, time.Now())
+				v.processLSP(v.circuits[0], raw, lsp, nil, time.Now())
 				return nil
 			}); err != nil {
 				t.Fatalf("mgmtOperation: %v", err)

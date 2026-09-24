@@ -226,20 +226,20 @@ func TestProcessLSPRefloodsPurgeOverSameSeqLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, lraw, live, now) // install live seq 5
+	s.processLSP(c, lraw, live, nil, now) // install live seq 5
 
 	purge := &packet.LSP{Level: packet.Level2, RemainingTime: 0, LSPID: foreign, SequenceNumber: 5, ISType: 2}
 	praw, err := purge.Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, praw, purge, now) // adopt the purge at seq 5
+	s.processLSP(c, praw, purge, nil, now) // adopt the purge at seq 5
 	if e := s.dbs[packet.Level2].get(foreign); e == nil || e.purgedAt.IsZero() {
 		t.Fatal("expected to hold a purge for the foreign LSP")
 	}
 
-	c.clearSRM(packet.Level2, foreign) // isolate the next step
-	s.processLSP(c, lraw, live, now)   // peer re-floods the live copy at seq 5
+	c.clearSRM(packet.Level2, foreign)    // isolate the next step
+	s.processLSP(c, lraw, live, nil, now) // peer re-floods the live copy at seq 5
 	if _, ok := c.srm[packet.Level2][foreign]; !ok {
 		t.Error("held purge was not re-flooded (SRM unset) when a peer sent a live LSP at the same seq")
 	}
@@ -337,7 +337,7 @@ func TestLSDBEntryLimit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.processLSP(c, raw, lsp, now)
+		s.processLSP(c, raw, lsp, nil, now)
 	}
 
 	// Fill the database to the limit with distinct fabricated IDs.

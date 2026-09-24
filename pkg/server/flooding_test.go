@@ -93,7 +93,7 @@ func TestProcessLSPInstallAndPurge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, lsp, now)
+	s.processLSP(c, raw, lsp, nil, now)
 	if s.dbs[packet.Level2].get(foreign) == nil {
 		t.Fatal("foreign LSP was not installed")
 	}
@@ -104,7 +104,7 @@ func TestProcessLSPInstallAndPurge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, praw, purge, now)
+	s.processLSP(c, praw, purge, nil, now)
 	e := s.dbs[packet.Level2].get(foreign)
 	if e == nil || e.purgedAt.IsZero() {
 		t.Fatal("purge was not recorded")
@@ -135,7 +135,7 @@ func TestProcessLSPReoriginatesOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.processLSP(c, raw, ghost, now)
+	s.processLSP(c, raw, ghost, nil, now)
 	if e := s.dbs[packet.Level2].get(own); e == nil || e.lsp.SequenceNumber != 11 || !e.own {
 		t.Fatalf("own LSP not reclaimed above seq 10: %+v", e)
 	}
