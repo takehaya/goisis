@@ -204,7 +204,7 @@ WARN configuration reload: this change needs a restart and was not applied key="
 | `prefixes` | Applied. A changed metric is a withdrawal and a re-advertisement. |
 | `srv6.locators` | Applied, with each locator's End SID. |
 | `flex-algo` | Applied. A changed definition is deleted and re-added, and a locator bound to it steps aside and comes back with it. |
-| `circuits` | Applied. A circuit the file adds is opened and a circuit it drops is removed, its pseudonode LSPs purged. One whose definition changed is removed and added again, so **its adjacencies drop** — the reload warns by name before they do. An interface that cannot be opened costs only its own circuit: the reload reports a partial apply and the next `SIGHUP` retries it. Addresses and carrier are followed live and need no reload at all. |
+| `circuits` | Applied. A circuit the file adds is opened and a circuit it drops is removed, its pseudonode LSPs purged. One whose definition changed is removed and added again, so **its adjacencies drop** — the reload warns by name before they do. An interface that cannot be opened costs only its own circuit: the reload reports a partial apply and the next `SIGHUP` retries it — but until that interface exists, the file will not start a daemon. Addresses and carrier are followed live and need no reload at all. |
 | `net` | **Restart.** The System ID and area addresses identify every LSP this node has originated. |
 | `hostname` | **Restart.** It is advertised in the node's own LSP, which a reload has no way to re-originate under a new name without the System ID beneath it. |
 | `area-*` / `domain-*` passwords, algorithms and key IDs | **Restart** — a rolling one, not a flag day, via [Key rotation](#key-rotation). |
@@ -220,7 +220,10 @@ file is what the next restart runs, including a restart nobody asked for: the
 shipped unit's `Restart=on-failure` brings the daemon back unattended. So a
 System ID or an authentication key a reload named and left can take effect
 hours later behind an unrelated crash. `goisis_config_reload_unapplied` is that
-distance, so it is the thing to alert on rather than the warning above.
+distance, so it is the thing to alert on rather than the warning above. It
+counts the calls the server refused as well as the keys the reload declined,
+because a file the node could not be brought to is a file the next restart will
+not be brought to either.
 
 A file that will not parse, or that a restart would refuse before it opens a
 circuit, leaves the daemon exactly as it was: the whole file is validated
@@ -236,7 +239,18 @@ whether its MTU admits our LSPs is settled when the circuit is opened, which
 happens while the batch is being applied. So a circuit the file names and the
 box does not have leaves the reload partially applied rather than refused, and
 the next `SIGHUP` opens it — an interface that comes up a minute later needs no
-further intervention. A `SIGHUP` to a daemon started without `-f` is ignored
+further intervention.
+
+What that buys is the running daemon, and only it. Startup has no such
+tolerance: it opens every circuit the file names and exits on the first one it
+cannot. So between writing the NIC into the file and the NIC appearing, the
+file on disk will not start a daemon — including the unattended start
+`Restart=on-failure` makes after an unrelated crash, which gives up after
+systemd's five attempts and leaves the unit failed.
+`goisis_config_reload_unapplied` counts that circuit for as long as the window
+lasts.
+
+A `SIGHUP` to a daemon started without `-f` is ignored
 rather than fatal. The overload bit is not a
 file key at all: `goisis overload on` sets it at runtime.
 
@@ -414,9 +428,10 @@ increase(goisis_config_reloads_total{outcome="partial"}[1h]) > 0
 
 `goisis_config_reload_unapplied` asks the same question of the file rather than
 of the reload: how many differences the last one left in it, and so what a
-restart would adopt (see [Reloading](#reloading)). It is set on every reload, so
-a divergence an operator has resolved reads as zero rather than as its last
-value.
+restart would meet (see [Reloading](#reloading)) — the keys it would adopt, and
+the calls it would fail on, such as a circuit whose interface is not there. It
+is set on every reload, so a divergence an operator has resolved reads as zero
+rather than as its last value.
 
 ```
 goisis_config_reload_unapplied > 0

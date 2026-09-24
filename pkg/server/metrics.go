@@ -87,13 +87,17 @@ type Metrics interface {
 	ConfigReload(outcome string)
 	// ConfigReloadUnapplied reports how many differences a reload left in the
 	// file: the keys no runtime API expresses, which it names in the log and
-	// declines. Non-zero means the running configuration is not the file, and
-	// the difference is armed — the file is the next restart's configuration,
-	// and systemd's Restart= makes that restart unattended, so the System ID
-	// or authentication key a reload declined can take effect hours later
-	// behind an unrelated crash. Reported on every reload that got as far as
-	// comparing the two files, zero included, so a divergence an operator has
-	// resolved reads as resolved rather than holding its last value.
+	// declines, plus the calls the server refused. Non-zero means the running
+	// configuration is not the file, and the difference is armed — the file is
+	// the next restart's configuration, and systemd's Restart= makes that
+	// restart unattended, so the System ID or authentication key a reload
+	// declined can take effect hours later behind an unrelated crash. The
+	// refused calls are here for the same reason and are the worse half: a
+	// circuit whose interface is absent leaves a file that restart does not
+	// adopt but fails on, because startup opens every circuit it names.
+	// Reported on every reload that got as far as comparing the two files,
+	// zero included, so a divergence an operator has resolved reads as
+	// resolved rather than holding its last value.
 	ConfigReloadUnapplied(n int)
 	// LSPLifetimeFloored records one received LSP whose remaining lifetime the
 	// RFC 7987 floor raised to MaxAge, on the circuit it arrived on. The floor

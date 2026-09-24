@@ -1643,3 +1643,176 @@ circuits:
 		t.Error("the circuit the loop added is running on a closed transport: goisis reports it up and it can never transmit")
 	}
 }
+
+// servedBy starts a server on yaml whose circuits come from open, and returns
+// the three things Reload takes: the configuration the daemon is running, the
+// server, and the path.
+func servedBy(t *testing.T, yaml string, open func(string) (datalink.Transport, []netip.Addr, []netip.Addr, error), extra ...server.ServerOption) (*Config, *server.IsisServer, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "goisisd.yaml")
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.OpenCircuit = open
+	opts, err := cfg.Options()
+	if err != nil {
+		t.Fatalf("Options: %v", err)
+	}
+	s, err := server.NewIsisServer(append(opts, extra...)...)
+	if err != nil {
+		t.Fatalf("NewIsisServer: %v", err)
+	}
+	go s.Serve(t.Context()) //nolint:errcheck // shut down via ctx
+	return cfg, s, path
+}
+
+// liveTransport returns the one transport handed out for an interface that is
+// still open: the one the circuit the node runs is on. Every other one the
+// reload opened was either closed by the deletion that rebuilt the circuit or
+// closed by the server that refused it, so exactly one open transport is also
+// the assertion that no signal leaked a socket.
+func (o *circuitOpener) liveTransport(t *testing.T, ifname string) *datalink.MockTransport {
+	t.Helper()
+	var live []*datalink.MockTransport
+	for _, tr := range o.opened[ifname] {
+		if !closedTransport(tr) {
+			live = append(live, tr)
+		}
+	}
+	if len(live) != 1 {
+		t.Fatalf("%s has %d open transports of the %d handed out, want exactly 1", ifname, len(live), len(o.opened[ifname]))
+	}
+	return live[0]
+}
+
+// TestReloadDoesNotRebuildACircuitTheNodeAlreadyMatches is what the retry a
+// partial apply asks for must not cost. Diff is file against file and a refused
+// reload keeps its baseline, so every signal over the same file derives the
+// same delete-plus-add for a circuit whose definition changed. Issuing that
+// blind tears down a circuit the signal before it already rebuilt -- once per
+// SIGHUP, for as long as some unrelated call in the batch keeps being refused,
+// against a running circuit already in the file's shape.
+//
+// The transport is the circuit's identity here: a rebuild closes the one the
+// circuit was running on, which is the adjacency drop the operator is warned
+// about, so the test asserts on the socket rather than on a log line.
+func TestReloadDoesNotRebuildACircuitTheNodeAlreadyMatches(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+    metric: 10
+`
+	const next = `net: 49.0001.1921.6800.1001.00
+prefixes:
+  - 192.0.2.0/24
+  - 198.51.100.0/24
+circuits:
+  - interface: mock0
+    level: "2"
+    metric: 55
+`
+	o := &circuitOpener{}
+	cfg, s, path := servedBy(t, initial, o.open)
+	ctx := t.Context()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// The unrelated call that keeps being refused: a prefix the management API
+	// already advertises at a metric the file contradicts, which no repetition
+	// of the signal settles.
+	if err := s.AddPrefix(ctx, server.AdvertisedPrefix{
+		Prefix: netip.MustParsePrefix("198.51.100.0/24"), Metric: 20,
+	}); err != nil {
+		t.Fatalf("AddPrefix: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := o.liveTransport(t, "mock0")
+
+	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want ErrPartiallyApplied", err)
+	}
+	rebuilt := o.liveTransport(t, "mock0")
+	if rebuilt == started {
+		t.Fatal("the circuit was not rebuilt: a definition the node does not have is what the batch exists to apply")
+	}
+	if got := circuitMetric(t, s, "mock0"); got != 55 {
+		t.Fatalf("mock0 metric = %d, want the file's 55", got)
+	}
+
+	// The same file, the same baseline, the same signal. Nothing about the
+	// circuit is owed any more, so nothing about it may happen.
+	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("second Reload error = %v, want ErrPartiallyApplied: the prefix is still refused", err)
+	}
+	if got := o.liveTransport(t, "mock0"); got != rebuilt {
+		t.Error("the retry rebuilt a circuit already in the file's shape: the adjacencies drop once per SIGHUP until an unrelated call stops failing")
+	}
+	if got := circuitMetric(t, s, "mock0"); got != 55 {
+		t.Errorf("mock0 metric = %d after the retry, want 55", got)
+	}
+}
+
+// circuitMetric returns the metric the named running circuit carries.
+func circuitMetric(t *testing.T, s *server.IsisServer, ifname string) uint32 {
+	t.Helper()
+	circuits, err := s.ListCircuits(t.Context())
+	if err != nil {
+		t.Fatalf("ListCircuits: %v", err)
+	}
+	for _, c := range circuits {
+		if c.Interface == ifname {
+			return c.Metric
+		}
+	}
+	t.Fatalf("circuit %s is not running", ifname)
+	return 0
+}
+
+// TestReloadCountsACircuitItCouldNotOpen pins the gauge against the divergence
+// it is documented for. A circuit whose interface is absent leaves the reload
+// partially applied and stays in the file -- and the file is what the next
+// restart runs, a restart Restart=on-failure makes with nobody present, and it
+// will not come up on an interface that is not there. Counting only the keys a
+// reload declines up front reads zero in exactly that state.
+func TestReloadCountsACircuitItCouldNotOpen(t *testing.T) {
+	const initial = `net: 49.0001.1921.6800.1001.00
+circuits:
+  - interface: mock0
+    level: "2"
+`
+	const next = initial + `  - interface: mock1
+    level: "2"
+`
+	o := &circuitOpener{refuse: map[string]bool{"mock1": true}}
+	m := &reloadMetrics{}
+	cfg, s, path := servedBy(t, initial, o.open, server.WithMetrics(m))
+	ctx := t.Context()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reload(ctx, s, cfg, path, logger); !errors.Is(err, ErrPartiallyApplied) {
+		t.Fatalf("Reload error = %v, want ErrPartiallyApplied", err)
+	}
+	if got := m.unappliedCounts(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("unapplied counts = %v, want [1]: the file names a circuit the node does not have and a restart cannot get", got)
+	}
+
+	// The interface came up. The file is the node again, and the gauge has to
+	// follow down rather than hold its last value.
+	o.refuse = nil
+	if _, err := Reload(ctx, s, cfg, path, logger); err != nil {
+		t.Fatalf("the retry was refused: %v", err)
+	}
+	if got := m.unappliedCounts(); !slices.Equal(got, []int{1, 0}) {
+		t.Errorf("unapplied counts = %v, want [1 0]: the node is running the file", got)
+	}
+}
