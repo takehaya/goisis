@@ -221,13 +221,15 @@ func (c *circuit) adjacencyInfos() []AdjacencyInfo {
 
 func (c *circuit) infoFor(adj *adjacency, l packet.Level) AdjacencyInfo {
 	return AdjacencyInfo{
-		Interface: c.cfg.Name,
-		Level:     l,
-		SystemID:  adj.systemID,
-		SNPA:      adj.snpa,
-		State:     adj.state,
-		Priority:  adj.priority,
-		Holding:   adj.holding,
+		Interface:  c.cfg.Name,
+		Level:      l,
+		SystemID:   adj.systemID,
+		SNPA:       adj.snpa,
+		State:      adj.state,
+		Priority:   adj.priority,
+		Holding:    adj.holding,
+		Restarting: adj.restartMode,
+		Suppressed: adj.suppressed,
 	}
 }
 
@@ -282,6 +284,21 @@ func (c *circuit) upAdjacencyCount(l packet.Level) int {
 		return 0
 	}
 	return len(c.upAdjacencies(l))
+}
+
+// suppressedAdjacencyCount returns how many of the Up adjacencies at a level
+// RFC 5306 §3.2.2 keeps out of this node's LSPs and out of SPF. It is what
+// makes upAdjacencyCount readable: an adjacency that is Up and carries nothing
+// is counted there and absent from the topology, and this is exactly the
+// difference between the two.
+func (c *circuit) suppressedAdjacencyCount(l packet.Level) int {
+	if c.cfg.P2P {
+		if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(l) && adj.suppressed {
+			return 1
+		}
+		return 0
+	}
+	return len(c.upAdjacencies(l)) - len(c.advertisedAdjacencies(l))
 }
 
 // upAdjacencies returns the Up adjacencies at a level (broadcast).

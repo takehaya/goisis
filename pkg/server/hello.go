@@ -366,19 +366,21 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	// Detect changes to election-relevant fields on an established adjacency
 	// so a preemption or a newly-learned DIS LAN ID triggers re-election.
 	electionChanged := existed && (adj.priority != h.Priority || adj.snpa != src || adj.lanID != h.LANID)
-	wasSuppressed := adj.suppressed
+	wasSuppressed, wasRestarting := adj.suppressed, adj.restartMode
 	adj.snpa = src
 	adj.priority = h.Priority
 	adj.areaAddrs = areas
 	adj.lanID = h.LANID
 	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	if prev != AdjUp && newState == AdjUp {
-		// Only the transition starts the clock RFC 7987 §3.2 reads; every
-		// later hello re-assigns the same state.
-		adj.upSince = now
+		// The transition is where the database exchange RFC 7987 §3.2 reads
+		// begins; every later hello re-assigns the same state. The other place
+		// one begins is noteRestart's hold.
+		adj.syncSince = now
 	}
 	adj.state = newState
 	adj.levels.add(level)
+	s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 
@@ -505,16 +507,17 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	now := s.clock.Now()
 	prev := adj.state
 	prevLevels := adj.levels
-	wasSuppressed := adj.suppressed
+	wasSuppressed, wasRestarting := adj.suppressed, adj.restartMode
 	adj.snpa = src
 	adj.areaAddrs = areas
 	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	adj.levels = common
 	if prev != AdjUp && newState == AdjUp {
 		// See processLANHello: the transition, not every hello.
-		adj.upSince = now
+		adj.syncSince = now
 	}
 	adj.state = newState
+	s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 	if three != nil && three.HasLocal {

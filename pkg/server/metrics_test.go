@@ -56,6 +56,14 @@ func (m *countingMetrics) AdjacencyCount(circuit, level string, n int) {
 	m.set(n, "adjacencies", circuit, level)
 }
 
+func (m *countingMetrics) AdjacencySuppressed(circuit, level string, n int) {
+	m.set(n, "adjacencies_suppressed", circuit, level)
+}
+
+func (m *countingMetrics) RestartRequest(circuit, outcome string) {
+	m.inc("restart_request", circuit, outcome)
+}
+
 func (m *countingMetrics) RouteCount(level, algo string, n int) { m.set(n, "routes", level, algo) }
 func (m *countingMetrics) EventQueueDepth(n int)                { m.set(n, "event_queue") }
 
@@ -127,9 +135,9 @@ func metricsServer(t *testing.T, p2p bool, opts ...ServerOption) (*IsisServer, *
 }
 
 // addUpAdjacency attaches an Up L2 adjacency to the peer, heard just now so
-// housekeeping does not expire it, and Up only as of now so RFC 7987 §3.2's
-// filter reads it as too young to judge. It returns the adjacency for the
-// tests that need to age it.
+// housekeeping does not expire it, and with its database exchange starting now
+// so RFC 7987 §3.2's filter reads it as too young to judge. It returns the
+// adjacency for the tests that need to age it.
 func addUpAdjacency(c *circuit, now time.Time) *adjacency {
 	adj := &adjacency{
 		systemID:  metricsPeerID,
@@ -137,7 +145,7 @@ func addUpAdjacency(c *circuit, now time.Time) *adjacency {
 		state:     AdjUp,
 		holding:   30,
 		lastHeard: now,
-		upSince:   now,
+		syncSince: now,
 	}
 	adj.levels.add(packet.Level2)
 	if c.cfg.P2P {
@@ -635,31 +643,31 @@ func TestAFlooredLifetimeIsCountedPerCircuit(t *testing.T) {
 	}
 }
 
-// TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough pins RFC 7987
+// TestACorruptLifetimeIsReportedOnlyWhenTheDatabaseExchangeIsOldEnough pins RFC 7987
 // §3.2's algorithm. Two of its four conditions are decided by where the report
 // sits -- the acceptance tests, which handleRx and processLSP have already run,
 // and "newer than the copy in the local LSPDB", which the update process
 // returns above. The other two are the subject here: a lifetime below
-// ZeroAgeLifetime, from an adjacency that has been Up for at least that long.
-// The last case is the false-positive filter §3.2 exists for: the resync a new
-// adjacency triggers legitimately carries lifetimes that small.
-func TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough(t *testing.T) {
+// ZeroAgeLifetime, on an adjacency whose database exchange began at least that
+// long ago. The last case is the false-positive filter §3.2 exists for: a
+// resync legitimately carries lifetimes that small, in bulk.
+func TestACorruptLifetimeIsReportedOnlyWhenTheDatabaseExchangeIsOldEnough(t *testing.T) {
 	now := time.Now()
 	aged := now.Add(-2 * zeroAgeSeconds * time.Second)
 	for _, tc := range []struct {
 		name      string
 		remaining uint16
-		upSince   time.Time
+		syncSince time.Time
 		want      int
 	}{
-		{"a lifetime below ZeroAgeLifetime on an adjacency older than it is the event", 30, aged, 1},
+		{"a lifetime below ZeroAgeLifetime on an exchange older than it is the event", 30, aged, 1},
 		{"ZeroAgeLifetime itself is not below ZeroAgeLifetime", zeroAgeSeconds, aged, 0},
 		{"a merely aged lifetime is not corruption, though the floor still raises it", 600, aged, 0},
-		{"an adjacency younger than ZeroAgeLifetime is still resyncing", 30, now, 0},
+		{"a database exchange younger than ZeroAgeLifetime is still resyncing", 30, now, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, c, m := metricsServer(t, true)
-			addUpAdjacency(c, now).upSince = tc.upSince
+			addUpAdjacency(c, now).syncSince = tc.syncSince
 			s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(tc.remaining)), Src: metricsPeerSNPA})
 			if got := m.count("lsp_lifetime_corrupt", "c"); got != tc.want {
 				t.Errorf("corrupt lifetimes on c = %d, want %d", got, tc.want)
@@ -674,7 +682,7 @@ func TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough(t *testing.T)
 	// purge in the area does not bury this event.
 	t.Run("a purge of a copy we hold is not a corrupt lifetime", func(t *testing.T) {
 		s, c, m := metricsServer(t, true)
-		addUpAdjacency(c, now).upSince = aged
+		addUpAdjacency(c, now).syncSince = aged
 		s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(1000)), Src: metricsPeerSNPA})
 		purge := peerLSP(0)
 		purge.SequenceNumber = 8
@@ -689,7 +697,7 @@ func TestACorruptLifetimeIsReportedOnlyWhenTheAdjacencyIsOldEnough(t *testing.T)
 
 	t.Run("a re-flood of the copy we already hold is not newer, and is not reported twice", func(t *testing.T) {
 		s, c, m := metricsServer(t, true)
-		addUpAdjacency(c, now).upSince = aged
+		addUpAdjacency(c, now).syncSince = aged
 		frame := datalink.Frame{PDU: serialize(t, peerLSP(30)), Src: metricsPeerSNPA}
 		s.handleRx(c, frame)
 		s.handleRx(c, frame)

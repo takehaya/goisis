@@ -174,6 +174,26 @@ func TestPrefStr(t *testing.T) {
 	}
 }
 
+// TestRestartStr: the neighbour table's RFC 5306 column. Both conditions
+// leave the adjacency reading Up, so an operator scanning the table has only
+// this column to tell a neighbour restarting gracefully from one that is
+// broken -- and the healthy answer has to be the quiet one.
+func TestRestartStr(t *testing.T) {
+	for _, tc := range []struct {
+		a    *goisisv1.Adjacency
+		want string
+	}{
+		{&goisisv1.Adjacency{}, "-"},
+		{&goisisv1.Adjacency{Restarting: true}, "restarting"},
+		{&goisisv1.Adjacency{Suppressed: true}, "suppressed"},
+		{&goisisv1.Adjacency{Restarting: true, Suppressed: true}, "restarting,suppressed"},
+	} {
+		if got := restartStr(tc.a); got != tc.want {
+			t.Errorf("restartStr(%+v) = %q, want %q", tc.a, got, tc.want)
+		}
+	}
+}
+
 func TestCircuitTypeAndLevels(t *testing.T) {
 	for _, tc := range []struct {
 		c          *goisisv1.Circuit

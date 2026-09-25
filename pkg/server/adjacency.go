@@ -43,11 +43,12 @@ type adjacency struct {
 	lanID     packet.NodeID // neighbor's advertised LAN ID (broadcast)
 	holding   uint16        // neighbor's advertised holding time (seconds)
 	lastHeard time.Time
-	// upSince is when the adjacency last entered Up, and is read only while it
-	// is Up — the update process reaches it through adjacencyGate, which
-	// admits nothing else. RFC 7987 §3.2 gates its corrupt-lifetime report on
-	// Up having lasted at least ZeroAgeLifetime; see corruptLifetime.
-	upSince time.Time
+	// syncSince is when the LSP database exchange currently running over this
+	// adjacency began, and is read only while it is Up — the update process
+	// reaches it through adjacencyGate, which admits nothing else. RFC 7987
+	// §3.2 gates its corrupt-lifetime report on it; see corruptLifetime for
+	// why that is this field and not the instant the adjacency came Up.
+	syncSince time.Time
 
 	// Graceful restart (RFC 5306), all three fields fed by noteRestart from
 	// every IIH that carries a Restart TLV.
@@ -100,6 +101,15 @@ type AdjacencyInfo struct {
 	State     AdjState
 	Priority  uint8
 	Holding   uint16
+	// Restarting and Suppressed are what RFC 5306 says about an adjacency that
+	// State cannot: an adjacency the helper holds through a neighbor's restart
+	// reads Up precisely because nothing happened to it, and a suppressed one
+	// is Up while carrying nothing — it is out of this node's LSPs and out of
+	// SPF (§3.2.2), so the adjacency count and the topology disagree by
+	// exactly these. Without them an operator has no way to tell a neighbor
+	// restarting gracefully from one that is broken.
+	Restarting bool
+	Suppressed bool
 	// Hostname is the neighbor's dynamic hostname (TLV 137) as advertised in
 	// its LSP, empty until that LSP arrives or when it carries no name. It is
 	// resolved by ListAdjacencies and by a subscription's Initial snapshot;
@@ -113,6 +123,22 @@ type levelSet uint8
 
 func (s *levelSet) add(l packet.Level)     { *s |= 1 << l }
 func (s levelSet) has(l packet.Level) bool { return s&(1<<l) != 0 }
+
+// String renders the set for a log line. slog takes a []packet.Level for a
+// byte slice — the element type's kind is uint8 — and quotes it as raw bytes,
+// so the set is logged as itself rather than as what levels() returns.
+func (s levelSet) String() string {
+	switch {
+	case s.has(packet.Level1) && s.has(packet.Level2):
+		return "L1L2"
+	case s.has(packet.Level1):
+		return "L1"
+	case s.has(packet.Level2):
+		return "L2"
+	}
+	return "-"
+}
+
 func (s levelSet) levels() []packet.Level {
 	var out []packet.Level
 	if s.has(packet.Level1) {
