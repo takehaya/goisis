@@ -23,6 +23,12 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
+// Every command writes what the operator asked for to cmd.OutOrStdout, never
+// through cobra's Print helpers: those go to OutOrStderr, and a command whose
+// out writer is unset -- which is every invocation of the real binary -- gets
+// os.Stderr from it. Diagnostics and usage keep cobra's stderr; answers do not,
+// because `-o json` exists to be piped into jq and `goisis version` to be
+// captured, and neither stream survives a pipe if it is the wrong one.
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
@@ -95,9 +101,6 @@ func printResponse(cmd *cobra.Command, msg proto.Message, table func() error) er
 		if err != nil {
 			return err
 		}
-		// OutOrStdout, not cmd.Println: cobra's Print writes to OutOrStderr, so
-		// the one output format that exists to be piped into jq was going to
-		// the one stream a pipe does not carry.
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(b))
 		return err
 	case "table", "":
@@ -139,7 +142,7 @@ func newGlobalCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				g := res.Msg.GetGlobal()
-				cmd.Printf("version:   %s\nsystem-id: %s\noverload:  %t\n", g.GetVersion(), g.GetSystemId(), g.GetOverload())
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "version:   %s\nsystem-id: %s\noverload:  %t\n", g.GetVersion(), g.GetSystemId(), g.GetOverload())
 				return nil
 			})
 		},
@@ -579,14 +582,14 @@ func newMonitorCmd(addr *string) *cobra.Command {
 				switch ev := stream.Msg().GetEvent().(type) {
 				case *goisisv1.WatchEventResponse_Adjacency:
 					a := ev.Adjacency.GetAdjacency()
-					cmd.Printf("ADJ  %s %s %s %s\n", a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState())
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ADJ  %s %s %s %s\n", a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState())
 				case *goisisv1.WatchEventResponse_Route:
 					r := ev.Route.GetRoute()
 					verb := "ROUTE+"
 					if ev.Route.GetWithdrawn() {
 						verb = "ROUTE-"
 					}
-					cmd.Printf("%s %s metric=%d %s\n", verb, r.GetPrefix(), r.GetMetric(), nextHops(r))
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s metric=%d %s\n", verb, r.GetPrefix(), r.GetMetric(), nextHops(r))
 				}
 			}
 			return stream.Err()
@@ -601,7 +604,7 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Show CLI version",
 		Run: func(cmd *cobra.Command, _ []string) {
-			cmd.Println(version.Version)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version.Version)
 		},
 	}
 }
