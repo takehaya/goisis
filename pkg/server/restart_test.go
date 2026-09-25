@@ -481,3 +481,220 @@ func TestHelperHoldsAP2PAdjacencyThroughAStaleCircuitID(t *testing.T) {
 		t.Error("a peer echoing another router's circuit ID kept its adjacency even with no restart in progress")
 	}
 }
+
+// restartHelper drives one neighbor through whichever of the two hold paths
+// p2p selects. RFC 5306 §3.2.1 is one procedure with one point-to-point
+// exception, so the two handlers owe it the same answers; every case below
+// runs against both, which is what stops them drifting apart again.
+type restartHelper struct {
+	s    *IsisServer
+	c    *circuit
+	clk  *fakeClock
+	snpa packet.SNPA // the peer's own source address
+	// settle sends an ordinary IIH that completes the handshake; request sends
+	// one with RR set that echoes nobody, which is all a router with no
+	// adjacency database left can send. src is where the frame came from.
+	settle  func(src packet.SNPA, holding uint16)
+	request func(src packet.SNPA, holding uint16)
+	adj     func() *adjacency
+}
+
+func newRestartHelper(t *testing.T, p2p bool) *restartHelper {
+	t.Helper()
+	area := packet.AreaAddress{0x49, 0x00, 0x01}
+	peer := packet.SystemID{0, 0, 0, 0, 0, 0xff}
+	h := &restartHelper{snpa: packet.SNPA{0, 0, 0, 0, 0, 0xff}}
+	if p2p {
+		s, c, clk := restartP2PServer(t)
+		h.s, h.c, h.clk = s, c, clk
+		h.adj = func() *adjacency { return c.p2pAdj }
+		h.settle = func(src packet.SNPA, holding uint16) {
+			hello := p2pHelloEchoing(peer, area, s.systemID, c.extCircID)
+			hello.HoldingTime = holding
+			s.processP2PHello(c, src, hello)
+		}
+		h.request = func(src packet.SNPA, holding uint16) {
+			s.processP2PHello(c, src, &packet.P2PHello{
+				CircuitType:    packet.CircuitTypeLevel2,
+				SourceID:       peer,
+				HoldingTime:    holding,
+				LocalCircuitID: 1,
+				// No three-way option at all: nobody to echo.
+				TLVs: []packet.TLV{
+					&packet.AreaAddressesTLV{Addresses: []packet.AreaAddress{area}},
+					&packet.RestartTLV{RestartRequest: true},
+				},
+			})
+		}
+		return h
+	}
+	s, c, local, clk := restartServer(t, u8(64))
+	lanID := nodeID(peer, 0x05)
+	h.s, h.c, h.clk = s, c, clk
+	h.adj = func() *adjacency { return c.adjs[packet.Level2][peer] }
+	h.settle = func(src packet.SNPA, holding uint16) {
+		hello := neighborHello(peer, 10, lanID, local)
+		hello.HoldingTime = holding
+		s.processLANHello(c, src, hello)
+	}
+	h.request = func(src packet.SNPA, holding uint16) {
+		hello := restartingHello(peer, lanID, &packet.RestartTLV{RestartRequest: true})
+		hello.HoldingTime = holding
+		s.processLANHello(c, src, hello)
+	}
+	return h
+}
+
+// TestARestartRetryCannotRaiseTheHold guarantees RFC 5306 §3.2.1a's
+// "otherwise, the holding time is not refreshed" against the reading that
+// withholds half of it. The instant an adjacency expires is the product of the
+// advertised Holding Time and when it was last heard from, so a retry that
+// raises the Holding Time moves that instant exactly as a refreshed lastHeard
+// would. §3.2.1b's Remaining Time is what the restarter sets T3 from, so the
+// numbers it is handed have to shrink whatever it asks for — and have to be
+// the same numbers for an honest restarter and a greedy one.
+func TestARestartRetryCannotRaiseTheHold(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		p2p   bool
+		retry uint16
+	}{
+		{"lan, an honest restarter repeats its configured holding time", false, 30},
+		{"lan, a restarter raises its holding time on every retry", false, 65535},
+		{"p2p, an honest restarter repeats its configured holding time", true, 30},
+		{"p2p, a restarter raises its holding time on every retry", true, 65535},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+
+			for _, want := range []uint16{30, 20, 10} {
+				stop := captureFrames(t, h.c)
+				h.request(h.snpa, tc.retry)
+				if got := soleRestartAck(t, stop()).RemainingTime; got != want {
+					t.Errorf("acknowledged %ds left, want %d: the request set its own hold", got, want)
+				}
+				h.clk.Advance(10 * time.Second)
+			}
+			h.clk.Advance(time.Second)
+			if !expired(h.adj(), h.clk.Now()) {
+				t.Error("the adjacency outlived the 30s the first request bought")
+			}
+		})
+	}
+}
+
+// TestAHeldAdjacencyStillExpires guarantees what §3.2.1a's rule is there for:
+// a neighbor that asked for a hold and never came back is torn down on the
+// bound its first request bought, however many more requests it sends. The
+// hold ignores the three-way handshake, so the holding timer is the only thing
+// left that ends it — and everything it keeps alive, this node's LSP, the SPF
+// edge and the update process, ends with it.
+func TestAHeldAdjacencyStillExpires(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p2p  bool
+	}{
+		{"lan", false},
+		{"p2p", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+			h.request(h.snpa, 30)
+			for i := 0; i < 2; i++ {
+				h.clk.Advance(10 * time.Second)
+				h.request(h.snpa, 65535)
+			}
+
+			// A second short of the bound: the hold is real, which is the
+			// control for the assertion after it.
+			h.clk.Advance(9 * time.Second)
+			h.s.expireAdjacencies(h.c, h.clk.Now())
+			if adj := h.adj(); adj == nil || adj.state != AdjUp {
+				t.Fatalf("the adjacency was dropped inside the hold the first request bought: %+v", adj)
+			}
+
+			h.clk.Advance(2 * time.Second)
+			h.request(h.snpa, 65535)
+			h.s.expireAdjacencies(h.c, h.clk.Now())
+			if adj := h.adj(); adj != nil {
+				t.Errorf("a neighbor that echoes nobody is still Up %v past its holding time", h.clk.Now())
+			}
+			if h.s.adjacencyGate(h.c, packet.PDUTypeL2LSP, packet.Level2, h.snpa) != nil {
+				t.Error("the update process still admits a neighbor whose hold ran out")
+			}
+		})
+	}
+}
+
+// TestARestartRequestFromAnotherSourceIsNotHeld guarantees the precondition
+// RFC 5306 §3.2.1 puts on the whole of a/b/c: an adjacency in state Up "with
+// the same System ID, and in the case of a LAN circuit, with the same source
+// LAN address". A System ID is on the wire for anyone to copy, and
+// upAdjacencyFrom keys the update process on the source address on both kinds
+// of circuit, so a hold granted to another station hands that station the
+// gate. The adjacency is reinitialized instead, which is what §3.2.1's
+// "Otherwise" clause asks for.
+func TestARestartRequestFromAnotherSourceIsNotHeld(t *testing.T) {
+	stranger := packet.SNPA{0, 0, 0, 0, 0, 0x66}
+	for _, tc := range []struct {
+		name string
+		p2p  bool
+	}{
+		{"lan", false},
+		{"p2p", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+			if got := h.adj().state; got != AdjUp {
+				t.Fatalf("adjacency state = %v before the request, want Up", got)
+			}
+
+			h.request(stranger, 30)
+
+			if got := h.adj().state; got == AdjUp {
+				t.Error("the adjacency is held Up on a hello from a station that only copied the peer's System ID")
+			}
+			if h.s.adjacencyGate(h.c, packet.PDUTypeL2LSP, packet.Level2, stranger) != nil {
+				t.Error("the update process admits LSPs from that station")
+			}
+		})
+	}
+}
+
+// TestAnUnheldRestartRequestIsProcessedAsNormal guarantees RFC 5306 §3.2.1's
+// "Otherwise" clause: an IIH with RR set that its precondition does not cover
+// — here because there is no adjacency to cover — is "processed as normal",
+// holding time included. §3.2.1a's withholding is scoped to the clause it sits
+// in, so a neighbour whose very first hello is a restart request must not end
+// up with an adjacency the next housekeeping tick expires.
+func TestAnUnheldRestartRequestIsProcessedAsNormal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p2p  bool
+	}{
+		{"lan", false},
+		{"p2p", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.request(h.snpa, 30)
+			if h.adj() == nil {
+				t.Fatal("the restart request formed no adjacency at all")
+			}
+
+			h.clk.Advance(29 * time.Second)
+			h.s.expireAdjacencies(h.c, h.clk.Now())
+			if h.adj() == nil {
+				t.Error("the adjacency expired inside the 30s its hello asked for: the request's holding time was never taken")
+			}
+			h.clk.Advance(2 * time.Second)
+			h.s.expireAdjacencies(h.c, h.clk.Now())
+			if h.adj() != nil {
+				t.Error("the adjacency outlived the 30s its hello asked for")
+			}
+		})
+	}
+}

@@ -37,32 +37,54 @@ func helloRestartTLV(ack *packet.RestartTLV) packet.TLV {
 }
 
 // noteRestart records what one received IIH says about a neighbor's restart
-// (RFC 5306 §3.2.1a and §3.2.2) and reports whether the adjacency's holding
-// time may be refreshed from it.
+// (RFC 5306 §3.2.1a and §3.2.2) and refreshes the adjacency's holding timer as
+// far as §3.2.1a allows. held is whether §3.2.1's precondition covered this
+// IIH — the caller's holdForRestart, an adjacency already Up to this System ID
+// from this source, with RR set.
 //
-// Only the first IIH with RR set refreshes the hold. That single rule is the
-// whole defence against a peer that restarts over and over: every retry eats
-// into the same holding time, the Remaining Time handed back in the
-// acknowledgement shrinks with it, and the restarter builds its T3 out of
-// those values — so the shrinking is information reaching the restarter, not
-// something lost.
-func noteRestart(adj *adjacency, rt *packet.RestartTLV) bool {
+// Only the first such IIH refreshes the hold, and all it refreshes is when the
+// adjacency was last heard from — never the Holding Time that IIH carries.
+// Those two fields are the factors of the instant the adjacency expires, so a
+// request that installed its own Holding Time would set its own hold whether
+// or not lastHeard moved, and "otherwise, the holding time is not refreshed"
+// would bound nothing. What is left is the bound §3.3 assumes when it calls an
+// overrunning restart one "taking longer than the minimum holding time of the
+// neighbors": the budget is the neighbor's, the restarter is told what is left
+// of it in the acknowledgement (§3.2.1b) and sets T3 from that, so every retry
+// shrinks a number the restarter is reading rather than one it chose. That is
+// the whole defence against a peer that restarts over and over.
+//
+// Why not bound the Holding Time generally instead: ISO 10589 leaves that
+// value to the sender, a ceiling would need a constant no RFC supplies, and it
+// would expire an adjacency the peer legitimately still believes in. The bound
+// belongs where §3.2.1a puts it, on the request — a restarter that needs
+// longer configures a longer hold before it restarts, which is what "the
+// minimum holding time of the neighbors" is.
+func noteRestart(adj *adjacency, rt *packet.RestartTLV, held bool, holding uint16, now time.Time) {
 	adj.restartCapable = rt != nil
 	// §3.2.2: suppression lasts "until an IIH with the SA bit clear has been
 	// received". A neighbor that stops carrying the TLV at all has stopped
 	// asking, which is the same thing.
 	adj.suppressed = rt != nil && rt.SuppressAdjacency
-	if rt == nil || !rt.RestartRequest {
-		// §4.1, "RX RR clr": leaving restart mode is what gives the restart
-		// after this one a refresh of its own.
-		adj.restartMode = false
-		return true
+	// restartMode follows the RR bit on every IIH, not only on one held
+	// covers: §3.2.1c's candidate set excludes "all routers which are
+	// considered in Restart mode", and a router whose first hello on this
+	// circuit asks for a restart is one of them. §4.1, "RX RR clr": leaving
+	// restart mode is what gives the restart after this one a refresh of its
+	// own.
+	first := !adj.restartMode
+	adj.restartMode = rt != nil && rt.RestartRequest
+	if !held {
+		// §3.2.1's "Otherwise": an IIH its precondition does not cover is
+		// "processed as normal", holding time included — a neighbor whose
+		// first hello is a restart request would otherwise be left with an
+		// adjacency that has no holding time at all.
+		adj.holding, adj.lastHeard = holding, now
+		return
 	}
-	if adj.restartMode {
-		return false
+	if first {
+		adj.lastHeard = now
 	}
-	adj.restartMode = true
-	return true
 }
 
 // restartAck builds the acknowledgement RFC 5306 §3.2.1b owes a neighbor whose

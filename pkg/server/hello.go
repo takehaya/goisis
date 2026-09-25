@@ -371,10 +371,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	adj.priority = h.Priority
 	adj.areaAddrs = areas
 	adj.lanID = h.LANID
-	adj.holding = h.HoldingTime
-	if noteRestart(adj, rt) {
-		adj.lastHeard = now
-	}
+	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	if prev != AdjUp && newState == AdjUp {
 		// Only the transition starts the clock RFC 7987 §3.2 reads; every
 		// later hello re-assigns the same state.
@@ -461,9 +458,17 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	// circuit ID from its previous incarnation, which §3.3.1 says to ignore
 	// while a restart is in progress — is the restart itself, not a peer that
 	// has moved on to some other router.
+	//
+	// Why the source address is compared here when §3.2.1 asks for it only on
+	// a LAN circuit: a point-to-point circuit is point-to-point by
+	// configuration, not by medium — the interop suite's own is Ethernet — and
+	// upAdjacencyFrom keys the update process on the SNPA either way. Holding
+	// the adjacency Up on a hello from another station would move it to that
+	// station's address and hand it that gate, on a System ID it only had to
+	// copy off the wire.
 	held := c.p2pAdj
-	holdForRestart := rt != nil && rt.RestartRequest &&
-		held != nil && held.systemID == h.SourceID && held.state == AdjUp
+	holdForRestart := rt != nil && rt.RestartRequest && held != nil &&
+		held.systemID == h.SourceID && held.state == AdjUp && held.snpa == src
 	// RFC 5303 3.2: a TLV 240 echoing someone other than us describes a
 	// different adjacency, which puts ours in Down — not Init. Staying in Init
 	// would leave a stale Up adjacency to a peer now talking to another router
@@ -503,10 +508,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	wasSuppressed := adj.suppressed
 	adj.snpa = src
 	adj.areaAddrs = areas
-	adj.holding = h.HoldingTime
-	if noteRestart(adj, rt) {
-		adj.lastHeard = now
-	}
+	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	adj.levels = common
 	if prev != AdjUp && newState == AdjUp {
 		// See processLANHello: the transition, not every hello.
