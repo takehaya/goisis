@@ -100,8 +100,12 @@ func registerSubTLVDecoder(ctx SubTLVContext, t uint8, dec subTLVDecoder) {
 // code point is: byte-exact on the way back out and invisible to every
 // consumer's type switch, which is the outcome those clauses ask for.
 //
-// The length octets themselves still fail: an area that cannot be split into
-// sub-TLVs at all has no boundaries to preserve anything against.
+// The length octets themselves still fail, and the caller decides what that
+// means: at the top of an IS-reachability entry the area has no boundaries to
+// preserve anything against and the PDU fails, while nested inside an ASLA the
+// error returns through decodeASLA, which this function's own fallback then
+// catches — so the whole ASLA stays opaque, which is what RFC 8919 §4.2 asks
+// for.
 func decodeSubTLVs(ctx SubTLVContext, b []byte) ([]SubTLV, error) {
 	var out []SubTLV
 	for len(b) > 0 {

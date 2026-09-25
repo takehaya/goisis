@@ -135,14 +135,20 @@ type Metrics interface {
 	// LSPLifetimeCorrupt records one received LSP that RFC 7987 §3.2's
 	// algorithm calls a possibly corrupt Remaining Lifetime, on the circuit it
 	// arrived on: a live LSP, newer than the copy held, carrying less than
-	// ZeroAgeLifetime, from an adjacency that has been Up for longer than that
-	// (see corruptLifetime).
+	// ZeroAgeLifetime, on an adjacency whose database exchange began at least
+	// that long ago (see corruptLifetime).
+	//
+	// The exchange and not the adjacency: a graceful-restart helper hands a
+	// neighbour the whole database over an adjacency that deliberately never
+	// leaves Up, and those are the arrivals this exists to exclude. See
+	// docs/configuration.md, which carries the operator-facing statement of
+	// the same rule and of what bounds it.
 	//
 	// It is the half of the floor an operator can alert on. The floor fires on
 	// every aged LSP, so its baseline is the circuit's LSP arrival rate; this
-	// fires only below ZeroAgeLifetime and only once the adjacency has
-	// outlived the resync that legitimately carries such values, so its
-	// baseline is zero. §3.2 does not claim every report is a real one, so a
+	// fires only below ZeroAgeLifetime and only once the exchange that
+	// legitimately carries such values is old enough, so its baseline is
+	// zero. §3.2 does not claim every report is a real one, so a
 	// sustained rate is a capture to take, not a fault. Counted and not
 	// logged, like the floor but for a different reason: the rate is bounded
 	// only by how fast a neighbor can flood, and a line per event would make
