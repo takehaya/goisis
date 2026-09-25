@@ -2,18 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
 	goisisv1 "github.com/takehaya/goisis/gen/goisis/v1"
+	"github.com/takehaya/goisis/gen/goisis/v1/goisisv1connect"
+	"github.com/takehaya/goisis/internal/version"
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
@@ -356,4 +361,69 @@ func captureStdout(t *testing.T, fn func()) string {
 	out := <-done
 	_ = r.Close()
 	return out
+}
+
+// stubService answers the two RPCs behind the commands that render without
+// printResponse. Everything else is left unimplemented: the assertion is which
+// stream the rendering lands on, not what the daemon would have said.
+type stubService struct {
+	goisisv1connect.UnimplementedIsisServiceHandler
+}
+
+func (stubService) GetIsis(context.Context, *connect.Request[goisisv1.GetIsisRequest]) (*connect.Response[goisisv1.GetIsisResponse], error) {
+	return connect.NewResponse(&goisisv1.GetIsisResponse{Global: &goisisv1.Global{
+		Version: "test", SystemId: "0000.0000.0001", Overload: true,
+	}}), nil
+}
+
+func (stubService) WatchEvent(_ context.Context, _ *connect.Request[goisisv1.WatchEventRequest], stream *connect.ServerStream[goisisv1.WatchEventResponse]) error {
+	return stream.Send(&goisisv1.WatchEventResponse{Event: &goisisv1.WatchEventResponse_Adjacency{
+		Adjacency: &goisisv1.AdjacencyEvent{Adjacency: &goisisv1.Adjacency{
+			SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2, State: "Up",
+		}},
+	}})
+}
+
+// TestCommandsWriteTheirAnswerToStdout covers the renderers that do not go
+// through printResponse. Each writes with cobra's Print helpers in a form that
+// looks right and lands on stderr, so the assertion is the stream: the out
+// writer is left unset, which is what the real binary does, and os.Stdout is
+// captured around the run.
+func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
+	_, handler := goisisv1connect.NewIsisServiceHandler(stubService{})
+	mux := http.NewServeMux()
+	mux.Handle(goisisv1connect.IsisServiceGetIsisProcedure, handler)
+	mux.Handle(goisisv1connect.IsisServiceWatchEventProcedure, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		// What a script does: V=$(goisis version). It was empty.
+		{"version", []string{"version"}, version.Version},
+		{"global", []string{"global", "--addr", srv.URL}, "system-id: 0000.0000.0001"},
+		{"monitor", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up"},
+		{"global as json", []string{"global", "--addr", srv.URL, "-o", "json"}, `"systemId"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var errBuf bytes.Buffer
+			root := newRootCmd()
+			root.SetErr(&errBuf)
+			root.SetArgs(tc.args)
+			stdout := captureStdout(t, func() {
+				if err := root.Execute(); err != nil {
+					t.Errorf("%v: %v", tc.args, err)
+				}
+			})
+			if !strings.Contains(stdout, tc.want) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout, tc.want)
+			}
+			if errBuf.Len() != 0 {
+				t.Errorf("stderr = %q, want nothing there", errBuf.String())
+			}
+		})
+	}
 }
