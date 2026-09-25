@@ -396,6 +396,13 @@ func (stubService) GetIsis(context.Context, *connect.Request[goisisv1.GetIsisReq
 	}}), nil
 }
 
+func (stubService) ListAdjacencies(context.Context, *connect.Request[goisisv1.ListAdjacenciesRequest]) (*connect.Response[goisisv1.ListAdjacenciesResponse], error) {
+	return connect.NewResponse(&goisisv1.ListAdjacenciesResponse{Adjacencies: []*goisisv1.Adjacency{{
+		SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2,
+		State: "Up", Snpa: "0000.0000.00b2", HoldingTime: 30, Restarting: true,
+	}}}), nil
+}
+
 func (stubService) WatchEvent(_ context.Context, _ *connect.Request[goisisv1.WatchEventRequest], stream *connect.ServerStream[goisisv1.WatchEventResponse]) error {
 	return stream.Send(&goisisv1.WatchEventResponse{Event: &goisisv1.WatchEventResponse_Adjacency{
 		Adjacency: &goisisv1.AdjacencyEvent{Adjacency: &goisisv1.Adjacency{
@@ -414,6 +421,7 @@ func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(goisisv1connect.IsisServiceGetIsisProcedure, handler)
 	mux.Handle(goisisv1connect.IsisServiceWatchEventProcedure, handler)
+	mux.Handle(goisisv1connect.IsisServiceListAdjacenciesProcedure, handler)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -427,6 +435,7 @@ func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
 		{"global", []string{"global", "--addr", srv.URL}, "system-id: 0000.0000.0001"},
 		{"monitor", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up"},
 		{"global as json", []string{"global", "--addr", srv.URL, "-o", "json"}, `"systemId"`},
+		{"neighbor renders the restart column", []string{"neighbor", "--addr", srv.URL}, "restarting"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var errBuf bytes.Buffer
