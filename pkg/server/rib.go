@@ -227,6 +227,8 @@ func (s *IsisServer) l1ExportSet(merged map[netip.Prefix]route) map[netip.Prefix
 			continue // only intra-area algorithm-0 reachability propagates
 		case r.down:
 			continue // leaked down from L2 already; sending it back up would loop
+		case r.mt:
+			continue // MT #2 evidence only; we can only say MT #0 here (route.mt)
 		case p == defaultV4 || p == defaultV6:
 			continue // a default is not area reachability, whatever produced it
 		case own[p]:
@@ -266,6 +268,8 @@ func (s *IsisServer) l2LeakSet(merged, l2 map[netip.Prefix]route) map[netip.Pref
 	var leak map[netip.Prefix]uint32
 	for p, r := range l2 {
 		switch {
+		case r.mt:
+			continue // MT #2 evidence only; we can only say MT #0 here (route.mt)
 		case p == defaultV4 || p == defaultV6:
 			continue // a default is not reachability to leak; the ATT bit carries that
 		case own[p]:
