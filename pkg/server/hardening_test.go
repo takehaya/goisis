@@ -310,6 +310,43 @@ func TestCleanShutdownPurgesOwnLSP(t *testing.T) {
 	waitFor(t, "b drops A's LSP after the clean-shutdown purge", func() bool { return !liveLSPFrom(t, b, aSys) })
 }
 
+// TestTheShutdownPurgeIsStampedWithTheServerClock guarantees that the clean
+// shutdown takes its instant from the Clock the embedder supplied, the one the
+// rest of the LSDB is aged against. That instant is what the purged entry's
+// purgedAt and its ZeroAgeLifetime hold-down are measured from, so a purge
+// stamped off the wall clock on an instance whose Clock is not the wall clock
+// is held for a span nothing else in the database agrees with — and if that
+// Clock runs behind, one that expired before it was taken.
+func TestTheShutdownPurgeIsStampedWithTheServerClock(t *testing.T) {
+	clk := newFakeClock()
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{
+			Name:      "c",
+			Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500),
+			Level2:    true,
+			Padding:   ptrFalse(),
+		}),
+		WithClock(clk),
+	)
+	s.regenerateLSPs(false, clk.Now())
+	id := lspID(s.systemID, 0)
+	if e := s.dbs[packet.Level2].get(id); e == nil || !e.purgedAt.IsZero() {
+		t.Fatalf("own LSP %v is not live going in, so the purge below proves nothing: %+v", id, e)
+	}
+
+	s.shutdown()
+
+	e := s.dbs[packet.Level2].get(id)
+	if e == nil || e.purgedAt.IsZero() {
+		t.Fatalf("the shutdown left our own LSP unpurged: %+v", e)
+	}
+	if !e.purgedAt.Equal(clk.Now()) {
+		t.Errorf("purged at %v, want %v: the shutdown read an instant off a clock the rest of the LSDB does not use", e.purgedAt, clk.Now())
+	}
+}
+
 // TestLSDBEntryLimit: with WithLSDBEntryLimit(n), the update process stops
 // admitting previously-unseen foreign LSP IDs once a level's database holds n
 // entries, while updates to already-stored IDs and this node's own

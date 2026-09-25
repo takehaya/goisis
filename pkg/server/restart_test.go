@@ -431,6 +431,66 @@ func TestSuppressedAdjacencyLeavesTheISReachabilityTLVs(t *testing.T) {
 	}
 }
 
+// TestSPFDoesNotCrossASuppressedAdjacency guarantees the second half of RFC
+// 5306 §3.2.2 — "MUST NOT use this adjacency when performing its SPF
+// calculation" — on both kinds of circuit. Keeping the edge out of our own
+// LSPs is not enough on its own: origination lags by up to minLSPGenInterval,
+// and for that long the decision process is reading our own stale copy, which
+// is the reachability through stale LSPs the SA bit exists to prevent.
+func TestSPFDoesNotCrossASuppressedAdjacency(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+			peer := nodeID(h.adj().systemID, 0)
+			// The control: without it an implementation that crosses no edge
+			// at all would pass the assertion below.
+			if !h.s.edgeHasAdjacency(packet.Level2, peer) {
+				t.Fatal("SPF does not cross the adjacency before it is suppressed, so the rest proves nothing")
+			}
+
+			h.hello(h.snpa, 30, &packet.RestartTLV{SuppressAdjacency: true})
+			if got := h.adj().state; got != AdjUp {
+				t.Fatalf("adjacency state = %v, want Up: §3.2.2 suppresses the advertisement, not the adjacency", got)
+			}
+			if h.s.edgeHasAdjacency(packet.Level2, peer) {
+				t.Error("SPF would cross the suppressed adjacency, which §3.2.2 forbids in as many words")
+			}
+		})
+	}
+}
+
+// TestASuppressedAdjacencyStillCountsAsANeighbor guarantees the scope of RFC
+// 5306 §3.2.2: suppression keeps an adjacency out of this node's LSPs and out
+// of SPF, and out of nothing else. The DIS election and the End.X SID set read
+// every Up adjacency on purpose — a restarting neighbor that also held the
+// election would otherwise take the LAN through two pseudonode changes, one
+// when it asks to be suppressed and one when it stops, for a suppression that
+// was never about who forwards on the LAN.
+func TestASuppressedAdjacencyStillCountsAsANeighbor(t *testing.T) {
+	s, c, local, _ := restartServer(t, u8(64))
+	nbr := packet.SystemID{0, 0, 0, 0, 0, 0xff}
+	nbrSNPA := packet.SNPA{0, 0, 0, 0, 0, 0xff}
+	nbrLAN := nodeID(nbr, 0x05)
+
+	// Priority 100 beats ours, so this neighbor wins the election — which is
+	// only visible if the election counted it in the first place.
+	hello := neighborHello(nbr, 100, nbrLAN, local)
+	hello.TLVs = append(hello.TLVs, &packet.RestartTLV{SuppressAdjacency: true})
+	s.processLANHello(c, nbrSNPA, hello)
+
+	adj := c.adjs[packet.Level2][nbr]
+	if adj == nil || adj.state != AdjUp || !adj.suppressed {
+		t.Fatalf("adjacency = %+v, want Up and suppressed", adj)
+	}
+	if got := c.dis[packet.Level2]; got != nbrLAN {
+		t.Errorf("DIS = %v, want %v: the election passed over a suppressed neighbor and this node elected itself", got, nbrLAN)
+	}
+	if got := s.endXAdjs(); len(got) != 1 || got[0].adj != adj {
+		t.Errorf("End.X adjacency set has %d entries, want the one suppressed adjacency: its SID was released and will be reallocated when suppression lifts", len(got))
+	}
+}
+
 // TestHelperHoldsAP2PAdjacencyThroughAStaleCircuitID guarantees the
 // point-to-point half of RFC 5306 §3.2.1: while the neighbor has RR set, the
 // adjacency is held "irrespective of the other contents of the Point-to-Point
@@ -674,6 +734,39 @@ func TestARestartRequestFromAnotherSourceIsNotHeld(t *testing.T) {
 			}
 			if h.s.adjacencyGate(h.c, packet.PDUTypeL2LSP, packet.Level2, stranger) != nil {
 				t.Error("the update process admits LSPs from that station")
+			}
+		})
+	}
+}
+
+// TestARestartRequestWithoutAPriorUpAdjacencyIsNotHeld guarantees the other
+// arm of RFC 5306 §3.2.1's precondition: the adjacency it covers is one
+// already "in state Up". What the clause then grants is the right to ignore
+// the IS Neighbours option and the three-way option entirely, so extending it
+// to an adjacency still in Init promotes a neighbor that has echoed nobody
+// straight to Up — an adjacency that completed no handshake, advertised in
+// this node's LSPs and admitted to the update process on a System ID anyone on
+// the segment can copy.
+func TestARestartRequestWithoutAPriorUpAdjacencyIsNotHeld(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			// The first request is the one §3.2.1's "Otherwise" clause covers:
+			// it echoes nobody and there was no adjacency to hold, so it forms
+			// one in Init. The second is the one under test — same sender,
+			// same silence, and now an adjacency to point the precondition at.
+			h.request(h.snpa, 30)
+			if got := h.adj().state; got != AdjInit {
+				t.Fatalf("adjacency state = %v after the first request, want Init", got)
+			}
+
+			h.request(h.snpa, 30)
+
+			if got := h.adj().state; got == AdjUp {
+				t.Error("a restart request took an adjacency that had completed no three-way handshake to Up")
+			}
+			if h.s.adjacencyGate(h.c, packet.PDUTypeL2LSP, packet.Level2, h.snpa) != nil {
+				t.Error("the update process admits LSPs over it")
 			}
 		})
 	}

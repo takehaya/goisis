@@ -105,6 +105,20 @@ func TestMTIDReservedBitsNormalized(t *testing.T) {
 		t.Fatalf("re-encode = %x, want %x", out, clean)
 	}
 	checkTLVRoundtrip(t, clean)
+
+	// The encode direction owes the same answer, and owes it on its own: the
+	// masking on decode is upstream of a caller that builds the TLV itself, so
+	// an MT ID above 0x0fff would otherwise put a reserved bit on the wire
+	// where a receiver that does mask it reads a different topology than the
+	// sender named.
+	tlvs[0].(*MTIPv6ReachabilityTLV).MTID |= 0xf000
+	out, err = serializeTLVs(tlvs)
+	if err != nil {
+		t.Fatalf("serializeTLVs: %v", err)
+	}
+	if !bytes.Equal(out, clean) {
+		t.Errorf("encode of an MT ID carrying reserved bits = %x, want %x", out, clean)
+	}
 }
 
 // TestMTDecodeErrors checks the malformed shapes that must be rejected rather
