@@ -509,6 +509,22 @@ func (s *IsisServer) syncCircuitLevel(c *circuit, level packet.Level, now time.T
 		c.setSRM(level, id, now)
 	}
 	s.sendCSNP(c, level, now)
+	// RFC 7987 §3.2's window opens here, where the exchange it is named after
+	// does, and not on the restart request that asks for one: a request the
+	// hold-down defers above starts nothing, and the run it is deferred into
+	// comes back through here. That also makes the hold-down the bound on how
+	// often the window can reopen, in place of the rate a neighbor sends
+	// hellos at.
+	//
+	// Every Up adjacency at this level, not only a restarter's: the SRM flags
+	// are the circuit's and the CSNP reaches the whole level, so each of them
+	// is about to answer with whatever it holds that this database does not.
+	if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) {
+		s.openSyncWindow(c, adj, now)
+	}
+	for _, adj := range c.upAdjacencies(level) {
+		s.openSyncWindow(c, adj, now)
+	}
 }
 
 // nextLSPID returns id + 1 read as an 8-octet unsigned integer: the start of

@@ -509,10 +509,26 @@ whole-database exchange. RFC 5306 §3.2.1c adds a second: a neighbour restarting
 under the helper is handed the complete database over an adjacency that
 deliberately never left Up. Read literally, §3.2 would count every helped
 restart in the area and the alert below would fire on planned maintenance, so
-the window is the exchange rather than the adjacency — a restart request this
-node holds reopens it, and it closes ZeroAgeLifetime after the last one. The
-two readings differ only while a restart is being helped;
+the window is the exchange rather than the adjacency — each exchange this node
+begins reopens it, and it closes ZeroAgeLifetime after the last one. The two
+readings differ only while a restart is being helped;
 `goisis_restart_requests_total` is what says one was.
+
+The adjacency's age is monotone and a neighbour cannot move it; the exchange is
+not, since a neighbour decides when to ask for one. Two things put that bound
+back. The exchange is held down to one per circuit and level every 5s, so the
+window reopens at that rate rather than at the rate hellos arrive; and the
+suppression one neighbour can accumulate between one transition of its
+adjacency into Up and the next is capped at five minutes, after which the filter
+stays armed for that neighbour whatever it asks for. Crossing the cap logs
+`restart resync suppression budget spent` once, naming the circuit, the
+neighbour and how long the adjacency has been Up — a neighbour that reaches it
+has been handed the database for five cumulative minutes without its adjacency
+ever going Down, which is either a restart loop or a neighbour keeping this
+counter quiet. Past the cap a genuine helped restart on that adjacency is
+counted as well, which is what the log line is there to explain; the adjacency
+going Down and coming back up clears it. Below the cap the alert's baseline is
+unchanged.
 
 §3.2 promises neither that every corrupt lifetime is caught nor that every
 report is a real one, so treat a sustained rate as the circuit to take a capture

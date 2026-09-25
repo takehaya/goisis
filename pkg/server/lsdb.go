@@ -75,11 +75,17 @@ func receivedLifetime(remaining uint16) uint16 {
 // every helped restart in the area as corruption and costs the counter the
 // zero baseline that is the whole reason it can be alerted on, so what is
 // measured is the exchange rather than the adjacency. The two differ only
-// while a restart is being helped: noteRestart is the only other writer, it
-// writes only under §3.2.1's precondition (an adjacency already Up to this
-// System ID from this source, with RR set), and §3.2.1a's bound on repeated
-// requests is what stops a neighbor holding the window open — the adjacency
-// expires under it.
+// while a restart is being helped: the other writer is syncCircuitLevel, which
+// opens the window where it actually begins handing a neighbor the database
+// and is itself held down to one run per syncHoldDown per circuit and level.
+//
+// What stops a neighbor holding the window open is not §3.2.1a. That clause
+// bounds lastHeard, and its own "an IIH with the RR bit reset will clear the
+// Restart mode state" is what re-arms the next request, so a peer that
+// interleaves ordinary hellos keeps the adjacency alive by the normal path and
+// can ask again for as long as it likes. The bound is maxSyncSuppression: the
+// budget openSyncWindow spends from, which nothing refills before the
+// adjacency next comes Up.
 //
 // A purge is not a corrupt lifetime, however far below ZeroAgeLifetime zero
 // is: §2 leaves the handling of purged LSPs alone, and every purge in the area
@@ -91,6 +97,72 @@ func corruptLifetime(adj *adjacency, remaining uint16, now time.Time) bool {
 		return false
 	}
 	return adj != nil && now.Sub(adj.syncSince) >= zeroAgeSeconds*time.Second
+}
+
+// maxSyncSuppression is how much of RFC 7987 §3.2's report one neighbor may
+// suppress between one transition of its adjacency into Up and the next.
+//
+// The window corruptLifetime reads is reopened by every database exchange this
+// node starts, and RFC 5306 §3.2.1c makes a neighbor's restart request one of
+// the things that starts one. Without a budget a peer asking again inside
+// every ZeroAgeLifetime holds the filter open for as long as it keeps that up,
+// and the party that can switch the detector off is the party whose LSPs it
+// watches. §3.2's fourth condition is worded as the adjacency's own age
+// precisely because that is monotone; measuring the exchange instead buys the
+// helped restart at the cost of that monotonicity, and this is what is put
+// back in its place.
+//
+// Five minutes, measured against what an exchange actually costs: one helped
+// restart spends roughly its own duration (see openSyncWindow's charge), and
+// RFC 5306 §3.3 bounds a restart by "the minimum holding time of the
+// neighbors" — 30s in ISO 10589's architectural defaults — so the budget
+// covers on the order of ten consecutive restarts over one Up episode, on an
+// adjacency that never went Down between them. What it caps is the other side:
+// a neighbor holding the window open costs the counter at most
+// maxSyncSuppression plus the ZeroAgeLifetime of the last window, under a
+// tenth of the hour docs/configuration.md's alert evaluates over.
+const maxSyncSuppression = 5 * zeroAgeSeconds * time.Second
+
+// resetSyncWindow starts a fresh Up episode on an adjacency that has just
+// reached state Up. The transition is where the exchange RFC 7987 §3.2 words
+// its fourth condition around begins, so the window opens with it, and the
+// suppression budget starts over — the one thing here a neighbor cannot help
+// itself to quietly, since reaching Up again means having gone Down first.
+func (adj *adjacency) resetSyncWindow(now time.Time) {
+	adj.upSince, adj.syncSince, adj.syncSpent = now, now, 0
+}
+
+// openSyncWindow reopens RFC 7987 §3.2's window for an exchange beginning now
+// and charges what that adds to the Up episode's budget. syncCircuitLevel is
+// the only caller: the window follows the exchange, not the request that asked
+// for one.
+//
+// The charge is the suppressed time the reopening actually adds — the gap
+// since the window last opened, never more than the one ZeroAgeLifetime a
+// single window covers — so a restarter that asks on every IIH pays for the
+// seconds it is quiet rather than for the number of times it asked, and the
+// total suppressed over an Up episode is syncSpent plus one final window. Once
+// the budget is gone the window is never reopened on this adjacency again.
+func (s *IsisServer) openSyncWindow(c *circuit, adj *adjacency, now time.Time) {
+	add := now.Sub(adj.syncSince)
+	if add <= 0 {
+		// The open window already covers now: the transition into Up opened it
+		// at this same instant, or another level's exchange did.
+		return
+	}
+	if adj.syncSpent >= maxSyncSuppression {
+		return
+	}
+	adj.syncSpent += min(add, zeroAgeSeconds*time.Second)
+	adj.syncSince = now
+	if adj.syncSpent >= maxSyncSuppression {
+		// On the edge, so it is one line per Up episode however long the
+		// neighbor keeps asking. It is what an operator reading a silent
+		// lsp_lifetime_corrupt against a busy restart_requests needs told:
+		// from here the filter is armed for this neighbor whatever it sends.
+		s.logger.Warn("restart resync suppression budget spent", "circuit", c.cfg.Name,
+			"neighbor", adj.systemID, "up", now.Sub(adj.upSince).Truncate(time.Second))
+	}
 }
 
 // maxLSPSeq is the highest sequence number an LSP can carry. Reaching it
