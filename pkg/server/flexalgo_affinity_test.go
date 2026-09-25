@@ -447,13 +447,12 @@ func splitReach(subs []packet.SubTLV, neighbor packet.NodeID) packet.TLV {
 	}}
 }
 
-// TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt: a rule is applied to
-// the neighbor, not to each entry on its own. A peer that colors only the
-// first of a split pair must not hand the algorithm an uncolored way across
-// the same link; read the other way round, an include rule the uncolored half
-// fails takes the neighbor rather than half of it. Nothing on the wire tells a
-// split entry from a parallel link, so the direction that keeps the rule is
-// the one taken.
+// TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt: an exclude rule is
+// applied to every uncolored entry advertising the neighbor, not to each entry
+// on its own. A peer that colors only the first of a split pair must not hand
+// the algorithm an uncolored way across the same link. An entry with colors of
+// its own is a parallel link and keeps its own answer, which
+// TestFlexAlgoKeepsAParallelLinkTheRuleDoesNotName is about.
 func TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt(t *testing.T) {
 	reaches := func(t *testing.T, cons packet.FlexAlgoSubSubTLV) bool {
 		t.Helper()
@@ -476,8 +475,45 @@ func TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt(t *testing.T) {
 	if !reaches(t, agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorBlue)) {
 		t.Error("control: a neighbor split across entries must still be reachable when no entry is pruned")
 	}
-	if reaches(t, agConstraint(packet.FlexAlgoSubSubIncludeAnyAdminGroup, colorRed)) {
-		t.Error("include-any kept a neighbor one of whose entries carries no color at all")
+	// The cross-entry rule never bites under an include rule: prunesLink has
+	// already taken the uncolored half on its own, and taking the colored half
+	// with it would be the parallel-link regression through the other door.
+	if !reaches(t, agConstraint(packet.FlexAlgoSubSubIncludeAnyAdminGroup, colorRed)) {
+		t.Error("include-any dropped the colored half of a split pair along with the uncolored one")
+	}
+}
+
+// TestFlexAlgoKeepsAParallelLinkTheRuleDoesNotName: RFC 9350 §13 prunes links,
+// not neighbors. A peer reached over two parallel links, one red and one blue,
+// stays reachable under exclude-red over the blue one — and at the blue link's
+// own metric, which is what says the red link went rather than the neighbor.
+// Both entries carry their own attributes, which is what tells them from the
+// split pair splitReach builds.
+func TestFlexAlgoKeepsAParallelLinkTheRuleDoesNotName(t *testing.T) {
+	parallel := func(nb packet.NodeID) packet.TLV {
+		return &packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{
+			{NeighborID: nb, Metric: 10, SubTLVs: aslaColors(colorRed)},
+			{NeighborID: nb, Metric: 20, SubTLVs: aslaColors(colorBlue)},
+		}}
+	}
+	s := electionServer(t)
+	now := time.Now()
+	self, peer := nodeID(packet.SystemID{0, 0, 0, 0, 0, 1}, 0), nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
+	injectNodeLSP(s, self, []packet.TLV{partCap(), parallel(peer)}, now)
+	injectNodeLSP(s, peer, []packet.TLV{partCap(), parallel(self), algoLocTLV(affinityLoc)}, now)
+
+	aff, err := flexAlgoAffinityOf(&FlexAlgoDefinition{Algo: 128, Constraints: []packet.FlexAlgoSubSubTLV{
+		agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorRed),
+	}})
+	if err != nil {
+		t.Fatalf("flexAlgoAffinityOf: %v", err)
+	}
+	r, ok := s.computeSPF(packet.Level2, 128, aff, now)[affinityLoc]
+	if !ok {
+		t.Fatal("excluding the color of one of two parallel links took the whole neighbor out of the topology")
+	}
+	if r.metric != 20 {
+		t.Errorf("metric = %d, want 20: the excluded red link was used instead of the blue one", r.metric)
 	}
 }
 

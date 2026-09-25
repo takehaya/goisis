@@ -249,23 +249,29 @@ func (a flexAlgoAffinity) empty() bool {
 }
 
 // prunesLink applies RFC 9350 §13 steps 1, 3 and 4 to one IS-reachability
-// entry's sub-TLVs, in that order. The colors are read lazily so algorithm 0,
-// whose affinity is empty, does not walk the sub-TLVs of every edge in the
-// area.
-func (a flexAlgoAffinity) prunesLink(subs []packet.SubTLV) bool {
+// entry's sub-TLVs, in that order, and also reports whether the entry carries
+// colors of its own. It is not the whole rule: an entry with no colors is
+// pruned a second way, when another entry advertising the same neighbor is
+// pruned here — see buildTopology.
+//
+// The colors are read lazily so algorithm 0, whose affinity is empty, does not
+// walk the sub-TLVs of every edge in the area; colored is therefore false on
+// every algorithm-0 edge, where nothing reads it.
+func (a flexAlgoAffinity) prunesLink(subs []packet.SubTLV) (prune, colored bool) {
 	if a.empty() {
-		return false
+		return false, false
 	}
 	color := flexAlgoLinkColors(subs)
+	colored = len(color) > 0
 	switch {
 	case anyColorSet(a.exclude, color): // 1. exclude admin group
-		return true
+		return true, colored
 	case len(a.includeAny) > 0 && !anyColorSet(a.includeAny, color): // 3. include-any
-		return true
+		return true, colored
 	case len(a.includeAll) > 0 && !allColorsSet(a.includeAll, color): // 4. include-all
-		return true
+		return true, colored
 	}
-	return false
+	return false, colored
 }
 
 // anyColorSet reports whether the link has any color the rule names. A word
