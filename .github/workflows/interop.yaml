@@ -44,9 +44,12 @@ jobs:
           sudo /tmp/goisisd.test -test.v
       - name: Build interop tests
         run: go test -c -o /tmp/interop.test ./test/interop
-      # 20m, not the suite's nominal runtime: the LAN route test alone waits
-      # 2x150s on its failure path, and nine other tests hold 90s waitUps, so a
-      # single genuine failure must still be reported as a failure rather than
-      # as a timeout panic that buries it.
+      # 30m, not the suite's nominal runtime: a single genuine failure must
+      # still be reported as a failure rather than as a timeout panic that
+      # buries it, and the failure paths are long. The suite is now fourteen
+      # tests holding thirty-six 90s waitUps -- the inter-level one has eight
+      # of them across four containers -- plus two 150s soft waits in the LAN
+      # route and reload tests. Raise this whenever a test is added, or the
+      # first slow day buries the assertion that actually failed.
       - name: Run interop (needs root for AF_PACKET + veth; PATH kept for `go`)
-        run: sudo env "PATH=$PATH" /tmp/interop.test -test.v -test.timeout 20m
+        run: sudo env "PATH=$PATH" /tmp/interop.test -test.v -test.timeout 30m
