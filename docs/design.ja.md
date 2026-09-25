@@ -214,7 +214,8 @@ if s.spfDirty && !holding { s.updateRIB(...) }   // イベント駆動 SPF（RFC
   します。受信した remaining lifetime が MaxAge 未満なら MaxAge として保存
   するので、チェックサムの対象外であるこのフィールドが化けても、生成元の
   リフレッシュより先に LSP がエージアウトすることはありません（RFC 7987
-  §2）。ZeroAgeLifetime 未満の値が、それ以上 Up である隣接から届いたときは
+  §2）。ZeroAgeLifetime 未満の値が、データベース交換の開始からそれ以上
+  経っている隣接から届いたときは
   §3.2 の CorruptRemainingLifetime イベントを上げます。パージはゼロ到達後
   ZeroAgeLifetime の間保持されます。
 - **フラッディング。** サーキット毎の SRM/SSN フラグ集合が再送を駆動

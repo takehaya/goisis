@@ -67,13 +67,16 @@ type adjacency struct {
 	syncSpent time.Duration
 
 	// Graceful restart (RFC 5306), all three fields fed by noteRestart from
-	// every IIH that carries a Restart TLV.
+	// every IIH, whether or not it carries a Restart TLV — one that carries
+	// none is how a neighbor leaves restart mode and drops suppression, which
+	// is why the assignments are unconditional rather than guarded on the TLV.
 	//
 	// restartCapable says the neighbor's IIHs carry the TLV at all, which is
-	// what puts it in §3.2.1c's candidate set. restartMode is set by the first
-	// IIH with RR set and cleared by one with RR clear; it decides whether this
-	// IIH may refresh the holding time (§3.2.1a) and keeps a neighbor that is
-	// itself restarting out of that candidate set. suppressed is the SA bit
+	// what puts it in §3.2.1c's candidate set. restartMode mirrors the RR bit
+	// of the IIH just processed; it supplies noteRestart's first, which with
+	// the caller's holdForRestart decides whether this IIH may refresh the
+	// holding time (§3.2.1a), and it keeps a neighbor that is itself
+	// restarting out of that candidate set. suppressed is the SA bit
 	// (§3.2.2): the adjacency stays out of our LSPs and out of SPF until an IIH
 	// with SA clear arrives. It rides on the adjacency and so survives a
 	// Down-to-Up transition, as §3.2.2 requires; an adjacency torn all the way

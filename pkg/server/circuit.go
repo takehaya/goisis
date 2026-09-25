@@ -243,8 +243,8 @@ func (c *circuit) infoFor(adj *adjacency, l packet.Level, now time.Time) Adjacen
 // circuit and has src as its SNPA, or nil if there is none. ISO 10589
 // 7.3.15.1/7.3.15.2 accept an LSP or an SNP only from such a source: a station
 // that never sent a hello must not be able to reach the update process. The
-// adjacency itself and not a bool, because the update process needs how long
-// it has been Up (RFC 7987 §3.2, see corruptLifetime).
+// adjacency itself and not a bool, because the update process needs when the
+// database exchange over it began (RFC 7987 §3.2, see corruptLifetime).
 func (c *circuit) upAdjacencyFrom(level packet.Level, src packet.SNPA) *adjacency {
 	if c.cfg.P2P {
 		adj := c.p2pAdj

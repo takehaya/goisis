@@ -142,3 +142,24 @@ func TestAdjacencyExpires(t *testing.T) {
 }
 
 func ptrFalse() *bool { b := false; return &b }
+
+// TestLevelSetRendersTheSetItHolds guarantees the rendering every
+// graceful-restart log line carries. slog takes a []packet.Level for a byte
+// slice, so levels() would be quoted as raw bytes; String is what makes
+// "levels=L1L2" readable, and a renderer that is wrong in every case is a log
+// nobody can grep.
+func TestLevelSetRendersTheSetItHolds(t *testing.T) {
+	var none, l1, l2, both levelSet
+	l1.add(packet.Level1)
+	l2.add(packet.Level2)
+	both.add(packet.Level1)
+	both.add(packet.Level2)
+	for _, tc := range []struct {
+		set  levelSet
+		want string
+	}{{none, "-"}, {l1, "L1"}, {l2, "L2"}, {both, "L1L2"}} {
+		if got := tc.set.String(); got != tc.want {
+			t.Errorf("levelSet(%d).String() = %q, want %q", tc.set, got, tc.want)
+		}
+	}
+}

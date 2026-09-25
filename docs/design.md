@@ -216,7 +216,7 @@ Two invariants matter beyond the codec:
   a received remaining lifetime below MaxAge is stored as MaxAge, so corruption
   of a field that sits outside the checksum cannot age an LSP out before its
   originator refreshes it (RFC 7987 §2), while one below ZeroAgeLifetime from an
-  adjacency Up for longer than that raises §3.2's CorruptRemainingLifetime
+  adjacency whose database exchange began at least that long ago raises §3.2's CorruptRemainingLifetime
   event; purges are held for ZeroAgeLifetime after going to zero.
 - **Flooding.** Per-circuit SRM/SSN flag sets drive retransmission: LAN
   reliability comes from the DIS's periodic CSNPs — split into per-PDU LSP-ID
