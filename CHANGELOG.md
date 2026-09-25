@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.9.0](https://github.com/takehaya/goisis/compare/v0.8.0...v0.9.0) (2026-09-25)
+
+### Upgrade notes for operators
+
+* A Flexible Algorithm prunes the **link** a rule names, not the neighbour
+  behind it. 0.8.0 removed every edge to a neighbour once any one entry
+  advertising it was pruned, so two parallel links of different colours left
+  that neighbour unreachable for the algorithm. An area that worked in 0.7.0
+  and lost a path in 0.8.0 gets it back.
+* A prefix is withheld from the other level's LSP only when **no**
+  advertisement of it claimed the default topology. 0.8.0 read the winning
+  advertisement's topology, so one neighbour running `topology ipv6-unicast`
+  on a shorter path silently stopped a border router exporting a prefix the
+  area advertises in TLV 236. Reachability lost that way returns on upgrade.
+* A node stops announcing participation in a Flexible Algorithm it has **no
+  definition for**, which RFC 9350 section 5.3 requires alongside the case
+  0.8.0 already handled. Since only a subset of participants advertise the
+  definition, this fires whenever those advertisers are down or slow to come
+  up; the node then neither computes nor advertises the algorithm, instead of
+  advertising one it holds no forwarding state for.
+* `goisis neighbor` has a `REMAIN` column, the seconds left on the hold rather
+  than the value the neighbour advertised. The two diverge during a helped
+  restart, by up to the whole holding time. Anything parsing that table by
+  column position needs updating; `holding_time` keeps its meaning.
+* A `WatchEvent` stream now reports a change to a neighbour's restarting or
+  suppressed condition, not only a change of adjacency state. A consumer that
+  assumed every adjacency event meant the state had moved should read the
+  state rather than infer it.
+* `goisis_subtlv_refused_total` counts link attributes whose length this
+  decoder rejects. They are ignored rather than fatal, which is deliberate,
+  but an ignored admin group reads as an uncoloured link and an uncoloured
+  link is not excluded -- so a non-zero rate means a constraint may not be
+  pruning what it names.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `SubTLVRefused`. An implementation
+  that embeds `server.NoopMetrics` is unaffected; one that does not needs the
+  method.
+* `server.AdjacencyInfo` gained `HoldingRemaining`, and `circuit.infoFor` now
+  takes the current time -- internal, but named here because it is what makes
+  the new field truthful under an injected `Clock`.
+
+
+### Features
+
+* **packet:** tell a refused link attribute from an absent one ([8070b7b](https://github.com/takehaya/goisis/commit/8070b7b7605f558c73b7b8247ef0d3ccf8638320))
+* **watch:** report the restart conditions, and the hold that is left ([72a934a](https://github.com/takehaya/goisis/commit/72a934ae06399ea6f182c605cc253c10b094397f))
+
+
+### Bug Fixes
+
+* **lsdb:** open the resync window where the exchange starts, and bound it ([7c48f18](https://github.com/takehaya/goisis/commit/7c48f18a22a7e4965cff04c74448bc127dc6c55c))
+* **rib:** stop one advertisement speaking for every other ([075bb00](https://github.com/takehaya/goisis/commit/075bb00307ce90db95dcedc879a40e41360db17e))
+* **spf:** prune the link a rule names, not the neighbour behind it ([ac5ae7f](https://github.com/takehaya/goisis/commit/ac5ae7f3b44b3ac0311dfb0f0d24584eef6d5dd7))
+
 ## [0.8.0](https://github.com/takehaya/goisis/compare/v0.7.0...v0.8.0) (2026-09-25)
 
 ### Upgrade notes for operators
