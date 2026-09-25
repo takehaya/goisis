@@ -495,4 +495,23 @@ func TestLoadCircuitAdminGroup(t *testing.T) {
 	if c.Circuits[1].AdminGroup != nil {
 		t.Errorf("a circuit without the key got %v, want no colors", c.Circuits[1].AdminGroup)
 	}
+
+	// Through the mapping layer, not only into config.CircuitConfig. This key
+	// is the whole operator-facing surface of the Flexible Algorithm work, and
+	// the upgrade note tells operators to set it before upgrading or watch the
+	// algorithm go dark on their links -- which is exactly what a silent drop
+	// here produces, with the configuration file still reading correctly.
+	open := mockCircuits(map[string]mockCircuit{
+		"eth0": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 1}, 1500)},
+		"eth1": {tr: datalink.NewMockTransport(packet.SNPA{2, 0, 0, 0, 0, 2}, 1500)},
+	})
+	for i, want := range [][]uint32{{5, 16}, nil} {
+		cfg, err := c.Circuits[i].circuit(open)
+		if err != nil {
+			t.Fatalf("circuit %d: %v", i, err)
+		}
+		if !slices.Equal(cfg.AdminGroup, want) {
+			t.Errorf("circuit %d reached the server with admin group %v, want %v", i, cfg.AdminGroup, want)
+		}
+	}
 }
