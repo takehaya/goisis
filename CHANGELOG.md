@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.0](https://github.com/takehaya/goisis/compare/v0.7.0...v0.8.0) (2026-09-25)
+
+
+### Features
+
+* **server:** give the graceful-restart helper a signal, and stop it tripping its own alarm ([5aadafb](https://github.com/takehaya/goisis/commit/5aadafb2b495d3f9b21ec2b1f48665e2be1d59f0))
+
+
+### Bug Fixes
+
+* **cli:** send every command's answer to stdout ([2f0e703](https://github.com/takehaya/goisis/commit/2f0e7032f176b3563153d19f8864b1fbf39a7c29))
+* **packet:** skip a sub-TLV a decoder refuses, do not fail the PDU ([68d11a4](https://github.com/takehaya/goisis/commit/68d11a4ea330f845938490d3964861b0a6cab323))
+* **rib:** keep a multi-topology prefix out of the other level's LSP ([6bb5fdb](https://github.com/takehaya/goisis/commit/6bb5fdb926f1ee4542984921b9333f36dde7bf7c))
+* **server:** stop a restart request from setting its own hold ([03c2af7](https://github.com/takehaya/goisis/commit/03c2af77e56640029db7ea8633d368fd1f86a4a1))
+* **spf:** read a link's colours across every entry and every ASLA ([e30b645](https://github.com/takehaya/goisis/commit/e30b645039414fbd3d90c4b0b2ad8a5ccd0521d0))
+* **spf:** stop a Flexible Algorithm from going dark on its own edges ([f9e813d](https://github.com/takehaya/goisis/commit/f9e813d3408b84d06d9fe71b44ad202f8ff50578))
+
 ## [0.7.0](https://github.com/takehaya/goisis/compare/v0.6.1...v0.7.0) (2026-09-24)
 
 ### Upgrade notes for operators
