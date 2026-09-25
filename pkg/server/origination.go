@@ -109,9 +109,11 @@ const maxLinkAttrArea = maxSubTLVArea / 2
 // attrs are the link's own attributes and repeat on every entry the split
 // produces, while subs are distributed across them. The merge RFC 5305 §3
 // asks of a receiver makes the two equivalent, but a receiver that does not
-// merge — goisis included, which takes one SPF edge per entry — would read a
-// split-off entry as an uncolored parallel link and walk it around an exclude
-// rule.
+// merge would read a split-off entry as an uncolored parallel link and walk it
+// around an include rule. (goisis itself takes one SPF edge per entry and
+// prunes a neighbor in every entry once one of them is pruned; see
+// buildTopology. Repeating the attributes is what keeps that from costing a
+// peer of ours the link.)
 func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metric uint32, attrs, subs []packet.SubTLV) []packet.ExtendedISReachEntry {
 	fixed := subTLVsLen(attrs)
 	for {

@@ -300,37 +300,53 @@ func allColorsSet(rule, color []uint32) bool {
 
 // flexAlgoLinkColors returns the admin group of one IS-reachability entry as
 // the Flexible Algorithm application must read it. RFC 9350 §12 makes ASLA
-// (RFC 8919 §4.2) the only source: an ASLA naming the Flex-Algo application
-// wins, a zero-length bit mask applies to any application that has no
+// (RFC 8919 §4.2) the only source: the ASLAs naming the Flex-Algo application
+// win, a zero-length bit mask applies to any application that has no
 // advertisement of its own, and the legacy sub-TLVs of the neighbor TLV are
-// read only when the Flex-Algo ASLA sets the L-flag to send us there. A link
-// with no ASLA at all therefore has no colors — which an exclude rule leaves
-// alone and an include rule prunes, and is why goisis has to advertise its own
-// (see circuit.aslaSubTLVs).
+// read only when the L-flag sends us there. A link with no ASLA at all
+// therefore has no colors — which an exclude rule leaves alone and an include
+// rule prunes, and is why goisis has to advertise its own (see
+// circuit.aslaSubTLVs).
+//
+// RFC 8919 §4.2 lets a link carry several ASLAs for the same application and
+// only asks that they not conflict, so the attributes of all of them are read
+// rather than the first one's: a sender free to split its attributes across
+// ASLAs must not get a different answer per sub-TLV order. Two admin groups
+// that do conflict are unioned rather than resolved by §4.2's "first
+// advertisement in the lowest-numbered LSP", which this function cannot see —
+// the union is the reading adminGroupColors already gives a link, and it is
+// the safe one under an exclude rule.
+//
+// One L-flag set anywhere in that set sets it for the whole application: §4.2
+// requires the flag to be consistent across a link's sub-TLVs and says it MUST
+// be considered set where it is not. The same clause has the ASLA's own
+// sub-sub-TLVs ignored once it is set, which reading only the entry's
+// top-level sub-TLVs does.
 func flexAlgoLinkColors(subs []packet.SubTLV) []uint32 {
-	var anyApp *packet.ASLASubTLV
+	var forFlexAlgo, forAnyApp []*packet.ASLASubTLV
 	for _, sub := range subs {
 		asla, ok := sub.(*packet.ASLASubTLV)
 		if !ok {
 			continue
 		}
-		if asla.Apps(packet.ASLAAppFlexAlgo) {
-			if asla.Legacy {
-				return adminGroupColors(subs)
-			}
-			return adminGroupColors(asla.SubSubTLVs)
-		}
-		if anyApp == nil && asla.AnyApp() {
-			anyApp = asla
+		switch {
+		case asla.Apps(packet.ASLAAppFlexAlgo):
+			forFlexAlgo = append(forFlexAlgo, asla)
+		case asla.AnyApp():
+			forAnyApp = append(forAnyApp, asla)
 		}
 	}
-	if anyApp != nil {
-		if anyApp.Legacy {
+	if len(forFlexAlgo) == 0 {
+		forFlexAlgo = forAnyApp
+	}
+	var attrs []packet.SubTLV
+	for _, asla := range forFlexAlgo {
+		if asla.Legacy {
 			return adminGroupColors(subs)
 		}
-		return adminGroupColors(anyApp.SubSubTLVs)
+		attrs = append(attrs, asla.SubSubTLVs...)
 	}
-	return nil
+	return adminGroupColors(attrs)
 }
 
 // adminGroupColors folds the admin-group advertisements of one sub-TLV list
