@@ -76,7 +76,9 @@ exclusion or anything else goisis cannot evaluate makes the algorithm
 uncomputable, so it installs no routes and `Constraints` is where that shows.
 The node also stops announcing participation in that algorithm (RFC 9350
 §5.3), which is what keeps the rest of the area from routing its traffic for
-that algorithm through a node that computes none of it.
+that algorithm through a node that computes none of it. A `Definition` that is
+nil — nobody in the area has advertised a FAD for the algorithm at that level —
+is the other arm of the same sentence, and is not announced either.
 
 ## Route policy
 

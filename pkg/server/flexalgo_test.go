@@ -11,10 +11,18 @@ import (
 	"github.com/takehaya/goisis/pkg/packet"
 )
 
-// TestFlexAlgoAdvertised checks a participating node advertises the
-// SR-Algorithm sub-TLV (algo 0 plus its Flex-Algos) and a FAD per advertised
-// definition in its Router Capability TLV.
-func TestFlexAlgoAdvertised(t *testing.T) {
+// RFC 9350 §5.3: a node configured to participate in a Flexible Algorithm for
+// which "there is no valid Flex-Algorithm Definition available" MUST stop
+// participating in it, and §11.1 makes the SR-Algorithm sub-TLV the
+// announcement it must then stop making. So the own LSP announces the
+// algorithms this node has a definition for — 128, from the definition it
+// advertises itself — and not 129, which no router in the area defines.
+//
+// The controls are in the same LSP: the FAD still goes out (§5.3 lets a router
+// that does not participate advertise a definition, so the two are independent)
+// and algorithm 0 is a capability rather than a Flex-Algo, so this cannot pass
+// by announcing nothing at all.
+func TestFlexAlgoParticipationAnnouncedOnlyWithADefinitionAvailable(t *testing.T) {
 	mock := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500)
 	s := mustServer(t,
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
@@ -27,7 +35,7 @@ func TestFlexAlgoAdvertised(t *testing.T) {
 	defer cancel()
 	go s.Serve(ctx) //nolint:errcheck // ctx shutdown
 
-	waitFor(t, "own LSP carries SR-Algorithm + FAD", func() bool {
+	waitFor(t, "own LSP announces algo 128 (defined here) and not 129 (defined nowhere)", func() bool {
 		var sa *packet.SRAlgorithmSubTLV
 		var fads []*packet.FlexAlgoDefinitionSubTLV
 		for _, tlv := range ownLSPTLVs(t, s) {
@@ -51,9 +59,64 @@ func TestFlexAlgoAdvertised(t *testing.T) {
 		for _, a := range sa.Algorithms {
 			has[a] = true
 		}
-		return has[0] && has[128] && has[129] &&
+		return has[0] && has[128] && !has[129] &&
 			fads[0].FlexAlgo == 128 && fads[0].Priority == 100 && fads[0].MetricType == packet.FlexAlgoMetricIGP
 	})
+}
+
+// The same §5.3 arm over the lifetime of the router that holds the definition.
+// Only a subset of the participants advertise the FAD, so for everyone else
+// "no valid definition available" is not a misconfiguration but the state the
+// area passes through whenever those advertisers are down, restarting, or
+// simply slower to come up — and §5.1 scopes the FAD sub-TLV to one level, so a
+// definition advertised only in L2 leaves L1 there for good. Participation
+// therefore has to follow the definition in both directions, not just be
+// withdrawn once.
+func TestFlexAlgoParticipationFollowsTheFADAdvertiser(t *testing.T) {
+	advertiser := packet.SystemID{0, 0, 0, 0, 0, 2}
+	s := mustServer(t,
+		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+		WithFlexAlgo(FlexAlgoConfig{Algo: 128}), // participate; someone else defines it
+	)
+	now := time.Now()
+	s.regenerateLSPs(false, now)
+	if !slices.Contains(ownSRAlgorithms(t, s), 128) {
+		t.Fatal("control: the node must announce participation before the first RIB pass reads the LSDB")
+	}
+	// Each step is its own minLSPGenInterval, so drainLSPGen really originates
+	// rather than coalescing the sequence into one LSP.
+	announced := func() bool {
+		t.Helper()
+		now = now.Add(2 * minLSPGenInterval)
+		s.updateRIB(now)
+		s.drainLSPGen(now)
+		algos := ownSRAlgorithms(t, s)
+		if !slices.Contains(algos, 0) {
+			t.Fatal("own LSP stopped announcing algorithm 0, which is a capability and not a Flex-Algo")
+		}
+		return slices.Contains(algos, 128)
+	}
+
+	// The neighbour participates too, and defines nothing: nobody in the area
+	// has a definition, so nobody may announce participation.
+	injectLSP(s, advertiser, []packet.TLV{partCap()}, now)
+	if announced() {
+		t.Error("participation is announced for an algorithm no router in the area defines")
+	}
+	injectLSP(s, advertiser, []packet.TLV{fadCap(100)}, now)
+	if !announced() {
+		t.Error("participation is not announced although the area now has a definition to compute")
+	}
+	delete(s.dbs[packet.Level2].entries, lspID(advertiser, 0))
+	if announced() {
+		t.Error("participation survives the loss of the only router that advertised the definition")
+	}
+	injectLSP(s, advertiser, []packet.TLV{fadCap(100)}, now)
+	if !announced() {
+		t.Error("participation does not return when the definition does")
+	}
 }
 
 // TestFlexAlgoElectionHighestPriority asserts the FAD with the highest priority

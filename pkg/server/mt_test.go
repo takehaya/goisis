@@ -239,3 +239,139 @@ func TestAnMTOnlyPrefixIsNotLeakedIntoLevel1(t *testing.T) {
 			"the only advertisement for it was MT #2", mtOnly, e)
 	}
 }
+
+// l1l2PeerC is a second neighbour, one hop behind B, so a test can give the
+// same prefix two advertisers at different distances.
+var l1l2PeerC = packet.SystemID{0, 0, 0, 0, 0, 3}
+
+// mt237 is one TLV 237 advertisement per prefix, all under MT #2 at metric 1,
+// low enough that the MT #2 path wins on the total metric even from one hop
+// further away.
+func mt237(prefixes ...netip.Prefix) packet.TLV {
+	tlv := &packet.MTIPv6ReachabilityTLV{MTID: packet.MTIDIPv6Unicast}
+	for _, p := range prefixes {
+		tlv.Prefixes = append(tlv.Prefixes, packet.IPv6ReachEntry{Prefix: p, Metric: 1})
+	}
+	return tlv
+}
+
+// The rule the two tests above state is "a prefix whose ONLY advertisement was
+// MT #2", so one honest TLV 236 advertisement anywhere in the level is enough
+// to license the re-origination: the evidence RFC 5120 §4 asks for is there,
+// and a router in the area is already making the MT #0 claim this node would
+// repeat. route.mt is therefore merged over every contributing advertisement
+// rather than taken from whichever one won the metric — otherwise one
+// neighbour configured `topology ipv6-unicast`, on a path that happens to be
+// shorter, takes a prefix off the backbone that the area still has in the
+// default topology. An area holding both is not a corner case: §7.5 reserves
+// MT #2 as a topology beside the standard one rather than in place of it, and
+// §9.2 has operators extend the default topology even over nodes that do not
+// forward on it.
+func TestAnMT0AdvertisementStillExportsIntoLevel2WhenAnMT2PathWinsTheMetric(t *testing.T) {
+	var (
+		mixed  = netip.MustParsePrefix("2001:db8:7::/48") // B in TLV 236, C in TLV 237
+		mtOnly = netip.MustParsePrefix("2001:db8:2::/48") // C alone, in TLV 237
+	)
+	s := l1l2Server(t, true)
+	now := time.Now()
+	injectB(s, now, isReach(l1l2PeerC),
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Prefix: mixed, Metric: 100}}})
+	injectLSPAt(s, packet.Level1, l1l2PeerC, []packet.TLV{
+		isReach(l1l2PeerB), mt237(mixed, mtOnly),
+	}, now)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	// self->B is 10 and B->C is 10, so C's MT #2 advertisement of `mixed` (21)
+	// beats B's TLV 236 one (110): the exported metric is the winning path's,
+	// which is the inaccuracy the fold already accepts everywhere else.
+	if got, want := l2OwnReach(t, s)[mixed], []uint32{21}; !slices.Equal(got, want) {
+		t.Errorf("L2 LSP metrics for %s = %v, want %v; B advertises it in TLV 236, "+
+			"so the area has it in the default topology whoever wins the metric", mixed, got, want)
+	}
+	// Unchanged: the prefix only C advertises, and only under MT #2, still has
+	// no TLV 236 evidence behind it and is still withheld.
+	if m, ok := l2OwnReach(t, s)[mtOnly]; ok {
+		t.Errorf("%s was re-originated into our Level-2 LSP as MT #0 reachability at metric %v; "+
+			"the only advertisement for it was MT #2", mtOnly, m)
+	}
+}
+
+// The downward direction of the same rule.
+func TestAnMT0AdvertisementStillLeaksIntoLevel1WhenAnMT2PathWinsTheMetric(t *testing.T) {
+	var (
+		mixed  = netip.MustParsePrefix("2001:db8:7::/48")
+		mtOnly = netip.MustParsePrefix("2001:db8:2::/48")
+	)
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	injectB(s, now) // a Level-1 neighbour with no reachability of its own
+	injectBL2(s, now, isReach(l1l2PeerC),
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Prefix: mixed, Metric: 100}}})
+	injectLSPAt(s, packet.Level2, l1l2PeerC, []packet.TLV{
+		isReach(l1l2PeerB), mt237(mixed, mtOnly),
+	}, now)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if want := []ownReach{{metric: 21, down: true}}; !slices.Equal(got[mixed], want) {
+		t.Errorf("L1 LSP entries for %s = %v, want %v; B advertises it in TLV 236 at Level 2, "+
+			"so the leak has the evidence RFC 5120 §4 asks for", mixed, got[mixed], want)
+	}
+	if e, ok := got[mtOnly]; ok {
+		t.Errorf("%s was leaked into our Level-1 LSP as MT #0 reachability %v; "+
+			"the only advertisement for it was MT #2", mtOnly, e)
+	}
+}
+
+// The arm-by-arm statement of the same rule, at addRoute itself: the two tests
+// above reach it through computeSPF, which walks a map, so which arm merges
+// two advertisements of one prefix is up to Go's iteration order — an
+// order-dependent merge would pass them some runs and fail them others. Here
+// every case is fed in both orders, and the flag has to come out the same.
+func TestAddRouteMergesTheMTFlagOverEveryAdvertisement(t *testing.T) {
+	p := netip.MustParsePrefix("2001:db8:7::/48")
+	b, c := packet.SystemID{0, 0, 0, 0, 0, 2}, packet.SystemID{0, 0, 0, 0, 0, 3}
+	adv := func(metric uint32, mt, down bool, hop packet.SystemID) route {
+		return route{metric: metric, level: packet.Level1, down: down, mt: mt, nextHops: []packet.SystemID{hop}}
+	}
+	for _, tc := range []struct {
+		name       string
+		x, y       route
+		wantMetric uint32
+		wantMT     bool
+		wantHops   int
+	}{{
+		name: "the MT #2 advertisement wins the metric",
+		x:    adv(110, false, false, b), y: adv(21, true, false, c),
+		wantMetric: 21, wantMT: false, wantHops: 1,
+	}, {
+		name: "the MT #2 advertisement ties the metric and both first hops are kept",
+		x:    adv(110, false, false, b), y: adv(110, true, false, c),
+		wantMetric: 110, wantMT: false, wantHops: 2,
+	}, {
+		name: "the MT #0 advertisement loses on preference class, being leaked down",
+		x:    adv(5, false, true, b), y: adv(99, true, false, c),
+		wantMetric: 99, wantMT: false, wantHops: 1,
+	}, {
+		name: "every advertisement was MT #2",
+		x:    adv(110, true, false, b), y: adv(21, true, false, c),
+		wantMetric: 21, wantMT: true, wantHops: 1,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, order := range [][2]route{{tc.x, tc.y}, {tc.y, tc.x}} {
+				routes := map[netip.Prefix]route{}
+				addRoute(routes, p, order[0])
+				addRoute(routes, p, order[1])
+				got := routes[p]
+				if got.metric != tc.wantMetric || got.mt != tc.wantMT || len(got.nextHops) != tc.wantHops {
+					t.Errorf("metric=%d mt=%v hops=%d, want metric=%d mt=%v hops=%d",
+						got.metric, got.mt, len(got.nextHops), tc.wantMetric, tc.wantMT, tc.wantHops)
+				}
+			}
+		})
+	}
+}

@@ -80,7 +80,25 @@ func (s *IsisServer) updateRIB(now time.Time) {
 				// definition is elected and its metric-type is supported; an
 				// unreachable Flex-Algo prefix is simply not installed, never
 				// routed via algorithm 0.
+				//
+				// This is §5.3's first arm — "there is no valid
+				// Flex-Algorithm Definition available for it" — and it carries
+				// the same MUST as the unsupported-definition arms below, so it
+				// records the same refusal. It is not the rare one: only a
+				// subset of the participants advertise the definition (§5.3),
+				// so every other participant sits here whenever those
+				// advertisers are down or slower to come up, and §5.1 scopes
+				// the FAD sub-TLV to one level, so a definition advertised in
+				// Level 2 alone leaves Level 1 here permanently.
 				if fi == nil || fi.Definition == nil {
+					refused[algoKey{level: level, algo: algo}] = true
+					// Edge-triggered like the arms below, and for one more
+					// reason: an area whose FAD advertiser has not been heard
+					// from yet passes through this branch on the way up.
+					s.algoWarned.warn(algoKey{level: level, algo: algo}, func() {
+						s.logger.Warn("flex-algo has no definition at this level; not computing routes, not participating",
+							"algo", algo, "level", level)
+					})
 					continue
 				}
 				if fi.Definition.MetricType != packet.FlexAlgoMetricIGP {
@@ -376,8 +394,8 @@ func preferenceClass(r route) uint8 {
 	}
 }
 
-// algoKey identifies a (level, Flex-Algo) pair, used to de-dup the
-// unsupported-metric-type warning per level (each level elects independently).
+// algoKey identifies a (level, Flex-Algo) pair, used to de-dup the refusal
+// warning per level (each level elects its definition independently).
 type algoKey struct {
 	level packet.Level
 	algo  uint8
