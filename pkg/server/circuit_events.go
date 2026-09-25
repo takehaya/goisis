@@ -418,6 +418,7 @@ func (s *IsisServer) deleteCircuit(name string, now time.Time) error {
 	s.oversizeWarned.clearFunc(func(k oversizeKey) bool { return k.circuit == name })
 	s.dupSystemIDWarned.clear(name)
 	s.adjLimitWarned.clear(name)
+	s.refusedWarned.clearFunc(func(k refusedKey) bool { return k.circuit == name })
 	// Closing is the whole termination and we must not wait for anything: this
 	// runs on the Serve goroutine, so nothing drains eventCh while it does, and
 	// a wait would deadlock on exactly the busy circuit being removed. The
