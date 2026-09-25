@@ -418,3 +418,41 @@ func TestFlexAlgoLocatorInstalled(t *testing.T) {
 		return false
 	})
 }
+
+// TestFlexAlgoIgnorableDefinitionLosesTheElection: RFC 9350 §6.1-6.3 make a
+// constraint that appears twice in one FAD sub-TLV a sub-TLV "the receiver
+// MUST ignore". An ignored advertisement is not a candidate, so the valid
+// definition behind it wins; refusing the algorithm instead would let any node
+// in the area take it down on every goisis with one priority-255 LSP.
+func TestFlexAlgoIgnorableDefinitionLosesTheElection(t *testing.T) {
+	dup := &packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{
+		&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, MetricType: packet.FlexAlgoMetricIGP, Priority: 255, SubSubTLVs: []packet.FlexAlgoSubSubTLV{
+			agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorRed),
+			agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorBlue),
+		}},
+	}}
+	now := time.Now()
+
+	s := electionServer(t)
+	injectLSP(s, packet.SystemID{0, 0, 0, 0, 0, 9}, []packet.TLV{dup}, now)
+	injectLSP(s, packet.SystemID{0, 0, 0, 0, 0, 2}, []packet.TLV{fadCap(100)}, now)
+	fi := s.flexAlgoState(packet.Level2, now)[128]
+	if fi == nil || fi.Definition == nil {
+		t.Fatal("the ignorable definition took the algorithm down with it")
+	}
+	if fi.Definition.Priority != 100 || fi.Definition.Advertiser != (packet.SystemID{0, 0, 0, 0, 0, 2}) {
+		t.Errorf("winner = prio %d adv %s, want the valid prio-100 definition from ...02",
+			fi.Definition.Priority, fi.Definition.Advertiser)
+	}
+	if _, err := flexAlgoAffinityOf(fi.Definition); err != nil {
+		t.Errorf("the elected definition is not computable: %v", err)
+	}
+
+	// Ignoring it is not accepting it: alone, it elects nothing, and the
+	// no-fallback rule leaves the algorithm without routes.
+	only := electionServer(t)
+	injectLSP(only, packet.SystemID{0, 0, 0, 0, 0, 9}, []packet.TLV{dup}, now)
+	if fi := only.flexAlgoState(packet.Level2, now)[128]; fi != nil && fi.Definition != nil {
+		t.Errorf("a definition RFC 9350 §6 says to ignore was elected anyway: %+v", fi.Definition)
+	}
+}

@@ -119,11 +119,19 @@ func TestFlexAlgoIncludeAllPrunes(t *testing.T) {
 	if !reachesOverLink(t, aslaColors(colorRed|colorBlue), includeBoth) {
 		t.Error("control: a link carrying both required colors must be used")
 	}
-	// A rule reaching into a word the link does not advertise is unmet, not
-	// vacuously met: RFC 7308 sends the minimum length, so a missing word is
-	// all zeros.
+	// A rule naming a color in a word the link does not advertise is unmet,
+	// not vacuously met: RFC 7308 sends the minimum length, so a missing word
+	// is all zeros.
 	if reachesOverLink(t, aslaColors(colorRed), agConstraint(packet.FlexAlgoSubSubIncludeAllAdminGroup, colorRed, colorBlue)) {
 		t.Error("include-all was satisfied by a word the link never advertised")
+	}
+	// The same convention the other way round: a rule word naming no color at
+	// all is met by every link. RFC 9350 §13 step 4 asks whether all the
+	// colors of the rule are set on the link, and a zero word names none —
+	// and RFC 7308's minimum length is a SHOULD, so an advertiser is free to
+	// pad its rule past its significant words.
+	if !reachesOverLink(t, aslaColors(colorRed), agConstraint(packet.FlexAlgoSubSubIncludeAllAdminGroup, colorRed, 0)) {
+		t.Error("include-all pruned a link carrying every color the rule names, because the rule was padded")
 	}
 }
 
@@ -235,8 +243,11 @@ func TestFlexAlgoColorsComeFromASLAOnly(t *testing.T) {
 // TestFlexAlgoAffinityRejectsWhatItCannotEvaluate: a definition is either
 // computed as advertised or not computed at all. Anything goisis cannot prune
 // on — an excluded SRLG, an unknown sub-sub-TLV, a flag bit it does not
-// implement, a malformed admin group, a duplicate RFC 9350 §6 says makes the
-// whole definition ignorable — is an error, never a rule silently left out.
+// implement, a malformed admin group — is an error, never a rule silently left
+// out. A constraint advertised twice is not in that class and is not here: RFC
+// 9350 §6 makes that definition ignorable, which loses it the election
+// (TestFlexAlgoIgnorableDefinitionLosesTheElection) rather than refusing the
+// algorithm.
 func TestFlexAlgoAffinityRejectsWhatItCannotEvaluate(t *testing.T) {
 	tests := []struct {
 		name string
@@ -256,10 +267,6 @@ func TestFlexAlgoAffinityRejectsWhatItCannotEvaluate(t *testing.T) {
 		{"exclude SRLG", []packet.FlexAlgoSubSubTLV{agConstraint(packet.FlexAlgoSubSubExcludeSRLG, 9)}, false},
 		{"an unknown constraint", []packet.FlexAlgoSubSubTLV{{SubSubTLVType: 200, Value: []byte{1}}}, false},
 		{"a misshapen admin group", []packet.FlexAlgoSubSubTLV{{SubSubTLVType: packet.FlexAlgoSubSubExcludeAdminGroup, Value: []byte{1, 2, 3}}}, false},
-		{"a duplicated constraint", []packet.FlexAlgoSubSubTLV{
-			agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorRed),
-			agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorBlue),
-		}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,4 +367,70 @@ func TestCircuitOriginatesAdminGroupASLA(t *testing.T) {
 	if got := flexAlgoLinkColors(subsFor(t, []uint32{colorRed, colorBlue})); !slices.Equal(got, []uint32{colorRed, colorBlue}) {
 		t.Errorf("a peer reads a two-word admin group as %v", got)
 	}
+}
+
+// TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation is the other half of
+// the refusal RFC 9350 §5.3 asks for: a node that stops computing an algorithm
+// "MUST NOT announce participation" in it either. §13 prunes every
+// non-participating node out of the other routers' topology for that
+// algorithm, so the announcement is the one thing steering algorithm-K traffic
+// into a node that holds no algorithm-K forwarding state.
+func TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation(t *testing.T) {
+	fad := func(metric uint8, cons ...packet.FlexAlgoSubSubTLV) packet.SubTLV {
+		return &packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, MetricType: metric, Priority: 100, SubSubTLVs: cons}
+	}
+	announces := func(t *testing.T, def packet.SubTLV) bool {
+		t.Helper()
+		s := mustServer(t,
+			WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+			WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+			WithCircuit(CircuitConfig{Name: "c", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500), Level2: true, Padding: ptrFalse()}),
+			WithFlexAlgo(FlexAlgoConfig{Algo: 128}),
+		)
+		now := time.Now()
+		injectNodeLSP(s, nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0), []packet.TLV{
+			&packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{
+				&packet.SRAlgorithmSubTLV{Algorithms: []uint8{0, 128}}, def,
+			}},
+		}, now)
+		s.regenerateLSPs(false, now)
+		if !slices.Contains(ownSRAlgorithms(t, s), 128) {
+			t.Fatal("control: the node must announce participation before the definition is read")
+		}
+		s.updateRIB(now)
+		s.drainLSPGen(now) // the refusal has to reach the LSP without another event
+		return slices.Contains(ownSRAlgorithms(t, s), 128)
+	}
+	if announces(t, fad(packet.FlexAlgoMetricIGP, agConstraint(packet.FlexAlgoSubSubExcludeSRLG, 9))) {
+		t.Error("an algorithm whose definition excludes an SRLG is still announced as participated")
+	}
+	if announces(t, fad(packet.FlexAlgoMetricTE)) {
+		t.Error("an algorithm whose definition asks for a metric this node cannot measure is still announced as participated")
+	}
+	if !announces(t, fad(packet.FlexAlgoMetricIGP)) {
+		t.Error("control: a definition this node computes must keep its participation announcement")
+	}
+}
+
+// ownSRAlgorithms returns the algorithms this node's own Level-2 LSP announces
+// participation in (RFC 9350 §11.1).
+func ownSRAlgorithms(t *testing.T, s *IsisServer) []uint8 {
+	t.Helper()
+	e := s.dbs[packet.Level2].get(lspID(s.systemID, 0))
+	if e == nil {
+		t.Fatal("no own Level-2 LSP")
+	}
+	var algos []uint8
+	for _, tlv := range e.lsp.TLVs {
+		rc, ok := tlv.(*packet.RouterCapabilityTLV)
+		if !ok {
+			continue
+		}
+		for _, sub := range rc.SubTLVs {
+			if sa, ok := sub.(*packet.SRAlgorithmSubTLV); ok {
+				algos = append(algos, sa.Algorithms...)
+			}
+		}
+	}
+	return algos
 }

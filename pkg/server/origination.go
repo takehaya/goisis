@@ -84,6 +84,22 @@ func (s *IsisServer) drainLSPGen(now time.Time) {
 // nothing at all.
 const maxSubTLVArea = 255 - 11
 
+// maxLinkAttrArea bounds the attrs half of that area: the link attributes
+// appendISReach repeats in front of every entry it produces. They are never
+// split, so whatever they take is gone from the area the neighbor's own
+// sub-TLVs are divided into, and past the point where nothing fits beside them
+// no entry serializes at all — the node then originates no Extended IS
+// Reachability TLV and every peer's two-way check drops it. Half the area
+// takes 28 admin-group words — 896 colors — and still leaves every entry room
+// for three LAN End.X SIDs, which the split then spreads over as many entries
+// as the adjacency needs.
+//
+// CircuitConfig.validate measures the serialized attributes against this, not
+// any one field, so a sub-TLV added beside the admin group is bounded by the
+// same line and the configuration is refused at startup and at SIGHUP rather
+// than taking the node off the topology.
+const maxLinkAttrArea = maxSubTLVArea / 2
+
 // appendISReach appends one Extended IS Reachability entry for a neighbor,
 // splitting it into several entries when its sub-TLVs overflow the sub-TLV
 // area (many locators times many LAN neighbors). RFC 5305 §3 lets a neighbor
@@ -97,10 +113,7 @@ const maxSubTLVArea = 255 - 11
 // split-off entry as an uncolored parallel link and walk it around an exclude
 // rule.
 func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metric uint32, attrs, subs []packet.SubTLV) []packet.ExtendedISReachEntry {
-	fixed := 0
-	for _, a := range attrs {
-		fixed += subTLVLen(a)
-	}
+	fixed := subTLVsLen(attrs)
 	for {
 		e := packet.ExtendedISReachEntry{NeighborID: id, Metric: metric}
 		e.SubTLVs = append(e.SubTLVs, attrs...)
@@ -120,6 +133,15 @@ func appendISReach(entries []packet.ExtendedISReachEntry, id packet.NodeID, metr
 			return entries
 		}
 	}
+}
+
+// subTLVsLen is the sub-TLV area a whole list occupies on the wire.
+func subTLVsLen(subs []packet.SubTLV) int {
+	n := 0
+	for _, sub := range subs {
+		n += subTLVLen(sub)
+	}
+	return n
 }
 
 func subTLVLen(sub packet.SubTLV) int {
@@ -200,7 +222,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 	if s.hostname != "" {
 		fixed = append(fixed, &packet.DynamicHostnameTLV{Hostname: s.hostname})
 	}
-	if caps := s.routerCapabilitySubTLVs(); len(caps) > 0 {
+	if caps := s.routerCapabilitySubTLVs(level); len(caps) > 0 {
 		fixed = append(fixed, &packet.RouterCapabilityTLV{RouterID: s.routerID(), SubTLVs: caps})
 	}
 	// Our non-link-local IPv6 addresses (TLV 232). They belong in fragment 0
@@ -225,7 +247,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 			// previous incarnation cannot be reached through us.
 			if adj := c.p2pAdj; adj != nil && adj.state == AdjUp && adj.levels.has(level) && !adj.suppressed {
 				neighbors = appendISReach(neighbors, nodeID(adj.systemID, 0), c.cfg.Metric,
-					c.aslaSubTLVs(), s.endXSubTLVs(c, adj))
+					c.cfg.aslaSubTLVs(), s.endXSubTLVs(c, adj))
 			}
 			continue
 		}
@@ -239,7 +261,7 @@ func (s *IsisServer) regenerateNodeLSP(level packet.Level, forceRefresh bool, no
 		// RFC 9350 §13 reads the colors of a LAN from the member's edge to the
 		// pseudonode, which is this one; the pseudonode LSP we originate as
 		// DIS carries none.
-		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, c.aslaSubTLVs(), s.lanEndXSubTLVs(c, level))
+		neighbors = appendISReach(neighbors, dis, c.cfg.Metric, c.cfg.aslaSubTLVs(), s.lanEndXSubTLVs(c, level))
 	}
 	variable = append(variable, tlvChunks(neighbors, func(n []packet.ExtendedISReachEntry) packet.TLV {
 		return &packet.ExtendedISReachabilityTLV{Neighbors: n}
@@ -545,7 +567,12 @@ func (s *IsisServer) floodLSP(level packet.Level, id packet.LSPID, except *circu
 // TLV (242): the SRv6 Capabilities sub-TLV when locators are configured, and —
 // when Flex-Algos are configured — the SR-Algorithm sub-TLV (algo 0 plus every
 // participated algorithm) followed by a FAD sub-TLV per advertised definition.
-func (s *IsisServer) routerCapabilitySubTLVs() []packet.SubTLV {
+//
+// An algorithm updateRIB refuses at this level is left out of the SR-Algorithm
+// sub-TLV but keeps its FAD: RFC 9350 §5.3 withdraws the participation of a
+// node that computes nothing for an algorithm, and explicitly lets a
+// non-participating router go on advertising the definition.
+func (s *IsisServer) routerCapabilitySubTLVs(level packet.Level) []packet.SubTLV {
 	var caps []packet.SubTLV
 	if len(s.locators) > 0 {
 		caps = append(caps, &packet.SRv6CapabilitiesSubTLV{})
@@ -553,6 +580,9 @@ func (s *IsisServer) routerCapabilitySubTLVs() []packet.SubTLV {
 	if len(s.flexAlgos) > 0 {
 		algos := []uint8{0} // algorithm 0 (normal SPF) is always supported
 		for _, fa := range s.flexAlgos {
+			if s.flexAlgoRefused[algoKey{level: level, algo: fa.Algo}] {
+				continue
+			}
 			algos = append(algos, fa.Algo)
 		}
 		caps = append(caps, &packet.SRAlgorithmSubTLV{Algorithms: algos})

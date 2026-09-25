@@ -83,3 +83,81 @@ func TestTLVChunksSingleAndEmpty(t *testing.T) {
 		t.Errorf("single entry should yield 1 TLV, got %d", len(got))
 	}
 }
+
+// TestLinkAttributesCannotEmptyTheOwnLSP: a circuit's link attributes are
+// repeated in front of every IS-reachability entry and are never split, so
+// they share one entry's sub-TLV area with the neighbor's own sub-TLVs. Past
+// the point where they leave no room, no entry serializes, the node originates
+// fragment 0 with no Extended IS Reachability TLV at all, and every peer's
+// two-way check drops it — on a configuration file both startup and SIGHUP
+// accept. The ceiling is on the serialized attributes rather than on the admin
+// group, so the next sub-TLV added beside it is measured by the same line.
+func TestLinkAttributesCannotEmptyTheOwnLSP(t *testing.T) {
+	colored := func(words int) []ServerOption {
+		g := make([]uint32, words)
+		for i := range g {
+			g[i] = 0x8000_0001
+		}
+		return []ServerOption{
+			WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
+			WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+			WithCircuit(CircuitConfig{
+				Name: "a", Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500),
+				P2P: true, Level2: true, Padding: ptrFalse(), AdminGroup: g,
+			}),
+		}
+	}
+	// The largest admin group the configuration accepts, found rather than
+	// assumed: the assertions below are about that boundary wherever it sits.
+	const searchCap = 256
+	words := 1
+	for ; words < searchCap && ValidateOptions(colored(words+1)...) == nil; words++ {
+	}
+	if words == searchCap {
+		t.Fatalf("nothing bounds a circuit's link attributes: %d admin-group words still validate", searchCap)
+	}
+	if err := ValidateOptions(colored(words + 1)...); err == nil {
+		t.Errorf("%d admin-group words validate", words+1)
+	}
+	if _, err := NewIsisServer(colored(words + 1)...); err == nil {
+		t.Errorf("%d admin-group words start a server", words+1)
+	}
+
+	// Everything under the ceiling has to work, with the neighbor's own
+	// sub-TLVs beside it: 20 End.X SIDs is what lowers the threshold in the
+	// first place, and appendISReach must still split them into entries that
+	// each fit a TLV.
+	s := mustServer(t, colored(words)...)
+	var endX []packet.SubTLV
+	for i := range 20 {
+		endX = append(endX, &packet.SRv6EndXSIDSubTLV{
+			Behavior: packet.SRv6BehaviorEndX,
+			SID:      netip.AddrFrom16([16]byte{0xfc, 0, 0, 0, 0, 1, 0, byte(i)}),
+		})
+	}
+	id := nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
+	for _, e := range appendISReach(nil, id, 10, s.circuits[0].cfg.aslaSubTLVs(), endX) {
+		if _, err := (&packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{e}}).Serialize(); err != nil {
+			t.Errorf("an entry at the largest accepted admin group (%d words) does not fit a TLV: %v", words, err)
+		}
+	}
+
+	// And the node still advertises the neighbor it holds an adjacency to.
+	var lv levelSet
+	lv.add(packet.Level2)
+	s.circuits[0].p2pAdj = &adjacency{systemID: packet.SystemID{0, 0, 0, 0, 0, 2}, state: AdjUp, levels: lv}
+	s.regenerateLSPs(false, time.Now())
+	e := s.dbs[packet.Level2].get(lspID(s.systemID, 0))
+	if e == nil {
+		t.Fatal("no own Level-2 LSP")
+	}
+	reach := 0
+	for _, tlv := range e.lsp.TLVs {
+		if r, ok := tlv.(*packet.ExtendedISReachabilityTLV); ok {
+			reach += len(r.Neighbors)
+		}
+	}
+	if reach == 0 {
+		t.Errorf("at the largest accepted admin group (%d words) the node advertises no neighbor at all", words)
+	}
+}

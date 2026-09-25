@@ -74,6 +74,9 @@ admin-group ones are pruned on (§13 steps 1, 3 and 4, over the colors
 `WithCircuit`'s `AdminGroup` advertises and a peer's ASLA carries); an SRLG
 exclusion or anything else goisis cannot evaluate makes the algorithm
 uncomputable, so it installs no routes and `Constraints` is where that shows.
+The node also stops announcing participation in that algorithm (RFC 9350
+§5.3), which is what keeps the rest of the area from routing its traffic for
+that algorithm through a node that computes none of it.
 
 ## Route policy
 
