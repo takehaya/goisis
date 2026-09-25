@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -44,5 +45,27 @@ func TestSubTLVDecoderErrorStaysOpaque(t *testing.T) {
 	}
 	if pinned == 0 {
 		t.Fatal("no registered decoder refused the value, so nothing was pinned")
+	}
+}
+
+// TestSubTLVAreaFramingStillFails guarantees the other end of the line
+// decodeSubTLVs draws. A decoder that refuses its value leaves the sub-TLV
+// opaque; length octets that cannot be split into sub-TLVs at all fail, because
+// there are no boundaries left to preserve anything against. Dropping a
+// trailing odd octet instead would lose the byte-exact round trip this package
+// is built on -- quietly, which is the one way it must not go.
+func TestSubTLVAreaFramingStillFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wire []byte
+	}{
+		{"a type octet with no length", []byte{3}},
+		{"a length that overruns the area", []byte{3, 4, 0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := decodeSubTLVs(SubTLVContextISReachability, tc.wire); !errors.Is(err, ErrTruncated) {
+				t.Errorf("decodeSubTLVs(%x) = %v, want ErrTruncated", tc.wire, err)
+			}
+		})
 	}
 }
