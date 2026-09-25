@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/takehaya/goisis/compare/v0.8.0...v0.9.0) (2026-09-25)
+
+
+### Features
+
+* **packet:** tell a refused link attribute from an absent one ([8070b7b](https://github.com/takehaya/goisis/commit/8070b7b7605f558c73b7b8247ef0d3ccf8638320))
+* **watch:** report the restart conditions, and the hold that is left ([72a934a](https://github.com/takehaya/goisis/commit/72a934ae06399ea6f182c605cc253c10b094397f))
+
+
+### Bug Fixes
+
+* **lsdb:** open the resync window where the exchange starts, and bound it ([7c48f18](https://github.com/takehaya/goisis/commit/7c48f18a22a7e4965cff04c74448bc127dc6c55c))
+* **rib:** stop one advertisement speaking for every other ([075bb00](https://github.com/takehaya/goisis/commit/075bb00307ce90db95dcedc879a40e41360db17e))
+* **spf:** prune the link a rule names, not the neighbour behind it ([ac5ae7f](https://github.com/takehaya/goisis/commit/ac5ae7f3b44b3ac0311dfb0f0d24584eef6d5dd7))
+
 ## [0.8.0](https://github.com/takehaya/goisis/compare/v0.7.0...v0.8.0) (2026-09-25)
 
 ### Upgrade notes for operators
