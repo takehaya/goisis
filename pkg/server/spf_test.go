@@ -663,3 +663,42 @@ func TestSPFTakesTheShorterPathFoundAfterANodeIsAlreadyTentative(t *testing.T) {
 		t.Errorf("nextHops = %v, want first-hop P(..02), not the direct link to Y", r.nextHops)
 	}
 }
+
+// spfDuration records what computeSPF reports as the cost of one run.
+type spfDuration struct {
+	NoopMetrics
+	last time.Duration
+}
+
+func (d *spfDuration) SPFRun(_ string, took time.Duration) { d.last = took }
+
+// TestTheSPFStopwatchStaysOnTheWallClock guarantees the one exclusion the
+// clock injection makes: computeSPF times itself with time.Now, not with the
+// server's Clock, because what it reports is the real cost of the run and a
+// test driving the clock by hand would otherwise make the duration metric say
+// zero. Every other instant the SPF reads is the server's — see the `now` the
+// topology is built against.
+//
+// The assertion is only that the duration is non-zero, which is all that
+// separates a stopwatch from a clock a caller controls: under a fake clock
+// nothing advances during the computation, so a stopwatch moved onto it
+// reports exactly zero every time.
+func TestTheSPFStopwatchStaysOnTheWallClock(t *testing.T) {
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	took := &spfDuration{}
+	tr := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xff}, 1500)
+	s := mustServer(t,
+		WithSystemID(self),
+		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
+		WithCircuit(CircuitConfig{Name: "c", Transport: tr, Level2: true, Padding: ptrFalse()}),
+		WithClock(newFakeClock()), WithMetrics(took),
+	)
+	installNode(s, nid(1, 0), false, []edge{{nid(2, 0), 10}}, nil)
+	installNode(s, nid(2, 0), false, []edge{{nid(1, 0), 10}, {nid(3, 0), 10}}, nil)
+	installNode(s, nid(3, 0), false, []edge{{nid(2, 0), 10}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 5)})
+
+	s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, s.clock.Now())
+	if took.last <= 0 {
+		t.Errorf("SPFRun reported %v, want a real duration: the stopwatch is reading a clock the caller drives", took.last)
+	}
+}
