@@ -624,3 +624,42 @@ func TestTheRouteCarriesTheWinningAdvertisementsUpDownBit(t *testing.T) {
 		})
 	}
 }
+
+// TestSPFTakesTheShorterPathFoundAfterANodeIsAlreadyTentative is the one
+// property Dijkstra's tentative set exists to hold: a node reached expensively
+// and then reached cheaply while it is still tentative must be settled at the
+// cheap distance. It is the heap's decrease-key path — the branch that lowers
+// a distance already in the set and moves the entry — and nothing else in the
+// suite reaches it, because every other topology here reaches each node once
+// and BenchmarkComputeSPF's ring is uniformly weighted.
+//
+// It fails loudly rather than slowly: the loop settles a node the moment it is
+// popped, so an entry left in the wrong place is popped early, marked done at
+// a distance that is not the shortest, and the shorter path that arrives
+// afterwards is discarded by the done check. The route keeps a metric and a
+// first hop that are simply wrong, with nothing logged.
+func TestSPFTakesTheShorterPathFoundAfterANodeIsAlreadyTentative(t *testing.T) {
+	// A(.1) is one hop from P(.2) and twenty from Z(.4), but P is one hop from
+	// Z; Y(.3) is ten from A and one from Z. So Y costs 3 through P and Z, not
+	// the 10 the direct link offers -- and both Y and Z are lowered while they
+	// are tentative, Z past Y in the heap.
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	p, y, z := nid(2, 0), nid(3, 0), nid(4, 0)
+	s := spfTestServer(t, self)
+	installNode(s, nid(1, 0), false, []edge{{p, 1}, {y, 10}, {z, 20}}, nil)
+	installNode(s, p, false, []edge{{nid(1, 0), 1}, {z, 1}}, nil)
+	installNode(s, y, false, []edge{{nid(1, 0), 10}, {z, 1}}, []packet.ExtendedIPReachEntry{v4("10.3.0.0/24", 0)})
+	installNode(s, z, false, []edge{{nid(1, 0), 20}, {p, 1}, {y, 1}}, nil)
+
+	routes := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, time.Now())
+	r, ok := routes[netip.MustParsePrefix("10.3.0.0/24")]
+	if !ok {
+		t.Fatalf("no route to 10.3.0.0/24; routes=%v", routes)
+	}
+	if r.metric != 3 { // 1 (A->P) + 1 (P->Z) + 1 (Z->Y)
+		t.Errorf("metric = %d, want 3: the path found after Y was tentative is the shorter one", r.metric)
+	}
+	if len(r.nextHops) != 1 || r.nextHops[0] != (packet.SystemID{0, 0, 0, 0, 0, 2}) {
+		t.Errorf("nextHops = %v, want first-hop P(..02), not the direct link to Y", r.nextHops)
+	}
+}

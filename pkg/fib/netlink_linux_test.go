@@ -725,15 +725,20 @@ func TestLocalSIDRouteAsksTheKernelForTheRightDecapTable(t *testing.T) {
 func checkDecapTables(t *testing.T) {
 	t.Helper()
 	n := &Netlink{}
+	// The action numbers are written out rather than named. They are the wire
+	// format -- enum seg6_local_action in include/uapi/linux/seg6_local.h --
+	// and naming the same constant the code under test names asserts only that
+	// it equals itself. End.DT46 in particular is a constant this package
+	// declares, because the netlink library has no name for it.
 	for _, tc := range []struct {
 		name     string
 		behavior SIDBehavior
 		action   int
 		vrf      bool
 	}{
-		{"End.DT6 takes a plain table", BehaviorEndDT6, nl.SEG6_LOCAL_ACTION_END_DT6, false},
-		{"End.DT4 takes a VRF", BehaviorEndDT4, nl.SEG6_LOCAL_ACTION_END_DT4, true},
-		{"End.DT46 takes a VRF", BehaviorEndDT46, seg6LocalActionEndDT46, true},
+		{"End.DT6 takes a plain table", BehaviorEndDT6, 7, false},
+		{"End.DT4 takes a VRF", BehaviorEndDT4, 8, true},
+		{"End.DT46 takes a VRF", BehaviorEndDT46, 16, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := n.localSIDRoute(LocalSID{
