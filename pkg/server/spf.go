@@ -36,16 +36,28 @@ type spfPrefix struct {
 	// §2, and the SRv6 locator D-flag): the prefix was leaked down from a
 	// higher level and must never travel back up.
 	down bool
+	// mt says the advertisement was a multi-topology one (TLV 237, MT #2):
+	// reachable to route on, never to re-originate. See route.mt.
+	mt bool
 }
 
 // route is one computed prefix reachability: the total metric, the algorithm it
 // was computed under, and the set of first-hop neighbor system IDs (resolved to
 // interfaces/gateways at FIB time).
 type route struct {
-	metric   uint32
-	level    packet.Level
-	algo     uint8
-	down     bool
+	metric uint32
+	level  packet.Level
+	algo   uint8
+	down   bool
+	// mt says the winning advertisement was a multi-topology one. RFC 5120 §4:
+	// "Route leaking between the levels SHOULD only be performed within the
+	// same MT". goisis originates no MT TLV (see buildTopology's MT case and
+	// the Limitations table in docs/design.md), so the only thing it could say
+	// about an MT #2 prefix in the other level's LSP is TLV 236 — "reachable in
+	// the default topology", on evidence that only said "reachable in IPv6
+	// unicast". l1ExportSet and l2LeakSet therefore skip it; the local RIB
+	// still installs it, which is what the fold is for.
+	mt       bool
 	nextHops []packet.SystemID
 }
 
@@ -96,12 +108,12 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 	// the masked prefix the FIB installs all agree (a peer may leave host bits
 	// set in a non-byte-aligned prefix; the startup sweep keys on the masked
 	// kernel prefix and would otherwise reap our own routes).
-	addPrefix := func(n *spfNode, nid packet.NodeID, p netip.Prefix, metric uint32, down bool) {
+	addPrefix := func(n *spfNode, nid packet.NodeID, p netip.Prefix, metric uint32, down, mt bool) {
 		if metric >= maxPathMetric {
 			return
 		}
 		pfx := p.Masked()
-		n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: metric, down: down})
+		n.prefixes = append(n.prefixes, spfPrefix{prefix: pfx, metric: metric, down: down, mt: mt})
 		have[nid][pfx] = true
 	}
 	for id, e := range db.entries {
@@ -138,14 +150,14 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 					continue // plain IP reachability belongs to algorithm 0 only
 				}
 				for _, p := range t.Prefixes {
-					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down, false)
 				}
 			case *packet.IPv6ReachabilityTLV:
 				if algo != 0 {
 					continue
 				}
 				for _, p := range t.Prefixes {
-					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down, false)
 				}
 			case *packet.MTIPv6ReachabilityTLV:
 				// A peer configured for multi-topology IPv6 advertises its IPv6
@@ -173,7 +185,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 					continue
 				}
 				for _, p := range t.Prefixes {
-					addPrefix(n, nid, p.Prefix, p.Metric, p.Down)
+					addPrefix(n, nid, p.Prefix, p.Metric, p.Down, true)
 				}
 			case *packet.SRv6LocatorTLV:
 				for _, loc := range t.Locators {
@@ -363,7 +375,7 @@ func (s *IsisServer) computeSPF(level packet.Level, algo uint8, aff flexAlgoAffi
 			if sum >= maxPathMetric {
 				continue
 			}
-			addRoute(routes, p.prefix, route{metric: uint32(sum), level: level, algo: algo, down: p.down, nextHops: nh})
+			addRoute(routes, p.prefix, route{metric: uint32(sum), level: level, algo: algo, down: p.down, mt: p.mt, nextHops: nh})
 		}
 	}
 
@@ -435,8 +447,9 @@ func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*
 // before metric), within a class a lower total metric wins outright, and an
 // equal one merges the first-hop sets (ECMP).
 //
-// So the route's up/down bit is the WINNING advertisement's own, and every
-// reader of it — l1ExportSet, l2LeakSet, preferenceClass — wants exactly that.
+// So the route's up/down bit — and its multi-topology flag — is the WINNING
+// advertisement's own, and every reader of them — l1ExportSet, l2LeakSet,
+// preferenceClass — wants exactly that.
 // Merging it stickily ("down when any contributing advertisement was") would be
 // the conservative answer to "a leaked copy re-originated without the bit is
 // indistinguishable from independent reachability", but it costs far more than

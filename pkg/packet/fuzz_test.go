@@ -62,6 +62,32 @@ func FuzzDecodeTLVs(f *testing.F) {
 	// MT IPv6 reach (237), MT #2, 2001:db8::/64 — the MT ID field in front of
 	// a TLV 236 entry list is the shape the RFC 5120 decoders add.
 	f.Add(mustHexNoT("ed 10 00 02 00 00 00 0a 00 40 20 01 0d b8 00 00 00 00"))
+	// The rest of RFC 5120: the other three MT TLVs, which the one seed above
+	// does not reach. TLV 229 lists MT #0 and an MT #2 with the O and A bits,
+	// TLV 222 is TLV 22's entry list under MT #2, TLV 235 is TLV 135's.
+	f.Add(mustHexNoT("e5 04 00 00 c0 02"))
+	f.Add(mustHexNoT("de 0d 00 02 00 00 00 00 00 02 00 00 00 0a 00"))
+	f.Add(mustHexNoT("eb 09 00 03 00 00 00 05 10 0a 03"))
+	// Restart TLV (211) at each of the three lengths RFC 5306 §3.2 defines:
+	// the flags alone, the flags plus a Remaining Time, and the full form
+	// ending in the acknowledged System ID.
+	f.Add(mustHexNoT("d3 01 00"))
+	f.Add(mustHexNoT("d3 03 01 00 1e"))
+	f.Add(mustHexNoT("d3 09 06 00 1e 00 00 00 00 00 02"))
+	// A TLV 22 whose two entries between them reach every accepting path of
+	// the link-attribute decoders, in both of the contexts they are registered
+	// in. The first entry nests an ASLA (sub-TLV 16, SABM naming Flex-Algo)
+	// around an RFC 5305 admin group (3) and an RFC 7308 extended one (14);
+	// the second carries an L-flag ASLA with empty bit masks and then the same
+	// two code points as legacy sub-TLVs of the neighbor entry itself. A
+	// campaign will not assemble this by mutation — four length prefixes nest
+	// inside each other — and a seed that only hit the reject paths would now
+	// prove less, since decodeSubTLVs keeps a refused value opaque.
+	f.Add(mustHexNoT("16 3b" +
+		" 00 00 00 00 00 02 00 00 00 0a 15" + // neighbor ..02, metric 10, 21 octets of sub-TLVs
+		" 10 13 01 00 10 03 04 00 00 00 05 0e 08 00 00 00 05 80 00 00 00" + // ASLA{admin group, extended admin group}
+		" 00 00 00 00 00 03 00 00 00 14 10" + // neighbor ..03, metric 20, 16 octets of sub-TLVs
+		" 10 02 80 00 03 04 00 00 00 03 0e 04 00 00 00 03")) // ASLA(L-flag), then both legacy encodings
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		tlvs, err := decodeTLVs(data)

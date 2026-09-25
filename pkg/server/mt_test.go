@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -131,5 +132,74 @@ func TestMTNotOriginated(t *testing.T) {
 	// puts it — so "no MT TLVs" is not "no reachability at all".
 	if v6 == 0 {
 		t.Error("own LSP carries no TLV 236; the origination under test emitted nothing")
+	}
+}
+
+// Multi-topology reachability is folded into the one RIB so that this node can
+// forward to it (TestMTIPv6ReachabilityProducesRoutes), and that is as far as
+// the fold goes: re-originating it is a separate claim, made to a separate
+// level, and goisis has no way to make it honestly. RFC 5120 section 4 says
+// "Route leaking between the levels SHOULD only be performed within the same
+// MT", and goisis originates no MT TLV at all (TestMTNotOriginated) — so the
+// only thing it could put in its Level-2 LSP is TLV 236, which says "reachable
+// in the default topology" on evidence that only ever said "reachable in IPv6
+// unicast".
+func TestAnMTOnlyPrefixIsNotExportedIntoLevel2(t *testing.T) {
+	var (
+		mtOnly  = netip.MustParsePrefix("2001:db8:2::/48") // B advertises it in TLV 237 alone
+		ordinar = netip.MustParsePrefix("2001:db8:1::/48") // and this one in TLV 236
+	)
+	s := l1l2Server(t, true)
+	now := time.Now()
+	injectB(s, now,
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Prefix: ordinar, Metric: 5}}},
+		&packet.MTIPv6ReachabilityTLV{MTID: packet.MTIDIPv6Unicast,
+			Prefixes: []packet.IPv6ReachEntry{{Prefix: mtOnly, Metric: 5}}},
+	)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	// Positive control: the TLV 236 prefix from the same LSP still exports, at
+	// the metric it always did — so "nothing exported" cannot pass this test.
+	if got, want := l2OwnReach(t, s)[ordinar], []uint32{15}; !slices.Equal(got, want) {
+		t.Errorf("L2 LSP metrics for the TLV 236 prefix %s = %v, want %v", ordinar, got, want)
+	}
+	if m, ok := l2OwnReach(t, s)[mtOnly]; ok {
+		t.Errorf("%s was re-originated into our Level-2 LSP as MT #0 reachability at metric %v; "+
+			"the only advertisement for it was MT #2", mtOnly, m)
+	}
+	// The fold itself still stands: the route is in our own RIB.
+	if _, ok := s.rib[mtOnly]; !ok {
+		t.Errorf("%s is not in the RIB; withholding the export must not withhold the route", mtOnly)
+	}
+}
+
+// The downward direction of the same rule: a Level-2 prefix whose only
+// advertisement is MT #2 is not leaked into the Level-1 area as MT #0 either.
+func TestAnMTOnlyPrefixIsNotLeakedIntoLevel1(t *testing.T) {
+	var (
+		mtOnly  = netip.MustParsePrefix("2001:db8:2::/48")
+		ordinar = netip.MustParsePrefix("2001:db8:1::/48")
+	)
+	s := l1l2Server(t, true, WithL2LeakFilter(permitEverything()))
+	now := time.Now()
+	injectB(s, now) // a Level-1 neighbour with no reachability of its own
+	injectBL2(s, now,
+		&packet.IPv6ReachabilityTLV{Prefixes: []packet.IPv6ReachEntry{{Prefix: ordinar, Metric: 5}}},
+		&packet.MTIPv6ReachabilityTLV{MTID: packet.MTIDIPv6Unicast,
+			Prefixes: []packet.IPv6ReachEntry{{Prefix: mtOnly, Metric: 5}}},
+	)
+	s.regenerateLSPs(false, now)
+	s.updateRIB(now)
+	s.drainLSPGen(now)
+
+	got := ownIPReach(t, s, packet.Level1)
+	if want := []ownReach{{metric: 15, down: true}}; !slices.Equal(got[ordinar], want) {
+		t.Errorf("L1 LSP entries for the TLV 236 prefix %s = %v, want %v", ordinar, got[ordinar], want)
+	}
+	if e, ok := got[mtOnly]; ok {
+		t.Errorf("%s was leaked into our Level-1 LSP as MT #0 reachability %v; "+
+			"the only advertisement for it was MT #2", mtOnly, e)
 	}
 }
