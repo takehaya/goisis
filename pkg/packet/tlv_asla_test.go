@@ -74,6 +74,40 @@ func TestASLALegacyFlagAndLegacySubTLVs(t *testing.T) {
 	}
 }
 
+// TestAnASLANamingAUserDefinedApplicationIsNotAnyApplication: RFC 8919 §4.2's
+// zero-length form — the one every application with no advertisement of its
+// own may read — is zero length in *both* bit masks. An ASLA with an empty
+// SABM and a user-defined mask that names something is addressed to that
+// something, and a consumer that reads it as the zero-length form takes link
+// attributes its sender scoped to another application. Flex-Algo is such a
+// consumer (flexAlgoLinkColors), and it colors links.
+func TestAnASLANamingAUserDefinedApplicationIsNotAnyApplication(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		asla *ASLASubTLV
+		want bool
+	}{
+		{"both masks zero length", &ASLASubTLV{}, true},
+		{"a user-defined application named", &ASLASubTLV{UDABM: []byte{0x80}}, false},
+		{"a standard application named", &ASLASubTLV{SABM: []byte{ASLAAppFlexAlgo}}, false},
+		{"both masks name something", &ASLASubTLV{SABM: []byte{ASLAAppRSVPTE}, UDABM: []byte{0x80}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, err := tc.asla.Serialize()
+			if err != nil {
+				t.Fatalf("Serialize: %v", err)
+			}
+			subs, err := decodeSubTLVs(SubTLVContextISReachability, wire)
+			if err != nil {
+				t.Fatalf("decodeSubTLVs: %v", err)
+			}
+			if got := subs[0].(*ASLASubTLV).AnyApp(); got != tc.want {
+				t.Errorf("AnyApp() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestASLAUnparseableStaysOpaque: RFC 8919 §4.2 says an ASLA whose bit-mask
 // length exceeds 8 MUST be ignored. Ignoring it is not rejecting the LSP that
 // carries it, so it decodes to an opaque sub-TLV: invisible to a consumer's

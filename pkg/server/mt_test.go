@@ -93,6 +93,42 @@ func TestMTIPv6ReachabilityIgnoresOtherTopologies(t *testing.T) {
 	}
 }
 
+// TestMTIPv6ReachabilityStaysOutOfAFlexAlgo pins the other half of the fold's
+// guard: MT #2 reachability belongs to algorithm 0, exactly as the plain IP
+// reachability beside it does. RFC 9350 gives a Flexible Algorithm no fallback
+// to plain reachability — its only prefixes are the SRv6 locators advertised
+// for it — so folding an MT peer's prefixes in would install them in every
+// Flex-Algo RIB, reached over a path that algorithm's own constraints may have
+// pruned.
+func TestMTIPv6ReachabilityStaysOutOfAFlexAlgo(t *testing.T) {
+	s := electionServer(t)
+	now := time.Now()
+	self := packet.SystemID{0, 0, 0, 0, 0, 1}
+	peer := packet.SystemID{0, 0, 0, 0, 0, 2}
+	loc := netip.MustParsePrefix("fc00:128:2::/48")
+	mt := netip.MustParsePrefix("2001:db8:2::/48")
+
+	injectLSP(s, self, []packet.TLV{partCap(), isReach(peer)}, now)
+	injectLSP(s, peer, []packet.TLV{partCap(), isReach(self), algoLocTLV(loc),
+		&packet.MTIPv6ReachabilityTLV{MTID: packet.MTIDIPv6Unicast, Prefixes: []packet.IPv6ReachEntry{{Metric: 5, Prefix: mt}}},
+	}, now)
+
+	routes := s.computeSPF(packet.Level2, 128, flexAlgoAffinity{}, now)
+	// The locator is the control: the peer advertising the MT prefix is
+	// reachable under algo 128, so the prefix's absence is the rule at work
+	// and not a run that computed nothing.
+	if _, ok := routes[loc]; !ok {
+		t.Fatalf("algo 128 did not reach %s; the run learned nothing, so the rest proves nothing", loc)
+	}
+	if _, ok := routes[mt]; ok {
+		t.Errorf("%s reached a Flex-Algo RIB, which RFC 9350's no-fallback rule keeps to SRv6 locators", mt)
+	}
+	// And it is still algorithm 0's, so this is a boundary and not a loss.
+	if _, ok := s.computeSPF(packet.Level2, 0, flexAlgoAffinity{}, now)[mt]; !ok {
+		t.Errorf("%s reached neither RIB", mt)
+	}
+}
+
 // TestMTNotOriginated pins the decision not to advertise multi-topology: goisis
 // computes one topology, and RFC 5120 section 7.1 makes the absence of TLV 229
 // mean "MT #0 only", which is exactly true of it. Claiming MT #2 there would
