@@ -85,6 +85,7 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 	// participation (Router Capability TLV 242, fragment 0). A node with no
 	// live fragment 0 is not in the topology.
 	nodes := map[packet.NodeID]*spfNode{}
+	pruned := map[*spfNode]map[packet.NodeID]bool{}   // advertiser -> neighbors an affinity rule pruned
 	have := map[packet.NodeID]map[netip.Prefix]bool{} // plain IP reach, for prefer-prefix-reachability
 	var locs []struct {
 		nid packet.NodeID
@@ -141,6 +142,10 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 					// requires the reverse edge, so the member's own colors
 					// already decide the LAN.
 					if nid.PseudonodeID() == 0 && aff.prunesLink(nb.SubTLVs) {
+						if pruned[n] == nil {
+							pruned[n] = map[packet.NodeID]bool{}
+						}
+						pruned[n][nb.NeighborID] = true
 						continue
 					}
 					n.edges = append(n.edges, spfEdge{to: nb.NeighborID, metric: nb.Metric})
@@ -198,6 +203,21 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 				}
 			}
 		}
+	}
+
+	// A neighbor one entry was pruned on is pruned in every entry advertising
+	// it. RFC 5305 §3 lets a neighbor appear more than once and appendISReach
+	// splits an entry that way when its sub-TLVs overflow, repeating the link
+	// attributes on every piece — which nothing obliges a peer to do. Nothing
+	// on the wire tells a split-off entry from a genuinely parallel link, so
+	// the choice is between crossing a link a rule named and losing a path
+	// that rule would have allowed; refusing the path is the posture updateRIB
+	// already takes for a definition it cannot evaluate, and an exclude rule
+	// is a promise about where traffic will not go. Deciding per advertiser
+	// rather than per entry also keeps the answer out of the fragment
+	// iteration order, which is a map's.
+	for n, byNeighbor := range pruned {
+		n.edges = slices.DeleteFunc(n.edges, func(e spfEdge) bool { return byNeighbor[e.to] })
 	}
 
 	// Pass 3: ISO 10589 7.2.7 computes the paths leaving this system from the

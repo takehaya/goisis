@@ -434,3 +434,87 @@ func ownSRAlgorithms(t *testing.T, s *IsisServer) []uint8 {
 	}
 	return algos
 }
+
+// splitReach advertises one neighbor in two IS-reachability entries, the shape
+// a peer emits when a link's sub-TLVs overflow the sub-TLV area of a single
+// entry: the link attributes on the first entry and nothing on the split-off
+// one. RFC 5305 §3 allows it and appendISReach does it — repeating the
+// attributes on every piece, which nothing obliges a peer to do.
+func splitReach(subs []packet.SubTLV, neighbor packet.NodeID) packet.TLV {
+	return &packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{
+		{NeighborID: neighbor, Metric: 10, SubTLVs: subs},
+		{NeighborID: neighbor, Metric: 10},
+	}}
+}
+
+// TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt: a rule is applied to
+// the neighbor, not to each entry on its own. A peer that colors only the
+// first of a split pair must not hand the algorithm an uncolored way across
+// the same link; read the other way round, an include rule the uncolored half
+// fails takes the neighbor rather than half of it. Nothing on the wire tells a
+// split entry from a parallel link, so the direction that keeps the rule is
+// the one taken.
+func TestFlexAlgoPrunesANeighborInEveryEntryAdvertisingIt(t *testing.T) {
+	reaches := func(t *testing.T, cons packet.FlexAlgoSubSubTLV) bool {
+		t.Helper()
+		s := electionServer(t)
+		now := time.Now()
+		self, peer := nodeID(packet.SystemID{0, 0, 0, 0, 0, 1}, 0), nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
+		injectNodeLSP(s, self, []packet.TLV{partCap(), splitReach(aslaColors(colorRed), peer)}, now)
+		injectNodeLSP(s, peer, []packet.TLV{partCap(), splitReach(aslaColors(colorRed), self), algoLocTLV(affinityLoc)}, now)
+
+		aff, err := flexAlgoAffinityOf(&FlexAlgoDefinition{Algo: 128, Constraints: []packet.FlexAlgoSubSubTLV{cons}})
+		if err != nil {
+			t.Fatalf("flexAlgoAffinityOf: %v", err)
+		}
+		_, ok := s.computeSPF(packet.Level2, 128, aff, now)[affinityLoc]
+		return ok
+	}
+	if reaches(t, agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorRed)) {
+		t.Error("the excluded link was crossed through the uncolored half of a split entry")
+	}
+	if !reaches(t, agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorBlue)) {
+		t.Error("control: a neighbor split across entries must still be reachable when no entry is pruned")
+	}
+	if reaches(t, agConstraint(packet.FlexAlgoSubSubIncludeAnyAdminGroup, colorRed)) {
+		t.Error("include-any kept a neighbor one of whose entries carries no color at all")
+	}
+}
+
+// TestFlexAlgoColorsReadEveryASLAForTheApplication: RFC 8919 §4.2 lets a link
+// carry several ASLA sub-TLVs naming the same application and only asks that
+// they not conflict, so an advertiser may split its attributes across them.
+// The colors are then the union of all of them and do not depend on the order
+// the sub-TLVs arrive in. One L-flag set anywhere in that set sends the whole
+// application to the legacy sub-TLVs, which is the same clause's tie-break for
+// a flag that is not set consistently.
+func TestFlexAlgoColorsReadEveryASLAForTheApplication(t *testing.T) {
+	flexAlgo := func(legacy bool, subs ...packet.SubTLV) packet.SubTLV {
+		return &packet.ASLASubTLV{Legacy: legacy, SABM: []byte{packet.ASLAAppFlexAlgo}, SubSubTLVs: subs}
+	}
+	red := &packet.AdminGroupSubTLV{Groups: []uint32{colorRed}}
+	blue := &packet.AdminGroupSubTLV{Groups: []uint32{colorBlue}}
+	tests := []struct {
+		name string
+		subs []packet.SubTLV
+		want []uint32
+	}{
+		{"colors behind an attribute-free first ASLA", []packet.SubTLV{flexAlgo(false), flexAlgo(false, red)}, []uint32{colorRed}},
+		{"the same pair reversed", []packet.SubTLV{flexAlgo(false, red), flexAlgo(false)}, []uint32{colorRed}},
+		{"one color per ASLA", []packet.SubTLV{flexAlgo(false, red), flexAlgo(false, blue)}, []uint32{colorRed | colorBlue}},
+		{"the L-flag set on the second ASLA only", []packet.SubTLV{flexAlgo(false, red), flexAlgo(true), blue}, []uint32{colorBlue}},
+		{"the same set with the L-flag first", []packet.SubTLV{flexAlgo(true), flexAlgo(false, red), blue}, []uint32{colorBlue}},
+		// The zero-length bit mask serves an application with no
+		// advertisement of its own, and several of them union the same way.
+		{"two ASLAs with no bit mask", []packet.SubTLV{
+			&packet.ASLASubTLV{SubSubTLVs: []packet.SubTLV{red}}, &packet.ASLASubTLV{SubSubTLVs: []packet.SubTLV{blue}},
+		}, []uint32{colorRed | colorBlue}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := flexAlgoLinkColors(tc.subs); !slices.Equal(got, tc.want) {
+				t.Errorf("colors = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
