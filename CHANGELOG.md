@@ -2,6 +2,37 @@
 
 ## [0.8.0](https://github.com/takehaya/goisis/compare/v0.7.0...v0.8.0) (2026-09-25)
 
+### Upgrade notes for operators
+
+* `goisis version`, `goisis global` and `goisis monitor` now write their
+  answer to standard output. They had been going to standard error along with
+  the diagnostics, so `V=$(goisis version)` came back empty and neither of the
+  other two survived a pipe. Only `-o json` was corrected in 0.7.0; this is the
+  rest of it. A script redirecting standard error to work around it needs that
+  redirection removed.
+* `goisis neighbor` has a `RESTART` column, reading `-` on a healthy adjacency
+  and naming the RFC 5306 state otherwise. Anything parsing that table by
+  column position needs updating.
+* A circuit whose `admin-group` does not leave an IS reachability entry room
+  for its own sub-TLVs is refused, at startup and on `SIGHUP`. The ceiling is
+  28 words -- 896 colours -- and past it the node was originating no
+  reachability at all, which every neighbour's two-way check dropped. A
+  configuration over the ceiling has to come down before upgrading.
+* A prefix a peer advertises only for the IPv6 unicast topology is no longer
+  re-originated into the other level. It was going out as ordinary default
+  topology reachability, which is a claim no advertisement had made (RFC 5120
+  section 4). It is still routed on.
+* A link attribute whose length does not match its code point no longer fails
+  the LSP carrying it. Between 0.7.0 and this release such an LSP was dropped
+  whole, and LSPs flood, so one malformed attribute made its originator
+  invisible across the area.
+
+### Compatibility notes for Go embedders
+
+* The `server.Metrics` interface gained `RestartRequest` and
+  `AdjacencySuppressed`. An implementation that embeds `server.NoopMetrics` is
+  unaffected; one that does not needs the methods.
+
 
 ### Features
 
