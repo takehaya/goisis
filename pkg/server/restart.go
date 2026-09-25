@@ -60,6 +60,14 @@ func helloRestartTLV(ack *packet.RestartTLV) packet.TLV {
 // belongs where §3.2.1a puts it, on the request — a restarter that needs
 // longer configures a longer hold before it restarts, which is what "the
 // minimum holding time of the neighbors" is.
+//
+// Why nothing here opens RFC 7987 §3.2's window, which §3.2.1c's exchange is
+// the whole reason to: the window follows the exchange, and the exchange is
+// syncCircuitLevel's — held down to one run per syncHoldDown per circuit and
+// level, and deferred outright when that has not lapsed. A window opened on
+// the request instead would reopen on hellos that started no exchange, at
+// whatever rate a neighbor cares to send them, which is a filter the watched
+// party can switch off. See openSyncWindow.
 func noteRestart(adj *adjacency, rt *packet.RestartTLV, held bool, holding uint16, now time.Time) {
 	adj.restartCapable = rt != nil
 	// §3.2.2: suppression lasts "until an IIH with the SA bit clear has been
@@ -82,15 +90,6 @@ func noteRestart(adj *adjacency, rt *packet.RestartTLV, held bool, holding uint1
 		adj.holding, adj.lastHeard = holding, now
 		return
 	}
-	// §3.2.1c is about to hand this neighbor the whole database, over an
-	// adjacency that never left Up. That is the one event RFC 7987 §3.2's
-	// false-positive filter exists to exclude and the one it cannot see, since
-	// it is worded as the adjacency's own age; see corruptLifetime. Every held
-	// request restarts the window rather than only the first: a restarter asks
-	// on every IIH for as long as its restart takes, and the exchange is still
-	// running for all of them. §3.2.1a's bound is what keeps that finite — the
-	// adjacency expires under it, taking the window with it.
-	adj.syncSince = now
 	if first {
 		adj.lastHeard = now
 	}

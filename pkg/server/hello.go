@@ -374,9 +374,10 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	if prev != AdjUp && newState == AdjUp {
 		// The transition is where the database exchange RFC 7987 §3.2 reads
-		// begins; every later hello re-assigns the same state. The other place
-		// one begins is noteRestart's hold.
-		adj.syncSince = now
+		// begins, and where this adjacency's suppression budget starts over;
+		// every later hello re-assigns the same state. A held restart's
+		// exchange opens the window from syncCircuitLevel instead.
+		adj.resetSyncWindow(now)
 	}
 	adj.state = newState
 	adj.levels.add(level)
@@ -513,8 +514,10 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 	noteRestart(adj, rt, holdForRestart, h.HoldingTime, now)
 	adj.levels = common
 	if prev != AdjUp && newState == AdjUp {
-		// See processLANHello: the transition, not every hello.
-		adj.syncSince = now
+		// See processLANHello: the transition, not every hello. The
+		// syncCircuitLevel below runs on the same instant and so adds nothing
+		// to the budget this resets.
+		adj.resetSyncWindow(now)
 	}
 	adj.state = newState
 	s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)

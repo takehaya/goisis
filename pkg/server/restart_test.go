@@ -818,14 +818,15 @@ var bothCircuitKinds = []struct {
 	{"p2p", true},
 }
 
-// helperLSP is an LSP from a third node, at the sequence number and remaining
-// lifetime a case needs. It arrives over the adjacency under test, which is
-// what RFC 7987 §3.2's filter is about; the originator is nobody in these
-// tests so the update process takes it as an ordinary install.
-func helperLSP(seq uint32, remaining uint16) *packet.LSP {
+// helperLSP is an LSP from a third node at the given sequence number, carrying
+// the one remaining lifetime RFC 7987 §3.2 is about: below ZeroAgeLifetime, so
+// whether it is counted turns entirely on the fourth condition. It arrives over
+// the adjacency under test; the originator is nobody in these tests, so the
+// update process takes it as an ordinary install.
+func helperLSP(seq uint32) *packet.LSP {
 	return &packet.LSP{
 		Level:          packet.Level2,
-		RemainingTime:  remaining,
+		RemainingTime:  zeroAgeSeconds / 2,
 		LSPID:          lspID(packet.SystemID{0, 0, 0, 0, 0, 0x11}, 0),
 		SequenceNumber: seq,
 		ISType:         3,
@@ -853,7 +854,7 @@ func TestAResyncBehindAHeldRestartIsNotACorruptLifetime(t *testing.T) {
 			m := newCountingMetrics()
 			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
 			deliver := func(seq uint32) {
-				h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(seq, 30)), Src: h.snpa})
+				h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(seq)), Src: h.snpa})
 			}
 			h.settle(h.snpa, 30)
 			h.clk.Advance(2 * zeroAgeSeconds * time.Second)
@@ -881,6 +882,110 @@ func TestAResyncBehindAHeldRestartIsNotACorruptLifetime(t *testing.T) {
 			deliver(3)
 			if got := m.count("lsp_lifetime_corrupt", "c"); got != 2 {
 				t.Errorf("corrupt lifetimes = %d, want 2: the exclusion never ended, so the counter is off for this neighbour for good", got)
+			}
+		})
+	}
+}
+
+// TestAHeldRestartLongerThanZeroAgeLifetimeKeepsItsWindowOpen guarantees the
+// half of RFC 7987 §3.2's window a single request cannot show. A restarter
+// asks on every IIH until its restart is finished, and §3.2.1c's exchange runs
+// for as long as it keeps asking, so a window that only the first request
+// opened closes in the middle of the bulk delivery it exists to exclude — and
+// only for restarts that outlive ZeroAgeLifetime, which is to say the real
+// ones.
+func TestAHeldRestartLongerThanZeroAgeLifetimeKeepsItsWindowOpen(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 600)
+			h.request(h.snpa, 600)
+			// The restart runs on, IIH by IIH, well past ZeroAgeLifetime.
+			for range 4 {
+				h.clk.Advance(20 * time.Second)
+				h.request(h.snpa, 600)
+			}
+			h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(1)), Src: h.snpa})
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+				t.Errorf("corrupt lifetimes = %d, want 0: the window closed while the restart was still running", got)
+			}
+		})
+	}
+}
+
+// TestTheResyncWindowFollowsTheExchangeAndNotTheRequest guarantees which event
+// reopens RFC 7987 §3.2's window. syncCircuitLevel holds itself down to one run
+// per syncHoldDown per circuit and level, so a request inside that hold-down
+// hands the neighbour nothing and must move nothing; the run it is deferred
+// into, which housekeeping picks up, is what reopens the window. Opening it on
+// the request instead reopens it at whatever rate a neighbour sends hellos,
+// which is what made the filter the watched party's to switch off.
+func TestTheResyncWindowFollowsTheExchangeAndNotTheRequest(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 600)
+			h.request(h.snpa, 600) // arms the hold-down
+			opened := h.adj().syncSince
+
+			h.clk.Advance(syncHoldDown / 2)
+			h.request(h.snpa, 600)
+			if got := h.adj().syncSince; !got.Equal(opened) {
+				t.Errorf("a request the hold-down deferred moved the window to %v, want it left at %v", got, opened)
+			}
+
+			h.clk.Advance(syncHoldDown)
+			h.s.floodTransmit(h.clk.Now())
+			if got := h.adj().syncSince; !got.Equal(h.clk.Now()) {
+				t.Errorf("the deferred exchange ran without reopening the window: syncSince %v, want %v", got, h.clk.Now())
+			}
+		})
+	}
+}
+
+// TestANeighbourCannotHoldTheResyncWindowOpenForEver guarantees the property
+// RFC 7987 §3.2 gets from wording its fourth condition as the adjacency's own
+// age, and that reading the exchange instead would otherwise give away: the
+// neighbour cannot move it. A peer interleaving ordinary hellos keeps its
+// adjacency alive by the normal path — §3.2.1a bounds lastHeard, and its own
+// "an IIH with the RR bit reset will clear the Restart mode state" re-arms the
+// next request — so one extra packet per ZeroAgeLifetime would otherwise buy
+// it permanent silence on the counter that watches its own LSPs.
+// maxSyncSuppression is the bound, spent against an Up episode the neighbour
+// cannot restart without first letting the adjacency go Down.
+func TestANeighbourCannotHoldTheResyncWindowOpenForEver(t *testing.T) {
+	budgeted := int(maxSyncSuppression / (zeroAgeSeconds * time.Second))
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			var seq uint32
+			// One restart request per ZeroAgeLifetime, with an ordinary hello
+			// half way between: the whole cost of holding the filter open.
+			hold := func() {
+				seq++
+				h.clk.Advance(zeroAgeSeconds * time.Second / 2)
+				h.hello(h.snpa, 65535, &packet.RestartTLV{})
+				h.clk.Advance(zeroAgeSeconds * time.Second / 2)
+				h.request(h.snpa, 65535)
+				h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(seq)), Src: h.snpa})
+			}
+
+			h.settle(h.snpa, 65535)
+			for range budgeted {
+				hold()
+			}
+			// The control: inside the budget the filter is quiet, so a fix
+			// that simply stopped suppressing would fail here.
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+				t.Fatalf("corrupt lifetimes inside the budget = %d, want 0", got)
+			}
+			for range budgeted {
+				hold()
+			}
+			if got := m.count("lsp_lifetime_corrupt", "c"); got == 0 {
+				t.Error("the filter is still suppressed past maxSyncSuppression: a neighbour holds it open for as long as it keeps asking")
 			}
 		})
 	}
@@ -1018,6 +1123,44 @@ func TestRestartStateIsLoggedOnItsEdgesNotOnEveryHello(t *testing.T) {
 			h.settle(h.snpa, 30)
 			if n := lines("neighbor adjacency suppression changed"); n != 2 {
 				t.Errorf("%d suppression lines after SA cleared, want 2: the end of it is not logged", n)
+			}
+		})
+	}
+}
+
+// TestAQuietAdjacencyPaysOnlyForTheWindowItOpens guarantees that a reopening
+// costs the budget the time it actually suppresses, not the time since the
+// last one. The window a single exchange opens is one ZeroAgeLifetime long, so
+// charging the whole gap would bill an adjacency that has been quiet for hours
+// as though it had been suppressing for hours -- and the first genuine restart
+// of the day would exhaust a budget meant to cover about ten of them.
+func TestAQuietAdjacencyPaysOnlyForTheWindowItOpens(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 65535)
+
+			// Long enough that an uncapped charge would spend the whole
+			// budget on this one exchange, and quiet throughout: nothing is
+			// being suppressed while the window is shut.
+			h.clk.Advance(2 * maxSyncSuppression)
+			h.request(h.snpa, 65535)
+
+			// The restart this neighbour is actually making, well inside what
+			// the budget is sized for.
+			h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(1)), Src: h.snpa})
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+				t.Fatalf("corrupt lifetimes = %d, want 0: the resync this request asked for was counted", got)
+			}
+			// And the budget is still there for the next one, which has to
+			// come after that window has closed -- otherwise it is still
+			// covered by the first and says nothing about what was charged.
+			h.clk.Advance(3 * zeroAgeSeconds * time.Second / 2)
+			h.request(h.snpa, 65535)
+			h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(2)), Src: h.snpa})
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+				t.Errorf("corrupt lifetimes = %d, want 0: one quiet gap spent the budget the next restart needed", got)
 			}
 		})
 	}

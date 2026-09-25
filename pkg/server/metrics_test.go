@@ -145,6 +145,7 @@ func addUpAdjacency(c *circuit, now time.Time) *adjacency {
 		state:     AdjUp,
 		holding:   30,
 		lastHeard: now,
+		upSince:   now,
 		syncSince: now,
 	}
 	adj.levels.add(packet.Level2)
@@ -671,6 +672,24 @@ func TestACorruptLifetimeIsReportedOnlyWhenTheDatabaseExchangeIsOldEnough(t *tes
 			s.handleRx(c, datalink.Frame{PDU: serialize(t, peerLSP(tc.remaining)), Src: metricsPeerSNPA})
 			if got := m.count("lsp_lifetime_corrupt", "c"); got != tc.want {
 				t.Errorf("corrupt lifetimes on c = %d, want %d", got, tc.want)
+			}
+		})
+	}
+
+	// The cases above hand the field its value. This one forms the adjacency
+	// the way a real one is formed, which is the only thing that connects the
+	// writer to the reader: the whole-database exchange a new adjacency
+	// triggers is the arrival §3.2's fourth condition exists to exclude, and
+	// with the field left at its zero value it is instead the first thing
+	// counted, on every adjacency that comes up.
+	for _, tc := range bothCircuitKinds {
+		t.Run("an adjacency formed through a hello is resyncing, not corrupt, "+tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 30)
+			h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(1)), Src: h.snpa})
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
+				t.Errorf("corrupt lifetimes on a fresh adjacency = %d, want 0: its own exchange was counted", got)
 			}
 		})
 	}

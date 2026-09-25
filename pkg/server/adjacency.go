@@ -43,12 +43,28 @@ type adjacency struct {
 	lanID     packet.NodeID // neighbor's advertised LAN ID (broadcast)
 	holding   uint16        // neighbor's advertised holding time (seconds)
 	lastHeard time.Time
-	// syncSince is when the LSP database exchange currently running over this
+	// syncSince is when the most recent LSP database exchange over this
 	// adjacency began, and is read only while it is Up — the update process
 	// reaches it through adjacencyGate, which admits nothing else. RFC 7987
 	// §3.2 gates its corrupt-lifetime report on it; see corruptLifetime for
 	// why that is this field and not the instant the adjacency came Up.
+	//
+	// It is never cleared. Nothing marks an exchange finished, and
+	// corruptLifetime reads the field's age as the proxy for that exchange
+	// having finished, so on a settled adjacency it is hours old and no
+	// exchange is running. A clear-on-complete would break the filter: at the
+	// zero value every arriving LSP would read as an exchange that finished in
+	// 1 AD, which is the false positive the field exists to stop.
+	//
+	// upSince and syncSpent are what bound how much of the report a neighbor
+	// can suppress. upSince is the transition into Up — the one instant of the
+	// three a neighbor cannot move, which is what makes it the thing a budget
+	// can be measured against — and syncSpent is how much suppression the
+	// exchanges since then have added, against maxSyncSuppression. See
+	// openSyncWindow.
 	syncSince time.Time
+	upSince   time.Time
+	syncSpent time.Duration
 
 	// Graceful restart (RFC 5306), all three fields fed by noteRestart from
 	// every IIH that carries a Restart TLV.

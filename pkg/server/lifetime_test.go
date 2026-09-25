@@ -349,32 +349,43 @@ func TestReceivedPurgeKeepsZeroLifetime(t *testing.T) {
 }
 
 // TestAnAdjacencyRemembersWhenItsDatabaseExchangeBegan pins the clock RFC
-// 7987 §3.2's false-positive filter reads. It starts on the transition into
-// Up — the exchange an ordinary adjacency begins with — and must not restart
-// on the hellos that follow: a filter re-armed by every hello would read an
-// adjacency of any age as too young to judge, and the event would never be
-// raised at all.
+// 7987 §3.2's false-positive filter reads, on both circuit kinds. Only the LAN
+// writer had a witness, and with the field left at its zero value the fourth
+// condition is satisfied on the very first LSP of the exchange a new adjacency
+// begins with — so the alert docs/configuration.md publishes on a baseline of
+// zero would fire on every adjacency that comes up.
+//
+// The window opens on the transition into Up, together with the Up episode
+// maxSyncSuppression is measured over, and must not restart on the hellos that
+// follow: a filter re-armed by every hello would read an adjacency of any age
+// as too young to judge, and the event would never be raised at all.
 func TestAnAdjacencyRemembersWhenItsDatabaseExchangeBegan(t *testing.T) {
-	s, c, local := disServer(t, nil)
-	id, snpa := packet.SystemID{0, 0, 0, 0, 0, 0x10}, packet.SNPA{0, 0, 0, 0, 0, 0x10}
-	other := packet.SNPA{0, 0, 0, 0, 0, 0xee}
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
 
-	// A hello echoing somebody else's SNPA reaches Init, not Up.
-	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, other))
-	adj := c.adjs[packet.Level2][id]
-	if adj == nil || adj.state != AdjInit || !adj.syncSince.IsZero() {
-		t.Fatalf("adjacency in Init: %+v, want no syncSince yet", adj)
-	}
+			// An IIH that echoes nobody reaches Init, not Up, on either kind.
+			h.request(h.snpa, 30)
+			if adj := h.adj(); adj == nil || adj.state != AdjInit || !adj.syncSince.IsZero() {
+				t.Fatalf("adjacency in Init: %+v, want no syncSince yet", adj)
+			}
 
-	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
-	if adj.state != AdjUp || adj.syncSince.IsZero() {
-		t.Fatalf("adjacency Up with syncSince %v, want it set", adj.syncSince)
-	}
+			h.clk.Advance(time.Second)
+			up := h.clk.Now()
+			h.settle(h.snpa, 30)
+			adj := h.adj()
+			if adj.state != AdjUp || !adj.syncSince.Equal(up) || !adj.upSince.Equal(up) {
+				t.Fatalf("adjacency Up with syncSince %v and upSince %v, want both at %v",
+					adj.syncSince, adj.upSince, up)
+			}
 
-	came := time.Now().Add(-time.Hour)
-	adj.syncSince = came
-	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
-	if !adj.syncSince.Equal(came) {
-		t.Errorf("a refreshing hello moved syncSince to %v, want it left at %v", adj.syncSince, came)
+			came := up.Add(-time.Hour)
+			adj.syncSince = came
+			h.clk.Advance(time.Second)
+			h.settle(h.snpa, 30)
+			if !adj.syncSince.Equal(came) {
+				t.Errorf("a refreshing hello moved syncSince to %v, want it left at %v", adj.syncSince, came)
+			}
+		})
 	}
 }
