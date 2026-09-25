@@ -98,6 +98,14 @@ message Adjacency {
   // here: a suppressed adjacency is counted as Up and carries nothing.
   bool restarting = 9;
   bool suppressed = 10;
+  // holding_remaining is the whole seconds left before this adjacency expires
+  // — RFC 5306 3.2.1b's Remaining Time, the number this node acknowledges to a
+  // restarting neighbour. holding_time is what the neighbour asked for and
+  // keeps its meaning; on a settled adjacency every hello refreshes the two
+  // into agreement, and during a held restart 3.2.1a withholds that refresh,
+  // so they diverge by up to the whole holding time with nothing else to say
+  // so.
+  uint32 holding_remaining = 11;
 }
 
 // Lsp is one entry in the link-state database.
@@ -301,7 +309,11 @@ message WatchEventResponse {
   }
 }
 
-// AdjacencyEvent reports an adjacency state change.
+// AdjacencyEvent reports a change to an adjacency: its state, or — since the
+// point of RFC 5306's helper is that a held adjacency never leaves Up — either
+// of the restarting and suppressed conditions that state cannot express. One
+// event per change and not per hello, so a restart that spans hundreds of IIHs
+// costs a handful of events.
 message AdjacencyEvent {
   Adjacency adjacency = 1;
 }

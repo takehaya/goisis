@@ -714,9 +714,10 @@ func (s *IsisServer) listLSDB(ctx context.Context, detail bool) ([]LSPInfo, erro
 func (s *IsisServer) ListAdjacencies(ctx context.Context) ([]AdjacencyInfo, error) {
 	var out []AdjacencyInfo
 	err := s.mgmtOperation(ctx, func() error {
-		hostnames := s.hostnameIndex(s.clock.Now())
+		now := s.clock.Now()
+		hostnames := s.hostnameIndex(now)
 		for _, c := range s.circuits {
-			for _, a := range c.adjacencyInfos() {
+			for _, a := range c.adjacencyInfos(now) {
 				a.Hostname = hostnames[a.SystemID]
 				out = append(out, a)
 			}

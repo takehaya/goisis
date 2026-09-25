@@ -331,10 +331,18 @@ type Adjacency struct {
 	// for it to stay out of this node's LSPs and out of SPF (3.2.2). Both read
 	// Up in state, which is the point of the feature and the reason they are
 	// here: a suppressed adjacency is counted as Up and carries nothing.
-	Restarting    bool `protobuf:"varint,9,opt,name=restarting,proto3" json:"restarting,omitempty"`
-	Suppressed    bool `protobuf:"varint,10,opt,name=suppressed,proto3" json:"suppressed,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Restarting bool `protobuf:"varint,9,opt,name=restarting,proto3" json:"restarting,omitempty"`
+	Suppressed bool `protobuf:"varint,10,opt,name=suppressed,proto3" json:"suppressed,omitempty"`
+	// holding_remaining is the whole seconds left before this adjacency expires
+	// — RFC 5306 3.2.1b's Remaining Time, the number this node acknowledges to a
+	// restarting neighbour. holding_time is what the neighbour asked for and
+	// keeps its meaning; on a settled adjacency every hello refreshes the two
+	// into agreement, and during a held restart 3.2.1a withholds that refresh,
+	// so they diverge by up to the whole holding time with nothing else to say
+	// so.
+	HoldingRemaining uint32 `protobuf:"varint,11,opt,name=holding_remaining,json=holdingRemaining,proto3" json:"holding_remaining,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Adjacency) Reset() {
@@ -435,6 +443,13 @@ func (x *Adjacency) GetSuppressed() bool {
 		return x.Suppressed
 	}
 	return false
+}
+
+func (x *Adjacency) GetHoldingRemaining() uint32 {
+	if x != nil {
+		return x.HoldingRemaining
+	}
+	return 0
 }
 
 // Lsp is one entry in the link-state database.
@@ -2313,7 +2328,11 @@ func (*WatchEventResponse_Adjacency) isWatchEventResponse_Event() {}
 
 func (*WatchEventResponse_Route) isWatchEventResponse_Event() {}
 
-// AdjacencyEvent reports an adjacency state change.
+// AdjacencyEvent reports a change to an adjacency: its state, or — since the
+// point of RFC 5306's helper is that a held adjacency never leaves Up — either
+// of the restarting and suppressed conditions that state cannot express. One
+// event per change and not per hello, so a restart that spans hundreds of IIHs
+// costs a handful of events.
 type AdjacencyEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Adjacency     *Adjacency             `protobuf:"bytes,1,opt,name=adjacency,proto3" json:"adjacency,omitempty"`
@@ -2431,7 +2450,7 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x06level2\x18\x04 \x01(\bR\x06level2\x12\x1a\n" +
 	"\bpriority\x18\x05 \x01(\rR\bpriority\x12\x16\n" +
 	"\x06metric\x18\x06 \x01(\rR\x06metric\x12\x17\n" +
-	"\alink_up\x18\a \x01(\bR\x06linkUp\"\xb3\x02\n" +
+	"\alink_up\x18\a \x01(\bR\x06linkUp\"\xe0\x02\n" +
 	"\tAdjacency\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12&\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x1b\n" +
@@ -2447,7 +2466,8 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\n" +
 	"suppressed\x18\n" +
 	" \x01(\bR\n" +
-	"suppressed\"\xfa\x01\n" +
+	"suppressed\x12+\n" +
+	"\x11holding_remaining\x18\v \x01(\rR\x10holdingRemaining\"\xfa\x01\n" +
 	"\x03Lsp\x12&\n" +
 	"\x05level\x18\x01 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x15\n" +
 	"\x06lsp_id\x18\x02 \x01(\tR\x05lspId\x12'\n" +

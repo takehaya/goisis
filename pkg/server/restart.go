@@ -111,7 +111,12 @@ func noteRestart(adj *adjacency, rt *packet.RestartTLV, held bool, holding uint1
 // the previous value at the call site, which is what makes the edge free —
 // there is no separate record to keep, and none to retire when the adjacency
 // goes away.
-func (s *IsisServer) reportRestart(c *circuit, adj *adjacency, held, wasRestarting, wasSuppressed bool) {
+//
+// It returns whether either condition moved, which is the same edge the watch
+// stream is emitted on — the caller owns that, because an adjacency whose
+// state moved on the same IIH has already reported the new values and must not
+// report them twice. See the emit in each hello handler.
+func (s *IsisServer) reportRestart(c *circuit, adj *adjacency, held, wasRestarting, wasSuppressed bool) bool {
 	if adj.restartMode {
 		// Every request, not just the first: a neighbor asking over and over
 		// is what §3.2.1a bounds, and the rate is the only sign of it.
@@ -129,6 +134,7 @@ func (s *IsisServer) reportRestart(c *circuit, adj *adjacency, held, wasRestarti
 		s.logger.Info("neighbor adjacency suppression changed", "circuit", c.cfg.Name,
 			"neighbor", adj.systemID, "levels", adj.levels, "suppressed", adj.suppressed)
 	}
+	return adj.restartMode != wasRestarting || adj.suppressed != wasSuppressed
 }
 
 // Outcomes reported through Metrics.RestartRequest.
@@ -168,7 +174,9 @@ func restartAck(c *circuit, adj *adjacency, now time.Time) *packet.RestartTLV {
 // holding time the neighbor asked for.
 //
 // It is computed from the two fields expired() reads, so it stays true as
-// §3.2.1a withholds the refresh from repeated restart requests. The restarter
+// §3.2.1a withholds the refresh from repeated restart requests. infoFor
+// reports the same seconds to an operator for the same reason: during a hold
+// the advertised holding time says nothing about when the adjacency dies. The restarter
 // sets T3 to the minimum of what its neighbors report and declares failure
 // when T3 runs out, so a configured holding time here would promise it an
 // adjacency that is in fact most of the way to expiry. Seconds are truncated

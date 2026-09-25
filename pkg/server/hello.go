@@ -381,7 +381,7 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 	}
 	adj.state = newState
 	adj.levels.add(level)
-	s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
+	restartEdge := s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 
@@ -395,7 +395,13 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 		s.logger.Info("adjacency state change", "circuit", c.cfg.Name, "level", level,
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(level), newState.String())
-		s.emitAdjacency(c.infoFor(adj, level))
+		s.emitAdjacency(c.infoFor(adj, level, now))
+	} else if restartEdge {
+		// RFC 5306's two conditions are the one thing an observer can be told
+		// about an adjacency that deliberately never leaves Up, so the stream
+		// reports them where it would report a transition — see reportRestart
+		// for why this arm is the caller's and not its.
+		s.emitAdjacency(c.infoFor(adj, level, now))
 	}
 	// A triggered hello when the state moved, so the neighbor sees our echo
 	// promptly (it speeds the three-way handshake); and §3.2.1b's "immediately"
@@ -520,7 +526,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 		adj.resetSyncWindow(now)
 	}
 	adj.state = newState
-	s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
+	restartEdge := s.reportRestart(c, adj, holdForRestart, wasRestarting, wasSuppressed)
 	addrsChanged := adj.setNeighborAddrs(ipv4AddrsOf(h.TLVs), ipv6AddrsOf(h.TLVs))
 	adj.nlpids = nlpidsOf(h.TLVs)
 	if three != nil && three.HasLocal {
@@ -536,7 +542,7 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		for _, l := range adj.levels.levels() {
 			s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(l), newState.String())
-			s.emitAdjacency(c.infoFor(adj, l))
+			s.emitAdjacency(c.infoFor(adj, l, now))
 		}
 		// Levels that dropped while the adjacency stayed Up must be reported
 		// down so consumers and the RIB stop using them.
@@ -548,6 +554,12 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 			}
 		}
 		s.requestLSPRegen()
+	} else if restartEdge {
+		// See processLANHello: the restart conditions are reported where a
+		// transition would be, once per level rather than once per hello.
+		for _, l := range adj.levels.levels() {
+			s.emitAdjacency(c.infoFor(adj, l, now))
+		}
 	}
 	// §3.2.1b, and its "Otherwise" clause: every IIH with RR set is answered.
 	// §3.2.1b also wants the IIH updated to reflect the new values the

@@ -102,10 +102,11 @@ func (s *IsisServer) snapshotState() ([]AdjacencyInfo, []RouteInfo) {
 	// the same content as ListAdjacencies. Live events do not: the index is
 	// O(LSDB) and an adjacency change is not worth rebuilding it (see the
 	// Hostname field's doc).
-	hostnames := s.hostnameIndex(s.clock.Now())
+	now := s.clock.Now()
+	hostnames := s.hostnameIndex(now)
 	var adjs []AdjacencyInfo
 	for _, c := range s.circuits {
-		adjs = append(adjs, c.adjacencyInfos()...)
+		adjs = append(adjs, c.adjacencyInfos(now)...)
 	}
 	for i := range adjs {
 		adjs[i].Hostname = hostnames[adjs[i].SystemID]
@@ -184,7 +185,7 @@ func (s *IsisServer) emitAdjacencyDown(c *circuit, adj *adjacency, level packet.
 	if len(s.watchers) == 0 {
 		return
 	}
-	info := c.infoFor(adj, level)
+	info := c.infoFor(adj, level, s.clock.Now())
 	info.State = AdjDown
 	s.emit(Event{Adjacency: &info})
 }

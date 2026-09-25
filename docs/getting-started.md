@@ -90,8 +90,8 @@ The `goisis` CLI talks to the daemon in the same namespace.
 
 ```console
 $ sudo ip netns exec ns1 goisis neighbor
-SYSTEM-ID       HOSTNAME  INTERFACE  LEVEL  STATE  SNPA            HOLD
-0000.0000.0002  r2        veth1      L2     Up     b209.c4e9.0791  30
+SYSTEM-ID       HOSTNAME  INTERFACE  LEVEL  STATE  SNPA            HOLD  REMAIN  RESTART
+0000.0000.0002  r2        veth1      L2     Up     b209.c4e9.0791  30    27      -
 
 $ sudo ip netns exec ns1 goisis database
 LSP-ID                HOSTNAME  LEVEL  SEQ         LIFETIME  CHECKSUM  OWN
