@@ -80,7 +80,18 @@ func registerSubTLVDecoder(ctx SubTLVContext, t uint8, dec subTLVDecoder) {
 	m[t] = dec
 }
 
-// decodeSubTLVs decodes a sub-TLV area against the registry for ctx.
+// decodeSubTLVs decodes a sub-TLV area against the registry for ctx. A
+// decoder that rejects its value does not fail the area, and so does not fail
+// the PDU: RFC 5305 §2 has a reader skip a sub-TLV it cannot use, and RFC 8919
+// §4.2 says the same of a whole ASLA whose bit-mask lengths are out of range.
+// Skipping is not rejecting, and LSPs flood, so failing here over one
+// attribute would take its originator off every node in the area. What a
+// decoder refuses is preserved opaquely instead, exactly as an unregistered
+// code point is: byte-exact on the way back out and invisible to every
+// consumer's type switch, which is the outcome those clauses ask for.
+//
+// The length octets themselves still fail: an area that cannot be split into
+// sub-TLVs at all has no boundaries to preserve anything against.
 func decodeSubTLVs(ctx SubTLVContext, b []byte) ([]SubTLV, error) {
 	var out []SubTLV
 	for len(b) > 0 {
@@ -92,19 +103,21 @@ func decodeSubTLVs(ctx SubTLVContext, b []byte) ([]SubTLV, error) {
 		if len(b) < 2+length {
 			return nil, fmt.Errorf("sub-TLV %d value (%d octets): %w", typ, length, ErrTruncated)
 		}
-		value := b[2 : 2+length]
-		if dec, ok := subTLVDecoders[ctx][typ]; ok {
-			sub, err := dec(value)
-			if err != nil {
-				return nil, fmt.Errorf("sub-TLV %d: %w", typ, err)
-			}
-			out = append(out, sub)
-		} else {
-			out = append(out, &UnknownSubTLV{SubTLVType: typ, Value: slices.Clone(value)})
-		}
+		out = append(out, decodeSubTLV(ctx, typ, b[2:2+length]))
 		b = b[2+length:]
 	}
 	return out, nil
+}
+
+// decodeSubTLV decodes one sub-TLV, falling back to the opaque form both when
+// the code point is unregistered and when its decoder refuses the value.
+func decodeSubTLV(ctx SubTLVContext, typ uint8, value []byte) SubTLV {
+	if dec, ok := subTLVDecoders[ctx][typ]; ok {
+		if sub, err := dec(value); err == nil {
+			return sub
+		}
+	}
+	return &UnknownSubTLV{SubTLVType: typ, Value: slices.Clone(value)}
 }
 
 // serializeSubTLVs renders a sub-TLV area in order.
