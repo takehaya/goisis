@@ -124,3 +124,70 @@ func TestAdminGroupLengthRules(t *testing.T) {
 		t.Errorf("9-octet SABM: err = %v, want ErrTooLong", err)
 	}
 }
+
+// TestMalformedAdminGroupStaysOpaque: a link attribute whose length does not
+// match its code point is ignored, not fatal. RFC 5305 §2 has a reader skip a
+// sub-TLV it cannot use, and RFC 8919 §4.2 gives these same octets the same
+// meaning one level down inside an ASLA, so both positions must agree. LSPs
+// flood: failing the PDU over one attribute would take its originator off
+// every goisis in the area, not just off its neighbour.
+func TestMalformedAdminGroupStaysOpaque(t *testing.T) {
+	// The attribute beside the malformed one is the control: containment must
+	// not degrade into never parsing anything.
+	const goodEAG = "0e 08 00000005 80000000"
+	positions := map[string]struct {
+		wrap  func(attrs []byte) []byte
+		attrs func(t *testing.T, subs []SubTLV) []SubTLV
+	}{
+		"directly under TLV 22": {
+			wrap:  func(attrs []byte) []byte { return attrs },
+			attrs: func(_ *testing.T, subs []SubTLV) []SubTLV { return subs },
+		},
+		"nested in an ASLA": {
+			wrap: func(attrs []byte) []byte {
+				asla := []byte{subTLVASLA, byte(3 + len(attrs)), 0x01, 0x00, ASLAAppFlexAlgo}
+				return append(asla, attrs...)
+			},
+			attrs: func(t *testing.T, subs []SubTLV) []SubTLV {
+				t.Helper()
+				asla, ok := subs[0].(*ASLASubTLV)
+				if !ok {
+					t.Fatalf("ASLA decoded as %T, want it still typed", subs[0])
+				}
+				return asla.SubSubTLVs
+			},
+		},
+	}
+	for what, bad := range map[string]string{
+		"administrative group of 5 octets":          "03 05 0000000500",
+		"extended administrative group of 5 octets": "0e 05 0000000500",
+	} {
+		for where, pos := range positions {
+			t.Run(what+", "+where, func(t *testing.T) {
+				subs := pos.wrap(append(mustHex(t, bad), mustHex(t, goodEAG)...))
+				entry := []byte{0, 0, 0, 0, 0, 2, 0, 0, 0, 10, byte(len(subs))}
+				wire := append([]byte{byte(TLVTypeExtendedISReachability), byte(len(entry) + len(subs))}, entry...)
+				wire = append(wire, subs...)
+
+				tlv, ok := checkTLVRoundtrip(t, wire)[0].(*ExtendedISReachabilityTLV)
+				if !ok {
+					t.Fatalf("TLV 22 did not decode as an extended IS reachability TLV")
+				}
+				if len(tlv.Neighbors) != 1 || tlv.Neighbors[0].Metric != 10 {
+					t.Fatalf("entry decoded as %+v, want the rest of it intact", tlv.Neighbors)
+				}
+				attrs := pos.attrs(t, tlv.Neighbors[0].SubTLVs)
+				if len(attrs) != 2 {
+					t.Fatalf("got %d attributes, want 2", len(attrs))
+				}
+				if _, ok := attrs[0].(*UnknownSubTLV); !ok {
+					t.Errorf("malformed attribute decoded as %T, want it left opaque", attrs[0])
+				}
+				eag, ok := attrs[1].(*AdminGroupSubTLV)
+				if !ok || !eag.Extended || !slices.Equal(eag.Groups, []uint32{5, 0x8000_0000}) {
+					t.Errorf("the attribute beside it decoded as %+v (%T), want it typed", attrs[1], attrs[1])
+				}
+			})
+		}
+	}
+}

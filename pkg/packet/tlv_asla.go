@@ -89,38 +89,30 @@ func (a *ASLASubTLV) Apps(app uint8) bool {
 func (a *ASLASubTLV) AnyApp() bool { return len(a.SABM) == 0 && len(a.UDABM) == 0 }
 
 // decodeASLA decodes an Application-Specific Link Attributes sub-TLV. RFC 8919
-// §4.2 says a mask length above 8 means the entire sub-TLV MUST be ignored,
-// and ignoring is not failing: an error here would take the whole LSP down
-// with it. Anything this cannot parse therefore stays opaque, which
-// round-trips byte-exactly and is invisible to every consumer's type switch —
-// the same outcome the RFC asks for.
+// §4.2 says a mask length above 8 means the entire sub-TLV MUST be ignored;
+// refusing the value is how a decoder says so, and decodeSubTLVs turns that
+// into the opaque form the clause asks for.
 func decodeASLA(value []byte) (SubTLV, error) {
-	a, ok := parseASLA(value)
-	if !ok {
-		return &UnknownSubTLV{SubTLVType: subTLVASLA, Value: slices.Clone(value)}, nil
-	}
-	return a, nil
-}
-
-func parseASLA(value []byte) (*ASLASubTLV, bool) {
 	if len(value) < 2 {
-		return nil, false
+		return nil, fmt.Errorf("ASLA bit-mask lengths: %w", ErrTruncated)
 	}
 	sabmLen, udabmLen := int(value[0]&aslaMaskLenMask), int(value[1]&aslaMaskLenMask)
-	if sabmLen > aslaMaxMaskLen || udabmLen > aslaMaxMaskLen || len(value) < 2+sabmLen+udabmLen {
-		return nil, false
+	if sabmLen > aslaMaxMaskLen || udabmLen > aslaMaxMaskLen {
+		return nil, fmt.Errorf("ASLA: %w: SABM %d, UDABM %d octets", ErrTooLong, sabmLen, udabmLen)
 	}
-	a := &ASLASubTLV{
-		Legacy: value[0]&aslaLegacyFlag != 0,
-		SABM:   slices.Clone(value[2 : 2+sabmLen]),
-		UDABM:  slices.Clone(value[2+sabmLen : 2+sabmLen+udabmLen]),
+	if len(value) < 2+sabmLen+udabmLen {
+		return nil, fmt.Errorf("ASLA bit masks: %w", ErrTruncated)
 	}
 	attrs, err := decodeSubTLVs(SubTLVContextASLA, value[2+sabmLen+udabmLen:])
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	a.SubSubTLVs = attrs
-	return a, true
+	return &ASLASubTLV{
+		Legacy:     value[0]&aslaLegacyFlag != 0,
+		SABM:       slices.Clone(value[2 : 2+sabmLen]),
+		UDABM:      slices.Clone(value[2+sabmLen : 2+sabmLen+udabmLen]),
+		SubSubTLVs: attrs,
+	}, nil
 }
 
 // AdminGroupSubTLV carries a link's colors in either of the two encodings RFC
@@ -178,7 +170,9 @@ func decodeExtendedAdminGroup(value []byte) (SubTLV, error) {
 func init() {
 	registerSubTLVDecoder(SubTLVContextISReachability, subTLVASLA, decodeASLA)
 	// The legacy encodings, which RFC 9350 §12 reads only behind an ASLA that
-	// sets the L-flag, but which the codec decodes wherever they appear.
+	// sets the L-flag, but which the codec decodes wherever they appear — at
+	// either position a length it cannot use leaves the attribute opaque,
+	// because decodeSubTLVs decides that for every registered decoder.
 	registerSubTLVDecoder(SubTLVContextISReachability, subTLVAdminGroup, decodeAdminGroup)
 	registerSubTLVDecoder(SubTLVContextISReachability, subTLVExtendedAdminGroup, decodeExtendedAdminGroup)
 	registerSubTLVDecoder(SubTLVContextASLA, subTLVAdminGroup, decodeAdminGroup)
