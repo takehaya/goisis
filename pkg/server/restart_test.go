@@ -1009,7 +1009,7 @@ func TestAHeldRestartIsCountedAndShownOnTheAdjacency(t *testing.T) {
 			if n := m.count("restart_request", "c", restartHeld) + m.count("restart_request", "c", restartUnheld); n != 0 {
 				t.Fatalf("%d restart requests counted for an ordinary hello, want 0", n)
 			}
-			if info := h.c.infoFor(h.adj(), packet.Level2); info.Restarting || info.Suppressed {
+			if info := h.c.infoFor(h.adj(), packet.Level2, h.clk.Now()); info.Restarting || info.Suppressed {
 				t.Fatalf("settled adjacency reads %+v, want neither restarting nor suppressed", info)
 			}
 
@@ -1017,7 +1017,7 @@ func TestAHeldRestartIsCountedAndShownOnTheAdjacency(t *testing.T) {
 			if got := m.count("restart_request", "c", restartHeld); got != 1 {
 				t.Errorf("held restart requests = %d, want 1", got)
 			}
-			info := h.c.infoFor(h.adj(), packet.Level2)
+			info := h.c.infoFor(h.adj(), packet.Level2, h.clk.Now())
 			if info.State != AdjUp || !info.Restarting {
 				t.Errorf("a held adjacency reads %+v, want Up and restarting: an operator cannot tell it from a healthy one", info)
 			}
@@ -1066,7 +1066,7 @@ func TestASuppressedAdjacencyIsCountedOutOfTheAdjacencyGauge(t *testing.T) {
 			if n, ok := m.gauge("adjacencies_suppressed", "c", "L2"); !ok || n != 1 {
 				t.Errorf("suppressed adjacencies = %d (reported %v), want 1: the adjacency gauge counts one the topology does not", n, ok)
 			}
-			info := h.c.infoFor(h.adj(), packet.Level2)
+			info := h.c.infoFor(h.adj(), packet.Level2, h.clk.Now())
 			if !info.Suppressed {
 				t.Errorf("a suppressed adjacency reads %+v, want it flagged", info)
 			}
@@ -1161,6 +1161,117 @@ func TestAQuietAdjacencyPaysOnlyForTheWindowItOpens(t *testing.T) {
 			h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(2)), Src: h.snpa})
 			if got := m.count("lsp_lifetime_corrupt", "c"); got != 0 {
 				t.Errorf("corrupt lifetimes = %d, want 0: one quiet gap spent the budget the next restart needed", got)
+			}
+		})
+	}
+}
+
+// watchAdjacencies registers a subscriber on the server this helper drives and
+// returns what it has been handed since the last call. The hello handlers run
+// on the test's own goroutine rather than the Serve loop, so Subscribe — a
+// management operation — would have nothing to run it; the watcher goes
+// straight into the map the loop would have put it in.
+func (h *restartHelper) watchAdjacencies(t *testing.T) func() []AdjacencyInfo {
+	t.Helper()
+	w := &watcher{ch: make(chan Event, watcherBuffer)}
+	h.s.watchers[w] = struct{}{}
+	t.Cleanup(func() { h.s.dropWatcher(w) })
+	return func() []AdjacencyInfo {
+		var out []AdjacencyInfo
+		for {
+			select {
+			case ev := <-w.ch:
+				if ev.Adjacency != nil {
+					out = append(out, *ev.Adjacency)
+				}
+			default:
+				return out
+			}
+		}
+	}
+}
+
+// TestAWatcherSeesTheRestartAndSuppressionEdges guarantees that the two
+// conditions RFC 5306 puts on an adjacency that never leaves Up reach the one
+// interface an operator watches live. A held adjacency does not change state
+// and a suppressed one does not either, so an emit inside the state-change
+// guard fires for neither: `goisis monitor` prints nothing for the whole
+// restart, and Adjacency.restarting reaches a subscriber only in the Initial
+// snapshot it happened to be taken after. The edges and not the hellos: a
+// restarter sets RR on every IIH for the length of its restart, so an emit per
+// hello would drop a lagging subscriber at the hello rate.
+func TestAWatcherSeesTheRestartAndSuppressionEdges(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+			drain := h.watchAdjacencies(t)
+			drain()
+
+			// The control: an ordinary hello moves neither condition, and is
+			// what every settled adjacency sends for hours.
+			h.settle(h.snpa, 30)
+			if got := drain(); len(got) != 0 {
+				t.Errorf("an ordinary hello emitted %d adjacency events, want 0", len(got))
+			}
+
+			h.request(h.snpa, 30)
+			got := drain()
+			if len(got) != 1 {
+				t.Fatalf("entering restart emitted %d adjacency events, want 1", len(got))
+			}
+			if got[0].State != AdjUp || !got[0].Restarting || got[0].Suppressed {
+				t.Errorf("the restart event reads %+v, want Up and restarting", got[0])
+			}
+
+			h.hello(h.snpa, 30, &packet.RestartTLV{RestartRequest: true, SuppressAdjacency: true})
+			got = drain()
+			if len(got) != 1 {
+				t.Fatalf("entering suppression emitted %d adjacency events, want 1", len(got))
+			}
+			if !got[0].Suppressed || !got[0].Restarting {
+				t.Errorf("the suppression event reads %+v, want it flagged suppressed and still restarting", got[0])
+			}
+
+			// An IIH with no Restart TLV at all is how a neighbour leaves both.
+			h.settle(h.snpa, 30)
+			got = drain()
+			if len(got) != 1 {
+				t.Fatalf("leaving restart and suppression emitted %d adjacency events, want 1", len(got))
+			}
+			if got[0].Restarting || got[0].Suppressed {
+				t.Errorf("the recovery event reads %+v, want neither restarting nor suppressed", got[0])
+			}
+		})
+	}
+}
+
+// TestTheHoldReportedIsTheOneLeftNotTheOneAdvertised guarantees that the two
+// numbers a held adjacency has are both readable. RFC 5306 §3.2.1a withholds
+// the refresh from every request after the first, so the advertised holding
+// time stops describing when the adjacency expires — and that is exactly the
+// adjacency an operator is looking at. The advertised value keeps its meaning,
+// because it is a published field somebody already reads.
+func TestTheHoldReportedIsTheOneLeftNotTheOneAdvertised(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 30)
+			h.request(h.snpa, 30)
+			for _, want := range []uint16{30, 20, 10} {
+				info := h.c.infoFor(h.adj(), packet.Level2, h.clk.Now())
+				if info.Holding != 30 {
+					t.Errorf("advertised holding time = %d, want 30: the field consumers already read changed meaning", info.Holding)
+				}
+				if info.HoldingRemaining != want {
+					t.Errorf("hold remaining = %ds, want %d: it is the advertised value, not what is left", info.HoldingRemaining, want)
+				}
+				// The same reading over the wire, which is what `goisis
+				// neighbor` renders and what a watcher is handed.
+				if got := adjacencyToProto(info).GetHoldingRemaining(); got != uint32(want) {
+					t.Errorf("Adjacency.holding_remaining = %d, want %d", got, want)
+				}
+				h.clk.Advance(10 * time.Second)
 			}
 		})
 	}

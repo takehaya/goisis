@@ -201,35 +201,41 @@ func (c *circuit) info() CircuitInfo {
 }
 
 // adjacencyInfos returns snapshots of all adjacencies on the circuit.
-func (c *circuit) adjacencyInfos() []AdjacencyInfo {
+func (c *circuit) adjacencyInfos(now time.Time) []AdjacencyInfo {
 	var out []AdjacencyInfo
 	if c.cfg.P2P {
 		if c.p2pAdj != nil {
 			for _, l := range c.p2pAdj.levels.levels() {
-				out = append(out, c.infoFor(c.p2pAdj, l))
+				out = append(out, c.infoFor(c.p2pAdj, l, now))
 			}
 		}
 		return out
 	}
 	for _, l := range c.cfg.levels() {
 		for _, adj := range c.adjs[l] {
-			out = append(out, c.infoFor(adj, l))
+			out = append(out, c.infoFor(adj, l, now))
 		}
 	}
 	return out
 }
 
-func (c *circuit) infoFor(adj *adjacency, l packet.Level) AdjacencyInfo {
+// infoFor takes now rather than reading a clock, because the circuit has none
+// and HoldingRemaining is only true as of an instant. Every caller is on the
+// Serve loop and already holds one, so threading it costs a parameter and the
+// compiler names any future caller that forgets — where computing the value at
+// each snapshot site instead would leave a new one silently reporting zero.
+func (c *circuit) infoFor(adj *adjacency, l packet.Level, now time.Time) AdjacencyInfo {
 	return AdjacencyInfo{
-		Interface:  c.cfg.Name,
-		Level:      l,
-		SystemID:   adj.systemID,
-		SNPA:       adj.snpa,
-		State:      adj.state,
-		Priority:   adj.priority,
-		Holding:    adj.holding,
-		Restarting: adj.restartMode,
-		Suppressed: adj.suppressed,
+		Interface:        c.cfg.Name,
+		Level:            l,
+		SystemID:         adj.systemID,
+		SNPA:             adj.snpa,
+		State:            adj.state,
+		Priority:         adj.priority,
+		Holding:          adj.holding,
+		HoldingRemaining: restartRemainingTime(adj, now),
+		Restarting:       adj.restartMode,
+		Suppressed:       adj.suppressed,
 	}
 }
 

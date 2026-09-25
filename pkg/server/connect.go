@@ -435,16 +435,17 @@ func eventToProto(ev Event) *goisisv1.WatchEventResponse {
 
 func adjacencyToProto(a AdjacencyInfo) *goisisv1.Adjacency {
 	return &goisisv1.Adjacency{
-		Interface:   a.Interface,
-		Level:       levelToProto(a.Level),
-		SystemId:    a.SystemID.String(),
-		Snpa:        a.SNPA.String(),
-		State:       a.State.String(),
-		Priority:    uint32(a.Priority),
-		HoldingTime: uint32(a.Holding),
-		Hostname:    a.Hostname,
-		Restarting:  a.Restarting,
-		Suppressed:  a.Suppressed,
+		Interface:        a.Interface,
+		Level:            levelToProto(a.Level),
+		SystemId:         a.SystemID.String(),
+		Snpa:             a.SNPA.String(),
+		State:            a.State.String(),
+		Priority:         uint32(a.Priority),
+		HoldingTime:      uint32(a.Holding),
+		HoldingRemaining: uint32(a.HoldingRemaining),
+		Hostname:         a.Hostname,
+		Restarting:       a.Restarting,
+		Suppressed:       a.Suppressed,
 	}
 }
 

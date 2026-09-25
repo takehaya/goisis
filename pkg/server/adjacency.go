@@ -116,7 +116,14 @@ type AdjacencyInfo struct {
 	SNPA      packet.SNPA
 	State     AdjState
 	Priority  uint8
-	Holding   uint16
+	// Holding is the holding time the neighbor advertises; HoldingRemaining is
+	// how much of it is left, the same seconds RFC 5306 §3.2.1b acknowledges
+	// to a restarting neighbor (see restartRemainingTime). Two fields and not
+	// one: on a settled adjacency every hello refreshes them into agreement,
+	// but §3.2.1a withholds that refresh from a held restart, so an operator
+	// reading only the advertised value reads a hold that is not there.
+	Holding          uint16
+	HoldingRemaining uint16
 	// Restarting and Suppressed are what RFC 5306 says about an adjacency that
 	// State cannot: an adjacency the helper holds through a neighbor's restart
 	// reads Up precisely because nothing happened to it, and a suppressed one

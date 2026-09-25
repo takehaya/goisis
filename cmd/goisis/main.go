@@ -229,11 +229,15 @@ func newNeighborCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "SYSTEM-ID\tHOSTNAME\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD\tRESTART")
+				// HOLD is what the neighbour advertises, REMAIN what is left
+				// of it: RFC 5306 3.2.1a stops refreshing the second across a
+				// held restart, so on the rows marked RESTART they differ and
+				// only REMAIN answers "how much longer".
+				_, _ = fmt.Fprintln(w, "SYSTEM-ID\tHOSTNAME\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD\tREMAIN\tRESTART")
 				for _, a := range res.Msg.GetAdjacencies() {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
 						a.GetSystemId(), a.GetHostname(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), a.GetSnpa(), a.GetHoldingTime(),
-						restartStr(a))
+						a.GetHoldingRemaining(), restartStr(a))
 				}
 				return w.Flush()
 			})

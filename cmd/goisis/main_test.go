@@ -399,7 +399,7 @@ func (stubService) GetIsis(context.Context, *connect.Request[goisisv1.GetIsisReq
 func (stubService) ListAdjacencies(context.Context, *connect.Request[goisisv1.ListAdjacenciesRequest]) (*connect.Response[goisisv1.ListAdjacenciesResponse], error) {
 	return connect.NewResponse(&goisisv1.ListAdjacenciesResponse{Adjacencies: []*goisisv1.Adjacency{{
 		SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2,
-		State: "Up", Snpa: "0000.0000.00b2", HoldingTime: 30, Restarting: true,
+		State: "Up", Snpa: "0000.0000.00b2", HoldingTime: 30, HoldingRemaining: 7, Restarting: true,
 	}}}), nil
 }
 
@@ -436,6 +436,9 @@ func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
 		{"monitor", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up"},
 		{"global as json", []string{"global", "--addr", srv.URL, "-o", "json"}, `"systemId"`},
 		{"neighbor renders the restart column", []string{"neighbor", "--addr", srv.URL}, "restarting"},
+		// The hold that is left is a column of its own, so it is visible next
+		// to the advertised one rather than only in -o json.
+		{"neighbor renders the hold left beside the one advertised", []string{"neighbor", "--addr", srv.URL}, "30    7       restarting"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var errBuf bytes.Buffer
