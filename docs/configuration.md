@@ -392,7 +392,10 @@ on: remove the address, or suppress it with `policy.advertise`.
 `own_fragment_purge`, `own_lsp_reclaimed`, `own_seq_wrap`),
 `goisis_pdu_tx_errors_total{circuit,reason}` (reasons: `serialize`, `auth`,
 `send`), `goisis_pdu_rx_errors_total{circuit}`,
-`goisis_adjacencies{circuit,level}`, `goisis_routes{level,algorithm}`,
+`goisis_adjacencies{circuit,level}`,
+`goisis_adjacencies_suppressed{circuit,level}`,
+`goisis_restart_requests_total{circuit,outcome}` (outcomes: `held`,
+`unheld`), `goisis_routes{level,algorithm}`,
 `goisis_fib_errors_total{op}` (ops: `update`, `withdraw`, `add_sid`,
 `remove_sid`), `goisis_event_queue_depth`,
 `goisis_config_reloads_total{outcome}` (outcomes: `applied`, `refused`,
@@ -486,21 +489,55 @@ rate(goisis_lsp_lifetime_floored_total[1h])   # compare circuits, not a threshol
 `goisis_lsp_lifetime_corrupt_total` is the same field under the narrower test
 RFC 7987 §3.2 defines, and it is the one that can be alerted on. It counts a
 live LSP, newer than the copy held, whose remaining lifetime is below
-ZeroAgeLifetime (60s), received on an adjacency that has itself been Up for at
-least ZeroAgeLifetime. That last condition is what the floor counter has no way
-to apply, and it is what removes the resync — the one event that legitimately
-delivers near-expiry LSPs in bulk. What is left has a baseline of zero, so this
-counter has the threshold the other one cannot have:
+ZeroAgeLifetime (60s), received on an adjacency whose database exchange began
+at least ZeroAgeLifetime ago. That last condition is what the floor counter has
+no way to apply, and it is what removes the resync — the one event that
+legitimately delivers near-expiry LSPs in bulk. What is left has a baseline of
+zero, so this counter has the threshold the other one cannot have:
 
 ```
 increase(goisis_lsp_lifetime_corrupt_total[1h]) > 0
 ```
+
+§3.2 words that last condition as the adjacency's own age, because without a
+restart helper an adjacency coming Up is the only thing that starts a
+whole-database exchange. RFC 5306 §3.2.1c adds a second: a neighbour restarting
+under the helper is handed the complete database over an adjacency that
+deliberately never left Up. Read literally, §3.2 would count every helped
+restart in the area and the alert below would fire on planned maintenance, so
+the window is the exchange rather than the adjacency — a restart request this
+node holds reopens it, and it closes ZeroAgeLifetime after the last one. The
+two readings differ only while a restart is being helped;
+`goisis_restart_requests_total` is what says one was.
 
 §3.2 promises neither that every corrupt lifetime is caught nor that every
 report is a real one, so treat a sustained rate as the circuit to take a capture
 on. Which LSP it was is deliberately not in the log: the rate is bounded only by
 how fast a neighbour can flood, and a line per event would turn one segment's
 corruption into an amplifier on the management loop.
+
+`goisis_adjacencies_suppressed` is what makes `goisis_adjacencies` readable
+during a neighbour's restart. RFC 5306 §3.2.2 keeps an adjacency whose
+neighbour sets the SA bit out of this node's LSPs and out of SPF while leaving
+it Up, so the adjacency gauge counts one the LSDB and the RIB do not have. The
+two gauges differ by exactly this one, and `goisis neighbor` names the
+adjacency in its `RESTART` column.
+
+`goisis_restart_requests_total` counts received IIHs asking this node to hold
+an adjacency across the sender's restart (RFC 5306 §3.2.1), split by whether
+§3.2.1's precondition covered the request: `held` is an adjacency held through
+a restart, `unheld` a request processed as an ordinary hello — no adjacency to
+hold, or one from a station that has only the System ID. A restarter asks on
+every IIH for as long as its restart takes, so this counts hellos rather than
+restarts. There is no threshold: a restart is a planned event and `held` moving
+is the node doing its job. The rate is what to look at — a neighbour stuck in a
+restart loop is the one case §3.2.1a bounds and nothing else reports, and a
+steady `unheld` on a segment with no restarts happening is somebody asking for
+a hold they are not entitled to.
+
+```
+rate(goisis_restart_requests_total[15m])   # compare against the maintenance window
+```
 
 `goisis_inter_level_prefixes` is what this node injects across the level
 boundary, where `goisis_routes` is what it learned. It is the gauge a

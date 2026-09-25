@@ -20,6 +20,8 @@ func TestPrometheusRecords(t *testing.T) {
 	m.PDURx("eth0", "lsp")
 	m.PDUDrop("eth0", "auth")
 	m.AdjacencyCount("eth0", "L2", 1)
+	m.AdjacencySuppressed("eth0", "L2", 1)
+	m.RestartRequest("eth0", "held")
 	m.RouteCount("L2", "0", 4)
 	m.FIBError("update")
 	m.EventQueueDepth(7)
@@ -49,6 +51,8 @@ func TestPrometheusRecords(t *testing.T) {
 		"goisis_pdu_rx_total",
 		"goisis_pdu_drops_total",
 		"goisis_adjacencies",
+		"goisis_adjacencies_suppressed",
+		"goisis_restart_requests_total",
 		"goisis_routes",
 		"goisis_fib_errors_total",
 		"goisis_event_queue_depth",
@@ -93,6 +97,8 @@ func TestPrometheusRecords(t *testing.T) {
 		{"goisis_pdu_rx_total", 1},
 		{"goisis_pdu_drops_total", 1},
 		{"goisis_adjacencies", 1},
+		{"goisis_adjacencies_suppressed", 1},
+		{"goisis_restart_requests_total", 1},
 		{"goisis_routes", 4},
 		{"goisis_fib_errors_total", 1},
 		{"goisis_event_queue_depth", 7},
@@ -147,6 +153,8 @@ func TestForgetCircuitDropsEverySeriesThatNamesIt(t *testing.T) {
 		m.PDURx(c, "lsp")
 		m.PDUDrop(c, "auth")
 		m.AdjacencyCount(c, "L2", 1)
+		m.AdjacencySuppressed(c, "L2", 0)
+		m.RestartRequest(c, "held")
 		m.PDUTxError(c, "send")
 		m.PDURxError(c)
 		m.LSPLifetimeFloored(c)
@@ -157,8 +165,8 @@ func TestForgetCircuitDropsEverySeriesThatNamesIt(t *testing.T) {
 	// Every collector that carries a circuit label has to be in the fixture,
 	// or this proves the retirement only of the ones that are.
 	for _, c := range []string{"eth0", "eth1"} {
-		if n := len(before[c]); n != 10 {
-			t.Fatalf("%s has %d circuit-labelled series (%v), want the 10 collectors that carry the label: a collector was added without a line in this fixture or in ForgetCircuit", c, n, before[c])
+		if n := len(before[c]); n != 12 {
+			t.Fatalf("%s has %d circuit-labelled series (%v), want the 12 collectors that carry the label: a collector was added without a line in this fixture or in ForgetCircuit", c, n, before[c])
 		}
 	}
 

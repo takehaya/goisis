@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,11 +13,11 @@ import (
 
 // restartServer is disServer with a clock the test drives, for the assertions
 // that are about when a hold expires rather than about what a frame said.
-func restartServer(t *testing.T, prio *uint8) (*IsisServer, *circuit, packet.SNPA, *fakeClock) {
+func restartServer(t *testing.T, prio *uint8, opts ...ServerOption) (*IsisServer, *circuit, packet.SNPA, *fakeClock) {
 	t.Helper()
 	clk := newFakeClock()
 	local := packet.SNPA{0, 0, 0, 0, 0, 0xa1}
-	s := mustServer(t,
+	s := mustServer(t, append([]ServerOption{
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{
@@ -25,16 +28,16 @@ func restartServer(t *testing.T, prio *uint8) (*IsisServer, *circuit, packet.SNP
 			Padding:   ptrFalse(),
 		}),
 		WithClock(clk),
-	)
+	}, opts...)...)
 	return s, s.circuits[0], local, clk
 }
 
 // restartP2PServer is snpServer's point-to-point form with a clock the test
 // drives, so an assertion can step past syncCircuitLevel's hold-down.
-func restartP2PServer(t *testing.T) (*IsisServer, *circuit, *fakeClock) {
+func restartP2PServer(t *testing.T, opts ...ServerOption) (*IsisServer, *circuit, *fakeClock) {
 	t.Helper()
 	clk := newFakeClock()
-	s := mustServer(t,
+	s := mustServer(t, append([]ServerOption{
 		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}),
 		WithAreaAddresses(packet.AreaAddress{0x49, 0x00, 0x01}),
 		WithCircuit(CircuitConfig{
@@ -45,7 +48,7 @@ func restartP2PServer(t *testing.T) (*IsisServer, *circuit, *fakeClock) {
 			Padding:   ptrFalse(),
 		}),
 		WithClock(clk),
-	)
+	}, opts...)...)
 	return s, s.circuits[0], clk
 }
 
@@ -491,28 +494,36 @@ type restartHelper struct {
 	c    *circuit
 	clk  *fakeClock
 	snpa packet.SNPA // the peer's own source address
-	// settle sends an ordinary IIH that completes the handshake; request sends
-	// one with RR set that echoes nobody, which is all a router with no
-	// adjacency database left can send. src is where the frame came from.
+	// hello sends an IIH that completes the handshake, carrying rt — nil for a
+	// neighbour that does not implement RFC 5306 at all, and otherwise the TLV
+	// §3.2 makes a MUST on every IIH of one that does. settle is the first of
+	// those. request sends an IIH with RR set that echoes nobody, which is all
+	// a router with no adjacency database left can send. src is where the
+	// frame came from.
+	hello   func(src packet.SNPA, holding uint16, rt *packet.RestartTLV)
 	settle  func(src packet.SNPA, holding uint16)
 	request func(src packet.SNPA, holding uint16)
 	adj     func() *adjacency
 }
 
-func newRestartHelper(t *testing.T, p2p bool) *restartHelper {
+func newRestartHelper(t *testing.T, p2p bool, opts ...ServerOption) *restartHelper {
 	t.Helper()
 	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	peer := packet.SystemID{0, 0, 0, 0, 0, 0xff}
 	h := &restartHelper{snpa: packet.SNPA{0, 0, 0, 0, 0, 0xff}}
 	if p2p {
-		s, c, clk := restartP2PServer(t)
+		s, c, clk := restartP2PServer(t, opts...)
 		h.s, h.c, h.clk = s, c, clk
 		h.adj = func() *adjacency { return c.p2pAdj }
-		h.settle = func(src packet.SNPA, holding uint16) {
+		h.hello = func(src packet.SNPA, holding uint16, rt *packet.RestartTLV) {
 			hello := p2pHelloEchoing(peer, area, s.systemID, c.extCircID)
 			hello.HoldingTime = holding
+			if rt != nil {
+				hello.TLVs = append(hello.TLVs, rt)
+			}
 			s.processP2PHello(c, src, hello)
 		}
+		h.settle = func(src packet.SNPA, holding uint16) { h.hello(src, holding, nil) }
 		h.request = func(src packet.SNPA, holding uint16) {
 			s.processP2PHello(c, src, &packet.P2PHello{
 				CircuitType:    packet.CircuitTypeLevel2,
@@ -528,15 +539,19 @@ func newRestartHelper(t *testing.T, p2p bool) *restartHelper {
 		}
 		return h
 	}
-	s, c, local, clk := restartServer(t, u8(64))
+	s, c, local, clk := restartServer(t, u8(64), opts...)
 	lanID := nodeID(peer, 0x05)
 	h.s, h.c, h.clk = s, c, clk
 	h.adj = func() *adjacency { return c.adjs[packet.Level2][peer] }
-	h.settle = func(src packet.SNPA, holding uint16) {
+	h.hello = func(src packet.SNPA, holding uint16, rt *packet.RestartTLV) {
 		hello := neighborHello(peer, 10, lanID, local)
 		hello.HoldingTime = holding
+		if rt != nil {
+			hello.TLVs = append(hello.TLVs, rt)
+		}
 		s.processLANHello(c, src, hello)
 	}
+	h.settle = func(src packet.SNPA, holding uint16) { h.hello(src, holding, nil) }
 	h.request = func(src packet.SNPA, holding uint16) {
 		hello := restartingHello(peer, lanID, &packet.RestartTLV{RestartRequest: true})
 		hello.HoldingTime = holding
@@ -694,6 +709,222 @@ func TestAnUnheldRestartRequestIsProcessedAsNormal(t *testing.T) {
 			h.s.expireAdjacencies(h.c, h.clk.Now())
 			if h.adj() != nil {
 				t.Error("the adjacency outlived the 30s its hello asked for")
+			}
+		})
+	}
+}
+
+// bothCircuitKinds is the LAN/point-to-point pair every case below runs
+// against: RFC 5306 §3.2 is one procedure with one point-to-point exception,
+// and the two handlers have drifted apart once already.
+var bothCircuitKinds = []struct {
+	name string
+	p2p  bool
+}{
+	{"lan", false},
+	{"p2p", true},
+}
+
+// helperLSP is an LSP from a third node, at the sequence number and remaining
+// lifetime a case needs. It arrives over the adjacency under test, which is
+// what RFC 7987 §3.2's filter is about; the originator is nobody in these
+// tests so the update process takes it as an ordinary install.
+func helperLSP(seq uint32, remaining uint16) *packet.LSP {
+	return &packet.LSP{
+		Level:          packet.Level2,
+		RemainingTime:  remaining,
+		LSPID:          lspID(packet.SystemID{0, 0, 0, 0, 0, 0x11}, 0),
+		SequenceNumber: seq,
+		ISType:         3,
+	}
+}
+
+// TestAResyncBehindAHeldRestartIsNotACorruptLifetime guarantees that RFC 7987
+// §3.2's false-positive filter still covers the one event it exists to
+// exclude once RFC 5306's helper is in the picture. §3.2 words its fourth
+// condition as the adjacency's own age because in an implementation with no
+// helper that is the only thing that starts a whole-database exchange. The
+// helper adds a second: §3.2.1c hands a restarting neighbour the complete
+// database over an adjacency that deliberately never left Up, so the filter
+// reads it as arbitrarily old and counts exactly the bulk delivery of
+// near-expiry LSPs it was written to ignore. docs/configuration.md publishes
+// this counter as an alert with a baseline of zero, so a helped restart
+// anywhere in the area would page.
+//
+// The window is the exchange, not the adjacency, and it has to close again:
+// the counter's whole value is the threshold, so the last case here is what
+// stops the fix from being "switch the counter off for this neighbour".
+func TestAResyncBehindAHeldRestartIsNotACorruptLifetime(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			deliver := func(seq uint32) {
+				h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(seq, 30)), Src: h.snpa})
+			}
+			h.settle(h.snpa, 30)
+			h.clk.Advance(2 * zeroAgeSeconds * time.Second)
+
+			// The control first: on a settled adjacency this lifetime is the
+			// event, so a fix that simply stopped counting would fail here.
+			deliver(1)
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 1 {
+				t.Fatalf("corrupt lifetimes on a settled adjacency = %d, want 1", got)
+			}
+
+			h.request(h.snpa, 30)
+			deliver(2)
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 1 {
+				t.Errorf("corrupt lifetimes = %d, want 1: the resync §3.2.1c asked for was counted as corruption", got)
+			}
+
+			// The restarter comes back and the exchange finishes. Its IIHs
+			// still carry the Restart TLV — §3.2 makes that a MUST for as
+			// long as it implements restart at all — so an exclusion keyed on
+			// the neighbour rather than on the exchange never lifts. One
+			// ZeroAgeLifetime later the filter is armed again.
+			h.hello(h.snpa, 30, &packet.RestartTLV{})
+			h.clk.Advance(zeroAgeSeconds*time.Second + time.Second)
+			deliver(3)
+			if got := m.count("lsp_lifetime_corrupt", "c"); got != 2 {
+				t.Errorf("corrupt lifetimes = %d, want 2: the exclusion never ended, so the counter is off for this neighbour for good", got)
+			}
+		})
+	}
+}
+
+// TestAHeldRestartIsCountedAndShownOnTheAdjacency guarantees the helper has a
+// signal at all. Its correct behaviour is the absence of the event that used
+// to be the operator's cue — the adjacency does not go down, so "adjacency
+// state change" does not fire and no adjacency event is emitted — which
+// leaves a neighbour that is restarting gracefully indistinguishable from one
+// that is simply broken. The counter separates a request this node held from
+// one §3.2.1's precondition did not cover, which is the difference between
+// planned maintenance and a station that only copied the peer's System ID.
+func TestAHeldRestartIsCountedAndShownOnTheAdjacency(t *testing.T) {
+	stranger := packet.SNPA{0, 0, 0, 0, 0, 0x66}
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 30)
+			if n := m.count("restart_request", "c", restartHeld) + m.count("restart_request", "c", restartUnheld); n != 0 {
+				t.Fatalf("%d restart requests counted for an ordinary hello, want 0", n)
+			}
+			if info := h.c.infoFor(h.adj(), packet.Level2); info.Restarting || info.Suppressed {
+				t.Fatalf("settled adjacency reads %+v, want neither restarting nor suppressed", info)
+			}
+
+			h.request(h.snpa, 30)
+			if got := m.count("restart_request", "c", restartHeld); got != 1 {
+				t.Errorf("held restart requests = %d, want 1", got)
+			}
+			info := h.c.infoFor(h.adj(), packet.Level2)
+			if info.State != AdjUp || !info.Restarting {
+				t.Errorf("a held adjacency reads %+v, want Up and restarting: an operator cannot tell it from a healthy one", info)
+			}
+			// The same reading over the wire, which is what `goisis neighbor`
+			// and every watch event render.
+			if !adjacencyToProto(info).GetRestarting() {
+				t.Error("Adjacency.restarting is false over the wire for an adjacency held through a restart")
+			}
+
+			// §3.2.1's "Otherwise": the same request from a station that only
+			// has the System ID is processed as an ordinary hello, and is the
+			// one an operator has to be able to see apart from the above.
+			h.request(stranger, 30)
+			if got := m.count("restart_request", "c", restartUnheld); got != 1 {
+				t.Errorf("unheld restart requests = %d, want 1", got)
+			}
+			if got := m.count("restart_request", "c", restartHeld); got != 1 {
+				t.Errorf("held restart requests = %d after a request from another station, want 1", got)
+			}
+		})
+	}
+}
+
+// TestASuppressedAdjacencyIsCountedOutOfTheAdjacencyGauge guarantees the gauge
+// an operator alerts on can be read again. RFC 5306 §3.2.2 keeps a suppressed
+// adjacency out of this node's LSPs and out of SPF while leaving it Up, so
+// goisis_adjacencies reports one adjacency while the LSDB and the RIB report
+// none, with nothing anywhere to explain the gap. The two gauges differ by
+// exactly the adjacencies that carry nothing.
+func TestASuppressedAdjacencyIsCountedOutOfTheAdjacencyGauge(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 30)
+			h.s.housekeeping(h.clk.Now())
+			if n, ok := m.gauge("adjacencies_suppressed", "c", "L2"); !ok || n != 0 {
+				t.Fatalf("suppressed adjacencies on a settled circuit = %d (reported %v), want 0 reported: an unreported gauge is a series that never appears", n, ok)
+			}
+
+			h.hello(h.snpa, 30, &packet.RestartTLV{SuppressAdjacency: true})
+			h.s.housekeeping(h.clk.Now())
+			if n, ok := m.gauge("adjacencies", "c", "L2"); !ok || n != 1 {
+				t.Fatalf("adjacencies{c,L2} = %d (reported %v), want 1: §3.2.2 suppresses the advertisement, not the adjacency", n, ok)
+			}
+			if n, ok := m.gauge("adjacencies_suppressed", "c", "L2"); !ok || n != 1 {
+				t.Errorf("suppressed adjacencies = %d (reported %v), want 1: the adjacency gauge counts one the topology does not", n, ok)
+			}
+			info := h.c.infoFor(h.adj(), packet.Level2)
+			if !info.Suppressed {
+				t.Errorf("a suppressed adjacency reads %+v, want it flagged", info)
+			}
+			if !adjacencyToProto(info).GetSuppressed() {
+				t.Error("Adjacency.suppressed is false over the wire for an adjacency §3.2.2 keeps out of the LSP")
+			}
+
+			// An IIH with SA clear ends it, and the gauge follows back down
+			// rather than holding its last value.
+			h.settle(h.snpa, 30)
+			h.s.housekeeping(h.clk.Now())
+			if n, ok := m.gauge("adjacencies_suppressed", "c", "L2"); !ok || n != 0 {
+				t.Errorf("suppressed adjacencies after an IIH with SA clear = %d (reported %v), want 0", n, ok)
+			}
+		})
+	}
+}
+
+// TestRestartStateIsLoggedOnItsEdgesNotOnEveryHello guarantees the log is
+// worth having. A restarting neighbour sets RR on every IIH for the length of
+// its restart and a suppressing one sets SA on every IIH until it is done, so
+// a line per hello would put one neighbour's maintenance window into the log
+// at the hello rate — which is how a signal gets turned off. One line when it
+// starts and one when it ends is what an operator needs to bound the window.
+func TestRestartStateIsLoggedOnItsEdgesNotOnEveryHello(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			h := newRestartHelper(t, tc.p2p, WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+			lines := func(msg string) int { return strings.Count(logs.String(), `msg="`+msg+`"`) }
+
+			h.settle(h.snpa, 30)
+			for i := 0; i < 3; i++ {
+				h.request(h.snpa, 30)
+			}
+			if n := lines("neighbor restart request"); n != 1 {
+				t.Errorf("%d restart lines for three IIHs of one restart, want 1", n)
+			}
+			if n := lines("neighbor left restart mode"); n != 0 {
+				t.Errorf("%d lines say the restart ended while it is still running", n)
+			}
+
+			h.settle(h.snpa, 30)
+			if n := lines("neighbor left restart mode"); n != 1 {
+				t.Errorf("%d lines for the end of the restart, want 1: the window has no upper edge", n)
+			}
+
+			for i := 0; i < 3; i++ {
+				h.hello(h.snpa, 30, &packet.RestartTLV{SuppressAdjacency: true})
+			}
+			if n := lines("neighbor adjacency suppression changed"); n != 1 {
+				t.Errorf("%d suppression lines for three IIHs carrying SA, want 1", n)
+			}
+			h.settle(h.snpa, 30)
+			if n := lines("neighbor adjacency suppression changed"); n != 2 {
+				t.Errorf("%d suppression lines after SA cleared, want 2: the end of it is not logged", n)
 			}
 		})
 	}

@@ -325,7 +325,14 @@ type Adjacency struct {
 	// until its LSP arrives or when it advertises no name. ListAdjacencies and
 	// the initial snapshot of a WatchEvent stream resolve it; later streamed
 	// events leave it empty.
-	Hostname      string `protobuf:"bytes,8,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Hostname string `protobuf:"bytes,8,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// restarting is set while the neighbour's IIHs ask this node to hold the
+	// adjacency across its restart (RFC 5306 3.2.1); suppressed while they ask
+	// for it to stay out of this node's LSPs and out of SPF (3.2.2). Both read
+	// Up in state, which is the point of the feature and the reason they are
+	// here: a suppressed adjacency is counted as Up and carries nothing.
+	Restarting    bool `protobuf:"varint,9,opt,name=restarting,proto3" json:"restarting,omitempty"`
+	Suppressed    bool `protobuf:"varint,10,opt,name=suppressed,proto3" json:"suppressed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -414,6 +421,20 @@ func (x *Adjacency) GetHostname() string {
 		return x.Hostname
 	}
 	return ""
+}
+
+func (x *Adjacency) GetRestarting() bool {
+	if x != nil {
+		return x.Restarting
+	}
+	return false
+}
+
+func (x *Adjacency) GetSuppressed() bool {
+	if x != nil {
+		return x.Suppressed
+	}
+	return false
 }
 
 // Lsp is one entry in the link-state database.
@@ -2410,7 +2431,7 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x06level2\x18\x04 \x01(\bR\x06level2\x12\x1a\n" +
 	"\bpriority\x18\x05 \x01(\rR\bpriority\x12\x16\n" +
 	"\x06metric\x18\x06 \x01(\rR\x06metric\x12\x17\n" +
-	"\alink_up\x18\a \x01(\bR\x06linkUp\"\xf3\x01\n" +
+	"\alink_up\x18\a \x01(\bR\x06linkUp\"\xb3\x02\n" +
 	"\tAdjacency\x12\x1c\n" +
 	"\tinterface\x18\x01 \x01(\tR\tinterface\x12&\n" +
 	"\x05level\x18\x02 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x1b\n" +
@@ -2419,7 +2440,14 @@ const file_goisis_v1_goisis_proto_rawDesc = "" +
 	"\x05state\x18\x05 \x01(\tR\x05state\x12\x1a\n" +
 	"\bpriority\x18\x06 \x01(\rR\bpriority\x12!\n" +
 	"\fholding_time\x18\a \x01(\rR\vholdingTime\x12\x1a\n" +
-	"\bhostname\x18\b \x01(\tR\bhostname\"\xfa\x01\n" +
+	"\bhostname\x18\b \x01(\tR\bhostname\x12\x1e\n" +
+	"\n" +
+	"restarting\x18\t \x01(\bR\n" +
+	"restarting\x12\x1e\n" +
+	"\n" +
+	"suppressed\x18\n" +
+	" \x01(\bR\n" +
+	"suppressed\"\xfa\x01\n" +
 	"\x03Lsp\x12&\n" +
 	"\x05level\x18\x01 \x01(\x0e2\x10.goisis.v1.LevelR\x05level\x12\x15\n" +
 	"\x06lsp_id\x18\x02 \x01(\tR\x05lspId\x12'\n" +

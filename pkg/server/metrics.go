@@ -57,6 +57,24 @@ type Metrics interface {
 	// tick, so a circuit that loses its last neighbor reports 0 instead of
 	// leaving a stale value behind.
 	AdjacencyCount(circuit, level string, n int)
+	// AdjacencySuppressed reports how many of those adjacencies RFC 5306
+	// §3.2.2 keeps out of this node's LSPs and out of SPF, on the same tick
+	// and the same schedule. It is what makes AdjacencyCount readable: a
+	// suppressed adjacency is Up and carries nothing, so without this the
+	// adjacency gauge and the topology disagree with no way to see why.
+	AdjacencySuppressed(circuit, level string, n int)
+	// RestartRequest records one received IIH asking this node to hold an
+	// adjacency across the sender's restart (RFC 5306 §3.2.1), by whether
+	// §3.2.1's precondition covered it: "held" is an adjacency held through a
+	// restart, "unheld" a request processed as an ordinary hello. A restarter
+	// asks on every IIH for the length of its restart, so this counts hellos
+	// rather than restarts — the rate is what shows a neighbor stuck in a
+	// restart loop, which §3.2.1a bounds but nothing else reports.
+	//
+	// No level label: the Restart TLV is a property of the IIH, and a
+	// point-to-point IIH covers every level the circuit runs at once, so a
+	// level here would have to be invented for half the circuits.
+	RestartRequest(circuit, outcome string)
 	// RouteCount reports the number of RIB routes for a level and routing
 	// algorithm (decimal; "0" is plain reachability).
 	RouteCount(level, algo string, n int)
@@ -274,6 +292,12 @@ func (NoopMetrics) PDUDrop(string, string) {}
 
 // AdjacencyCount implements Metrics.
 func (NoopMetrics) AdjacencyCount(string, string, int) {}
+
+// AdjacencySuppressed implements Metrics.
+func (NoopMetrics) AdjacencySuppressed(string, string, int) {}
+
+// RestartRequest implements Metrics.
+func (NoopMetrics) RestartRequest(string, string) {}
 
 // RouteCount implements Metrics.
 func (NoopMetrics) RouteCount(string, string, int) {}

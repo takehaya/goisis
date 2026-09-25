@@ -374,7 +374,10 @@ RFC 5305 の到達不能しきい値 (`0xfe000000`) 以上のメトリックで�
 `own_fragment_purge` / `own_lsp_reclaimed` / `own_seq_wrap`) /
 `goisis_pdu_tx_errors_total{circuit,reason}` (reason は `serialize` / `auth` /
 `send`) / `goisis_pdu_rx_errors_total{circuit}` /
-`goisis_adjacencies{circuit,level}` / `goisis_routes{level,algorithm}` /
+`goisis_adjacencies{circuit,level}` /
+`goisis_adjacencies_suppressed{circuit,level}` /
+`goisis_restart_requests_total{circuit,outcome}` (outcome は `held` /
+`unheld`) / `goisis_routes{level,algorithm}` /
 `goisis_fib_errors_total{op}` (op は `update` / `withdraw` / `add_sid` /
 `remove_sid`) / `goisis_event_queue_depth` /
 `goisis_config_reloads_total{outcome}` (outcome は `applied` / `refused` /
@@ -471,19 +474,50 @@ rate(goisis_lsp_lifetime_floored_total[1h])   # 閾値ではなくサーキッ�
 `goisis_lsp_lifetime_corrupt_total` は同じフィールドを RFC 7987 §3.2 のより狭い
 条件で数えたもので、アラートに使えるのはこちらである。数えるのは、保持している
 コピーより新しい生存 LSP のうち、remaining lifetime が ZeroAgeLifetime (60 秒) 未満で、
-かつ受信した隣接自体が ZeroAgeLifetime 以上 Up であったものだけである。この最後の
-条件こそが下限のカウンタには適用しようのないもので、残り寿命の短い LSP が正当に
-まとめて届く唯一の契機である再同期を除外する。残ったものの基準値は 0 なので、下限の
-カウンタには持てなかった閾値がこちらにはある:
+かつ受信した隣接のデータベース交換が始まってから ZeroAgeLifetime 以上経っているもの
+だけである。この最後の条件こそが下限のカウンタには適用しようのないもので、残り寿命の
+短い LSP が正当にまとめて届く唯一の契機である再同期を除外する。残ったものの基準値は
+0 なので、下限のカウンタには持てなかった閾値がこちらにはある:
 
 ```
 increase(goisis_lsp_lifetime_corrupt_total[1h]) > 0
 ```
 
+§3.2 はこの最後の条件を「隣接自体が Up であった時間」と書いている。リスタート
+ヘルパがなければ、データベース全体の交換を始めるものは隣接が Up になることしかない
+からである。RFC 5306 §3.2.1c はそこに 2 つ目を加える: ヘルパに助けられて再起動する
+隣接は、意図的に Up のままにされた隣接の上でデータベース全体を受け取る。§3.2 を字面
+どおりに読むと、エリア内で助けられた再起動をすべて数えてしまい、下のアラートが計画
+メンテナンスで鳴る。そこで窓は隣接ではなく交換のほうに取ってある — このノードが保持
+したリスタート要求が窓を開き直し、最後の要求から ZeroAgeLifetime で閉じる。2 つの
+読み方が食い違うのは再起動を助けている間だけであり、それがあったことを示すのが
+`goisis_restart_requests_total` である。
+
 §3.2 は、破損をすべて捕まえられるとも、報告がすべて真であるとも保証しない。
 継続するレートは、キャプチャを取るべきサーキットを指すと思えばよい。どの LSP だったかは
 意図的にログに出さない: レートを押さえているのは隣接がフラッディングできる速さだけで、
 1 件 1 行出せば、あるセグメントの破損が管理ループへの増幅器になる。
+
+`goisis_adjacencies_suppressed` は、隣接の再起動中に `goisis_adjacencies` を読める
+ようにするためのものである。RFC 5306 §3.2.2 は、SA ビットを立てた隣接を Up のまま
+このノードの LSP と SPF から外すので、隣接ゲージは LSDB にも RIB にもないものを 1 つ
+数えることになる。2 つのゲージの差はちょうどこの隣接であり、`goisis neighbor` の
+`RESTART` 列がそれを名指しする。
+
+`goisis_restart_requests_total` は、送信元の再起動をまたいで隣接を保持するよう求める
+IIH (RFC 5306 §3.2.1) の受信数を、§3.2.1 の前提条件を満たしたかどうかで分けて数える。
+`held` は実際に再起動をまたいで保持した隣接、`unheld` は通常の hello として処理した
+要求である — 保持すべき隣接がない場合か、System ID だけを持つ別のステーションからの
+場合。再起動する側は再起動が終わるまで毎 IIH で要求するので、これは再起動ではなく
+hello を数えている。閾値はない: 再起動は計画された事象であり、`held` が動くのは
+ノードが役目を果たしている証拠である。見るべきはレートで、再起動ループに陥った隣接は
+§3.2.1a が境界を設けている唯一の事例でありながら他に報告するものがなく、再起動が
+起きていないセグメントで `unheld` が定常的に立つのは、権利のない保持を求めている者が
+いるということである。
+
+```
+rate(goisis_restart_requests_total[15m])   # メンテナンス時間帯と突き合わせる
+```
 
 `goisis_inter_level_prefixes` は、`goisis_routes` が学習した経路数であるのに対し、
 このノードがレベル境界をまたいで注入しているプレフィックス数である。

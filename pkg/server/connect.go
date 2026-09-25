@@ -443,6 +443,8 @@ func adjacencyToProto(a AdjacencyInfo) *goisisv1.Adjacency {
 		Priority:    uint32(a.Priority),
 		HoldingTime: uint32(a.Holding),
 		Hostname:    a.Hostname,
+		Restarting:  a.Restarting,
+		Suppressed:  a.Suppressed,
 	}
 }
 

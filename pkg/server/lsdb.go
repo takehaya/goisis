@@ -59,22 +59,38 @@ func receivedLifetime(remaining uint16) uint16 {
 //     on anything that is not, the absent copy included.
 //
 // The two tested here are the ones a caller cannot settle. A lifetime below
-// ZeroAgeLifetime is the symptom; the adjacency having been Up for at least
-// ZeroAgeLifetime is §3.2's false-positive filter, and it is what makes the
-// count worth alerting on. A younger adjacency is still being caught up on a
-// database whose LSPs may genuinely have aged that far, and the whole-database
-// resync behind a new adjacency delivers exactly those in bulk.
+// ZeroAgeLifetime is the symptom; §3.2's fourth condition is the
+// false-positive filter, and it is what makes the count worth alerting on. An
+// adjacency in the middle of a whole-database exchange is being handed a
+// database whose LSPs may genuinely have aged that far, in bulk.
+//
+// Why that condition is read off syncSince and not off when the adjacency came
+// Up, which is how §3.2 words it: the wording is a proxy. In an implementation
+// with no restart helper the only thing that starts a whole-database exchange
+// is an adjacency coming Up, so the two are the same field. RFC 5306 §3.2.1c
+// adds a second one — a neighbor restarting under the helper is handed the
+// complete database over an adjacency that deliberately never left Up, which
+// is the exact traffic this filter exists to exclude, arriving with the filter
+// reading the adjacency as arbitrarily old. Taking §3.2 literally there counts
+// every helped restart in the area as corruption and costs the counter the
+// zero baseline that is the whole reason it can be alerted on, so what is
+// measured is the exchange rather than the adjacency. The two differ only
+// while a restart is being helped: noteRestart is the only other writer, it
+// writes only under §3.2.1's precondition (an adjacency already Up to this
+// System ID from this source, with RR set), and §3.2.1a's bound on repeated
+// requests is what stops a neighbor holding the window open — the adjacency
+// expires under it.
 //
 // A purge is not a corrupt lifetime, however far below ZeroAgeLifetime zero
 // is: §2 leaves the handling of purged LSPs alone, and every purge in the area
 // would otherwise bury the event this exists to make legible. nil adj is the
 // fourth condition unsatisfiable rather than satisfied: with no adjacency there
-// is nothing to have been Up.
+// is no exchange to have finished.
 func corruptLifetime(adj *adjacency, remaining uint16, now time.Time) bool {
 	if remaining == 0 || remaining >= zeroAgeSeconds {
 		return false
 	}
-	return adj != nil && now.Sub(adj.upSince) >= zeroAgeSeconds*time.Second
+	return adj != nil && now.Sub(adj.syncSince) >= zeroAgeSeconds*time.Second
 }
 
 // maxLSPSeq is the highest sequence number an LSP can carry. Reaching it

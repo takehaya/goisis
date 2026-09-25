@@ -91,6 +91,13 @@ message Adjacency {
   // the initial snapshot of a WatchEvent stream resolve it; later streamed
   // events leave it empty.
   string hostname = 8;
+  // restarting is set while the neighbour's IIHs ask this node to hold the
+  // adjacency across its restart (RFC 5306 3.2.1); suppressed while they ask
+  // for it to stay out of this node's LSPs and out of SPF (3.2.2). Both read
+  // Up in state, which is the point of the feature and the reason they are
+  // here: a suppressed adjacency is counted as Up and carries nothing.
+  bool restarting = 9;
+  bool suppressed = 10;
 }
 
 // Lsp is one entry in the link-state database.

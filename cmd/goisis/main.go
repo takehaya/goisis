@@ -188,6 +188,24 @@ func linkState(c *goisisv1.Circuit) string {
 	return "down"
 }
 
+// restartStr renders what RFC 5306 says about an adjacency that its state
+// cannot. Both conditions read Up: one is held there through a neighbour's
+// restart, the other is Up and carries nothing — out of this node's LSPs and
+// out of SPF. One column rather than two boolean ones, because the answer is
+// "-" on every healthy adjacency and what an operator scans for is the row
+// that is not.
+func restartStr(a *goisisv1.Adjacency) string {
+	switch {
+	case a.GetRestarting() && a.GetSuppressed():
+		return "restarting,suppressed"
+	case a.GetRestarting():
+		return "restarting"
+	case a.GetSuppressed():
+		return "suppressed"
+	}
+	return "-"
+}
+
 func circuitLevels(c *goisisv1.Circuit) string {
 	switch {
 	case c.GetLevel1() && c.GetLevel2():
@@ -211,10 +229,11 @@ func newNeighborCmd(addr *string) *cobra.Command {
 			}
 			return printResponse(cmd, res.Msg, func() error {
 				w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				_, _ = fmt.Fprintln(w, "SYSTEM-ID\tHOSTNAME\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD")
+				_, _ = fmt.Fprintln(w, "SYSTEM-ID\tHOSTNAME\tINTERFACE\tLEVEL\tSTATE\tSNPA\tHOLD\tRESTART")
 				for _, a := range res.Msg.GetAdjacencies() {
-					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
-						a.GetSystemId(), a.GetHostname(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), a.GetSnpa(), a.GetHoldingTime())
+					_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
+						a.GetSystemId(), a.GetHostname(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), a.GetSnpa(), a.GetHoldingTime(),
+						restartStr(a))
 				}
 				return w.Flush()
 			})

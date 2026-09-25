@@ -561,6 +561,7 @@ func (s *IsisServer) housekeeping(now time.Time) {
 	for _, c := range s.circuits {
 		for _, l := range c.cfg.levels() {
 			s.metrics.AdjacencyCount(c.cfg.Name, levelLabel(l), c.upAdjacencyCount(l))
+			s.metrics.AdjacencySuppressed(c.cfg.Name, levelLabel(l), c.suppressedAdjacencyCount(l))
 		}
 	}
 	// Retry the writes the FIB rejected. Nothing else drives them: the pending

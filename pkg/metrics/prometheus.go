@@ -22,6 +22,8 @@ type Prometheus struct {
 	pduRx           *prometheus.CounterVec
 	pduDrops        *prometheus.CounterVec
 	adjacencies     *prometheus.GaugeVec
+	adjSuppressed   *prometheus.GaugeVec
+	restartRequests *prometheus.CounterVec
 	routes          *prometheus.GaugeVec
 	fibErrors       *prometheus.CounterVec
 	eventQueue      prometheus.Gauge
@@ -76,6 +78,14 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_adjacencies",
 			Help: "Number of adjacencies currently Up.",
 		}, []string{"circuit", "level"}),
+		adjSuppressed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "goisis_adjacencies_suppressed",
+			Help: "Number of Up adjacencies kept out of this node's LSPs and out of SPF (RFC 5306 3.2.2).",
+		}, []string{"circuit", "level"}),
+		restartRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_restart_requests_total",
+			Help: "Count of received IIHs asking this node to hold an adjacency across a neighbour's restart (RFC 5306 3.2.1), by whether it was held.",
+		}, []string{"circuit", "outcome"}),
 		routes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "goisis_routes",
 			Help: "Number of routes currently in the RIB.",
@@ -118,7 +128,8 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 		}, []string{"direction"}),
 	}
 	reg.MustRegister(p.adjTransitions, p.spfDuration, p.lsdbSize, p.floodTx, p.floodDrops,
-		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.routes, p.fibErrors, p.eventQueue,
+		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.adjSuppressed, p.restartRequests,
+		p.routes, p.fibErrors, p.eventQueue,
 		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.configUnapplied, p.lifetimeFloors,
 		p.lifetimeCorrupt, p.interLevel)
 	return p
@@ -167,6 +178,16 @@ func (p *Prometheus) PDUDrop(circuit, reason string) {
 // AdjacencyCount implements server.Metrics.
 func (p *Prometheus) AdjacencyCount(circuit, level string, n int) {
 	p.adjacencies.WithLabelValues(circuit, level).Set(float64(n))
+}
+
+// AdjacencySuppressed implements server.Metrics.
+func (p *Prometheus) AdjacencySuppressed(circuit, level string, n int) {
+	p.adjSuppressed.WithLabelValues(circuit, level).Set(float64(n))
+}
+
+// RestartRequest implements server.Metrics.
+func (p *Prometheus) RestartRequest(circuit, outcome string) {
+	p.restartRequests.WithLabelValues(circuit, outcome).Inc()
 }
 
 // RouteCount implements server.Metrics.
@@ -234,7 +255,8 @@ func (p *Prometheus) ForgetCircuit(circuit string) {
 		DeletePartialMatch(prometheus.Labels) int
 	}{
 		p.adjTransitions, p.floodTx, p.floodDrops, p.pduRx, p.pduDrops,
-		p.adjacencies, p.pduTxErrors, p.pduRxErrors, p.lifetimeFloors, p.lifetimeCorrupt,
+		p.adjacencies, p.adjSuppressed, p.restartRequests, p.pduTxErrors, p.pduRxErrors,
+		p.lifetimeFloors, p.lifetimeCorrupt,
 	} {
 		v.DeletePartialMatch(labels)
 	}

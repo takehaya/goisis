@@ -348,12 +348,13 @@ func TestReceivedPurgeKeepsZeroLifetime(t *testing.T) {
 	}
 }
 
-// TestAnAdjacencyRemembersWhenItCameUp pins the clock RFC 7987 §3.2's
-// false-positive filter reads. It starts on the transition into Up and must
-// not restart on the hellos that follow: a filter re-armed by every hello
-// would read an adjacency of any age as too young to judge, and the event
-// would never be raised at all.
-func TestAnAdjacencyRemembersWhenItCameUp(t *testing.T) {
+// TestAnAdjacencyRemembersWhenItsDatabaseExchangeBegan pins the clock RFC
+// 7987 §3.2's false-positive filter reads. It starts on the transition into
+// Up — the exchange an ordinary adjacency begins with — and must not restart
+// on the hellos that follow: a filter re-armed by every hello would read an
+// adjacency of any age as too young to judge, and the event would never be
+// raised at all.
+func TestAnAdjacencyRemembersWhenItsDatabaseExchangeBegan(t *testing.T) {
 	s, c, local := disServer(t, nil)
 	id, snpa := packet.SystemID{0, 0, 0, 0, 0, 0x10}, packet.SNPA{0, 0, 0, 0, 0, 0x10}
 	other := packet.SNPA{0, 0, 0, 0, 0, 0xee}
@@ -361,19 +362,19 @@ func TestAnAdjacencyRemembersWhenItCameUp(t *testing.T) {
 	// A hello echoing somebody else's SNPA reaches Init, not Up.
 	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, other))
 	adj := c.adjs[packet.Level2][id]
-	if adj == nil || adj.state != AdjInit || !adj.upSince.IsZero() {
-		t.Fatalf("adjacency in Init: %+v, want no upSince yet", adj)
+	if adj == nil || adj.state != AdjInit || !adj.syncSince.IsZero() {
+		t.Fatalf("adjacency in Init: %+v, want no syncSince yet", adj)
 	}
 
 	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
-	if adj.state != AdjUp || adj.upSince.IsZero() {
-		t.Fatalf("adjacency Up with upSince %v, want it set", adj.upSince)
+	if adj.state != AdjUp || adj.syncSince.IsZero() {
+		t.Fatalf("adjacency Up with syncSince %v, want it set", adj.syncSince)
 	}
 
 	came := time.Now().Add(-time.Hour)
-	adj.upSince = came
+	adj.syncSince = came
 	s.processLANHello(c, snpa, neighborHello(id, 64, packet.NodeID{}, local))
-	if !adj.upSince.Equal(came) {
-		t.Errorf("a refreshing hello moved upSince to %v, want it left at %v", adj.upSince, came)
+	if !adj.syncSince.Equal(came) {
+		t.Errorf("a refreshing hello moved syncSince to %v, want it left at %v", adj.syncSince, came)
 	}
 }

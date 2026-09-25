@@ -82,9 +82,67 @@ func noteRestart(adj *adjacency, rt *packet.RestartTLV, held bool, holding uint1
 		adj.holding, adj.lastHeard = holding, now
 		return
 	}
+	// §3.2.1c is about to hand this neighbor the whole database, over an
+	// adjacency that never left Up. That is the one event RFC 7987 §3.2's
+	// false-positive filter exists to exclude and the one it cannot see, since
+	// it is worded as the adjacency's own age; see corruptLifetime. Every held
+	// request restarts the window rather than only the first: a restarter asks
+	// on every IIH for as long as its restart takes, and the exchange is still
+	// running for all of them. §3.2.1a's bound is what keeps that finite — the
+	// adjacency expires under it, taking the window with it.
+	adj.syncSince = now
 	if first {
 		adj.lastHeard = now
 	}
+}
+
+// reportRestart records what one received IIH changed about a neighbor's
+// restart state: the request counter, and a line on each edge. It runs after
+// noteRestart has applied the IIH, on every IIH the two hello handlers process
+// — one that carries no Restart TLV at all is how a neighbor leaves restart
+// mode and drops suppression, so it has edges of its own.
+//
+// Edges and not states, because the helper's correct behaviour is the absence
+// of the event that used to be the signal: holding an adjacency means
+// "adjacency state change" does not fire, and there is nothing else to explain
+// why this node advertises a neighbor it has no handshake with, or why it
+// holds an adjacency that is Up and carries nothing. A restarter sets RR on
+// every IIH for the length of its restart, so the state itself is worth a line
+// once, not once per hello. adj.restartMode and adj.suppressed already hold
+// the previous value at the call site, which is what makes the edge free —
+// there is no separate record to keep, and none to retire when the adjacency
+// goes away.
+func (s *IsisServer) reportRestart(c *circuit, adj *adjacency, held, wasRestarting, wasSuppressed bool) {
+	if adj.restartMode {
+		// Every request, not just the first: a neighbor asking over and over
+		// is what §3.2.1a bounds, and the rate is the only sign of it.
+		s.metrics.RestartRequest(c.cfg.Name, restartOutcome(held))
+	}
+	switch {
+	case adj.restartMode && !wasRestarting:
+		s.logger.Info("neighbor restart request", "circuit", c.cfg.Name,
+			"neighbor", adj.systemID, "levels", adj.levels, "held", held)
+	case !adj.restartMode && wasRestarting:
+		s.logger.Info("neighbor left restart mode", "circuit", c.cfg.Name,
+			"neighbor", adj.systemID, "levels", adj.levels)
+	}
+	if adj.suppressed != wasSuppressed {
+		s.logger.Info("neighbor adjacency suppression changed", "circuit", c.cfg.Name,
+			"neighbor", adj.systemID, "levels", adj.levels, "suppressed", adj.suppressed)
+	}
+}
+
+// Outcomes reported through Metrics.RestartRequest.
+const (
+	restartHeld   = "held"   // §3.2.1's precondition covered the request
+	restartUnheld = "unheld" // it did not, so the IIH was processed as normal
+)
+
+func restartOutcome(held bool) string {
+	if held {
+		return restartHeld
+	}
+	return restartUnheld
 }
 
 // restartAck builds the acknowledgement RFC 5306 §3.2.1b owes a neighbor whose
