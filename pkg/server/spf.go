@@ -27,6 +27,11 @@ type spfNode struct {
 type spfEdge struct {
 	to     packet.NodeID
 	metric uint32
+	// colored says the IS-reachability entry this edge came from advertised
+	// colors of its own, which is what keeps it out of buildTopology's
+	// cross-entry prune. Only a Flexible Algorithm reads colors at all, so it
+	// is false on every algorithm-0 edge and nothing there consults it.
+	colored bool
 }
 
 type spfPrefix struct {
@@ -68,7 +73,9 @@ type route struct {
 // a Flexible Algorithm (RFC 9350) only participating real nodes are kept
 // (pseudonodes are transit and always kept), the only prefixes are SRv6
 // locators advertised for that algorithm — there is no fallback to plain IP
-// reachability — and aff prunes links by admin group. SRLG exclusion and the
+// reachability — and aff prunes links by admin group, in pass 2 per entry and
+// then, in the step between pass 2 and pass 3, across the uncolored entries
+// advertising a neighbor some other entry was pruned on. SRLG exclusion and the
 // non-IGP metric-types are not evaluated; updateRIB refuses a definition that
 // asks for them rather than computing a looser topology than it was given.
 func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoAffinity, now time.Time) map[packet.NodeID]*spfNode {
@@ -85,7 +92,9 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 	// participation (Router Capability TLV 242, fragment 0). A node with no
 	// live fragment 0 is not in the topology.
 	nodes := map[packet.NodeID]*spfNode{}
-	pruned := map[*spfNode]map[packet.NodeID]bool{}   // advertiser -> neighbors an affinity rule pruned
+	// advertiser -> neighbors an affinity rule pruned; allocated on first use
+	// so algorithm 0, which prunes nothing, allocates nothing.
+	var pruned map[*spfNode]map[packet.NodeID]bool
 	have := map[packet.NodeID]map[netip.Prefix]bool{} // plain IP reach, for prefer-prefix-reachability
 	var locs []struct {
 		nid packet.NodeID
@@ -133,6 +142,14 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 					if nb.Metric >= maxPathMetric {
 						continue
 					}
+					// Only a real advertiser's entry is ever pruned or consulted
+					// for its colors, so a pseudonode's edges still cost no
+					// sub-TLV walk -- which is what prunesLink's own laziness
+					// is for.
+					var prune, colored bool
+					if nid.PseudonodeID() == 0 {
+						prune, colored = aff.prunesLink(nb.SubTLVs)
+					}
 					// RFC 9350 §13 colors the member's edge to the
 					// pseudonode, and only that one: a LAN pseudonode LSP is
 					// originated by the DIS and carries no link attributes
@@ -141,14 +158,17 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 					// rule. Pruning one direction is enough anyway — twoWay
 					// requires the reverse edge, so the member's own colors
 					// already decide the LAN.
-					if nid.PseudonodeID() == 0 && aff.prunesLink(nb.SubTLVs) {
+					if prune {
+						if pruned == nil {
+							pruned = map[*spfNode]map[packet.NodeID]bool{}
+						}
 						if pruned[n] == nil {
 							pruned[n] = map[packet.NodeID]bool{}
 						}
 						pruned[n][nb.NeighborID] = true
 						continue
 					}
-					n.edges = append(n.edges, spfEdge{to: nb.NeighborID, metric: nb.Metric})
+					n.edges = append(n.edges, spfEdge{to: nb.NeighborID, metric: nb.Metric, colored: colored})
 				}
 			case *packet.ExtendedIPReachabilityTLV:
 				if algo != 0 {
@@ -205,19 +225,22 @@ func (s *IsisServer) buildTopology(level packet.Level, algo uint8, aff flexAlgoA
 		}
 	}
 
-	// A neighbor one entry was pruned on is pruned in every entry advertising
-	// it. RFC 5305 §3 lets a neighbor appear more than once and appendISReach
-	// splits an entry that way when its sub-TLVs overflow, repeating the link
-	// attributes on every piece — which nothing obliges a peer to do. Nothing
-	// on the wire tells a split-off entry from a genuinely parallel link, so
-	// the choice is between crossing a link a rule named and losing a path
-	// that rule would have allowed; refusing the path is the posture updateRIB
-	// already takes for a definition it cannot evaluate, and an exclude rule
-	// is a promise about where traffic will not go. Deciding per advertiser
-	// rather than per entry also keeps the answer out of the fragment
-	// iteration order, which is a map's.
+	// A neighbor one entry was pruned on is pruned in every *uncolored* entry
+	// advertising it. RFC 5305 §3 lets a neighbor appear more than once, and
+	// the two shapes that produces have to be told apart: appendISReach splits
+	// one link's entry when its sub-TLVs overflow, repeating the link
+	// attributes on every piece — which nothing obliges a peer to do, and a
+	// split-off half that does not repeat them advertises no colors at all, so
+	// under an exclude rule prunesLink leaves it alone and the algorithm walks
+	// around a rule the operator meant. A genuinely parallel link, the
+	// redundancy §13's "prune links" exists to keep, carries its own ASLA.
+	// Colors of its own are exactly the property that tells the two apart, so
+	// only an uncolored edge is taken. Deciding per advertiser rather than per
+	// entry also keeps the answer out of the fragment iteration order, which is
+	// a map's. Under an include rule prunesLink has already taken the uncolored
+	// half on its own, so this step only ever bites under an exclude rule.
 	for n, byNeighbor := range pruned {
-		n.edges = slices.DeleteFunc(n.edges, func(e spfEdge) bool { return byNeighbor[e.to] })
+		n.edges = slices.DeleteFunc(n.edges, func(e spfEdge) bool { return byNeighbor[e.to] && !e.colored })
 	}
 
 	// Pass 3: ISO 10589 7.2.7 computes the paths leaving this system from the
