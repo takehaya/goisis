@@ -519,3 +519,32 @@ func TestFlexAlgoIgnorableDefinitionLosesTheElection(t *testing.T) {
 		t.Errorf("a definition RFC 9350 §6 says to ignore was elected anyway: %+v", fi.Definition)
 	}
 }
+
+// TestANodesSecondDefinitionForOneAlgorithmDoesNotCompete guarantees RFC 9350
+// §5.1's one-per-node rule: an IS advertises at most one FAD sub-TLV for an
+// algorithm, and a second one in the same LSP is not a second candidate. It is
+// a conformance guard on advertiser-controlled input in the election that
+// settles a whole algorithm's definition area-wide, so a node that sends two
+// must not get two votes -- least of all a higher-priority second one.
+//
+// "First" is well defined inside one LSP and not across fragments, because
+// flexAlgoState iterates a map; §5.1 says the lowest-numbered LSP, which this
+// does not implement. Two in one LSP is the shape that is decidable.
+func TestANodesSecondDefinitionForOneAlgorithmDoesNotCompete(t *testing.T) {
+	two := &packet.RouterCapabilityTLV{SubTLVs: []packet.SubTLV{
+		&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, MetricType: packet.FlexAlgoMetricIGP, Priority: 100},
+		&packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, MetricType: packet.FlexAlgoMetricIGP, Priority: 255},
+	}}
+	now := time.Now()
+	s := electionServer(t)
+	injectLSP(s, packet.SystemID{0, 0, 0, 0, 0, 9}, []packet.TLV{two}, now)
+
+	fi := s.flexAlgoState(packet.Level2, now)[128]
+	if fi == nil || fi.Definition == nil {
+		t.Fatal("no definition elected at all")
+	}
+	if fi.Definition.Priority != 100 {
+		t.Errorf("winner = prio %d, want the first definition in the LSP (prio 100): the second one competed",
+			fi.Definition.Priority)
+	}
+}

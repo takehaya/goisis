@@ -160,4 +160,21 @@ func TestLinkAttributesCannotEmptyTheOwnLSP(t *testing.T) {
 	if reach == 0 {
 		t.Errorf("at the largest accepted admin group (%d words) the node advertises no neighbor at all", words)
 	}
+
+	// The claim the constant is chosen for, not the constant. maxLinkAttrArea's
+	// comment justifies half the area by what is left beside it, and
+	// docs/configuration.md publishes the width that follows -- so a later
+	// retune has to keep the headroom or fail here, rather than moving the
+	// documented number out from under itself with CI green.
+	oneLANEndX := subTLVLen(&packet.SRv6LANEndXSIDSubTLV{
+		Neighbor:          packet.SystemID{0, 0, 0, 0, 0, 2},
+		SRv6EndXSIDSubTLV: packet.SRv6EndXSIDSubTLV{Behavior: packet.SRv6BehaviorEndX},
+	})
+	if room := maxSubTLVArea - subTLVsLen(s.circuits[0].cfg.aslaSubTLVs()); room < 3*oneLANEndX {
+		t.Errorf("at the largest accepted admin group (%d words) an entry has %d octets beside it, too few for the three LAN End.X SIDs (%d each) maxLinkAttrArea is sized to leave",
+			words, room, oneLANEndX)
+	}
+	if words != 28 {
+		t.Errorf("the largest accepted admin group is %d words; docs/configuration.md publishes 28", words)
+	}
 }
