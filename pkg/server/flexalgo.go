@@ -89,6 +89,15 @@ func (s *IsisServer) flexAlgoState(level packet.Level, now time.Time) map[uint8]
 						continue // a node advertises one FAD per algorithm; use the first
 					}
 					contributedFAD[st.FlexAlgo] = true
+					// RFC 9350 §6.1-6.5: a constraint repeated inside one FAD
+					// sub-TLV makes that sub-TLV one the receiver MUST ignore.
+					// Ignoring it is dropping it from the election, not
+					// refusing the algorithm: the next valid definition wins,
+					// and no node can take an algorithm down on every goisis
+					// in the area with a priority-255 advertisement.
+					if repeatedConstraint(st.SubSubTLVs) {
+						continue
+					}
 					fi := info(st.FlexAlgo)
 					cand := &FlexAlgoDefinition{
 						Algo:        st.FlexAlgo,
@@ -111,6 +120,21 @@ func (s *IsisServer) flexAlgoState(level packet.Level, now time.Time) map[uint8]
 		})
 	}
 	return out
+}
+
+// repeatedConstraint reports whether one FAD sub-TLV carries the same
+// constraint sub-sub-TLV twice, which RFC 9350 §6.1-6.5 make the whole sub-TLV
+// ignorable for. The rule is per sub-TLV: §6.5 lets an exclude-SRLG repeat
+// across the set of FAD sub-TLVs from one IS, not inside one of them.
+func repeatedConstraint(cons []packet.FlexAlgoSubSubTLV) bool {
+	seen := map[uint8]bool{}
+	for _, ss := range cons {
+		if seen[ss.SubSubTLVType] {
+			return true
+		}
+		seen[ss.SubSubTLVType] = true
+	}
+	return false
 }
 
 // winsElection reports whether candidate beats the current best FAD: higher
@@ -163,19 +187,15 @@ type flexAlgoAffinity struct {
 // length RFC 9350 §6 rules out — is an error, not a rule to leave out: a
 // definition asking for a narrower topology than this node can compute must
 // not be computed at all. updateRIB refuses the algorithm on it, the way it
-// already refuses a metric-type it cannot measure.
+// already refuses a metric-type it cannot measure, and withdraws this node's
+// participation along with it (RFC 9350 §5.3).
+//
+// A constraint advertised twice is not refused here: RFC 9350 §6 has the
+// receiver ignore such a definition rather than fail on it, so flexAlgoState
+// drops it before the election and nothing ignorable reaches this function.
 func flexAlgoAffinityOf(def *FlexAlgoDefinition) (flexAlgoAffinity, error) {
 	var a flexAlgoAffinity
-	seen := map[uint8]bool{}
 	for _, ss := range def.Constraints {
-		// RFC 9350 §6.1-6.4: a constraint that appears twice in one FAD
-		// sub-TLV means the whole sub-TLV MUST be ignored by the receiver, and
-		// a definition we ignore is one we cannot compute.
-		if seen[ss.SubSubTLVType] {
-			return flexAlgoAffinity{}, fmt.Errorf("sub-sub-TLV %d advertised twice", ss.SubSubTLVType)
-		}
-		seen[ss.SubSubTLVType] = true
-
 		var target *[]uint32
 		switch ss.SubSubTLVType {
 		case packet.FlexAlgoSubSubExcludeAdminGroup:
@@ -259,10 +279,19 @@ func anyColorSet(rule, color []uint32) bool {
 	return false
 }
 
-// allColorsSet reports whether the link has every color the rule names.
+// allColorsSet reports whether the link has every color the rule names, under
+// the same convention anyColorSet reads: a word the link does not advertise is
+// all zeros. A rule word naming no color therefore asks for nothing and is met
+// by every link — RFC 9350 §13 step 4 tests the colors of the rule, and RFC
+// 7308's minimum length is a SHOULD, so an advertiser may pad its rule past
+// its significant words without taking every shorter-colored link out.
 func allColorsSet(rule, color []uint32) bool {
 	for i, w := range rule {
-		if i >= len(color) || w&color[i] != w {
+		var have uint32
+		if i < len(color) {
+			have = color[i]
+		}
+		if w&have != w {
 			return false
 		}
 	}

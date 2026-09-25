@@ -166,6 +166,13 @@ func (c *CircuitConfig) validate() error {
 	if c.Priority != nil && *c.Priority > MaxPriority {
 		return fmt.Errorf("circuit %q: priority %d exceeds %d", c.Name, *c.Priority, MaxPriority)
 	}
+	// What this circuit repeats in front of every IS-reachability entry has to
+	// leave room for the entry's own sub-TLVs, or the node originates no
+	// reachability at all: see maxLinkAttrArea.
+	if n := subTLVsLen(c.aslaSubTLVs()); n > maxLinkAttrArea {
+		return fmt.Errorf("circuit %q: link attributes are %d octets, over the %d an IS reachability entry can spare for them (admin group: %d words)",
+			c.Name, n, maxLinkAttrArea, len(c.AdminGroup))
+	}
 	return requirePrimaryPassword(fmt.Sprintf("circuit %q hello authentication", c.Name), c.HelloPassword, c.HelloAcceptPasswords)
 }
 

@@ -49,7 +49,7 @@
 | `p2p` | bool | ブロードキャスト/DIS の代わりにポイントツーポイント手順(RFC 5303 three-way)。 |
 | `priority` | uint8 | LAN での DIS 選出プライオリティ、0–127(デフォルト 64)。 |
 | `metric` | uint32 | サーキットのワイドメトリック(デフォルト 10)。 |
-| `admin-group` | uint32 のリスト | このリンクの色。Extended Administrative Group(RFC 7308)の 4 オクテット単位ごとに 1 要素、上位ワードから並べる。例えば `[0x00000005]` は第 1 ワードの色 0 と 2。Flex-Algorithm アプリケーション向けの ASLA sub-TLV で広報する(RFC 8919 §4.2、RFC 9350 §12)。1 ワードなら RFC 5305 の administrative group、2 ワード以上なら拡張エンコーディングで出す。指定しないサーキットは無色で、exclude ルールには引っかからないが include ルールでは必ず剪定される。 |
+| `admin-group` | uint32 のリスト | このリンクの色。Extended Administrative Group(RFC 7308)の 4 オクテット単位ごとに 1 要素、上位ワードから並べる。例えば `[0x00000005]` は第 1 ワードの色 0 と 2。Flex-Algorithm アプリケーション向けの ASLA sub-TLV で広報する(RFC 8919 §4.2、RFC 9350 §12)。1 ワードなら RFC 5305 の administrative group、2 ワード以上なら拡張エンコーディングで出す。指定しないサーキットは無色で、exclude ルールには引っかからないが include ルールでは必ず剪定される。この広報は IS 到達可能性エントリすべての先頭に繰り返し載るため、エントリ自身の sub-TLV の場所を残す必要がある。長すぎるもの(28 ワード超)は、隣接を 1 つも広報できないノードになるより先に、起動時とリロード時に拒否する。 |
 | `hello-interval` | duration | hello の送出間隔。例 `1s`、`500ms`(デフォルト `3s`)。 |
 | `hold-multiplier` | int | 広報する holding time は `hello-interval x hold-multiplier`(デフォルト 10)。 |
 | `padding` | bool | MTU 不一致を検出するため hello を MTU までパディングする(ISO 10589、デフォルト `true`)。 |

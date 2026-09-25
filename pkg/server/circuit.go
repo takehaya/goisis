@@ -159,14 +159,18 @@ func (c *circuit) isDIS(level packet.Level, self packet.SystemID) bool {
 // so under an include rule every link goisis owns would fail the test and the
 // algorithm would go dark on exactly those links. The L-flag stays clear —
 // goisis originates no legacy link attributes to send a receiver to.
-func (c *circuit) aslaSubTLVs() []packet.SubTLV {
-	if len(c.cfg.AdminGroup) == 0 {
+//
+// It hangs off the configuration rather than the circuit so that
+// CircuitConfig.validate can measure what a circuit would advertise before one
+// exists (maxLinkAttrArea).
+func (c *CircuitConfig) aslaSubTLVs() []packet.SubTLV {
+	if len(c.AdminGroup) == 0 {
 		return nil
 	}
 	// RFC 9350 §12 takes either encoding. Colors that fit the single 32-bit
 	// word of RFC 5305 §3.1 go out in it, because a receiver that predates RFC
 	// 7308's extended group still reads that one.
-	g := &packet.AdminGroupSubTLV{Extended: len(c.cfg.AdminGroup) > 1, Groups: c.cfg.AdminGroup}
+	g := &packet.AdminGroupSubTLV{Extended: len(c.AdminGroup) > 1, Groups: c.AdminGroup}
 	return []packet.SubTLV{&packet.ASLASubTLV{
 		SABM:       []byte{packet.ASLAAppFlexAlgo},
 		SubSubTLVs: []packet.SubTLV{g},
