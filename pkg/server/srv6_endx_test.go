@@ -158,40 +158,31 @@ func TestSRv6EndXOnP2PAdjacency(t *testing.T) {
 // TestSRv6LANEndXOnBroadcastAdjacency: on a broadcast circuit the IS
 // reachability entry points at the pseudonode, so the SID is advertised as a
 // LAN End.X sub-TLV (44) naming the neighbor it forwards to.
+//
+// On the fake clock, because the two things it waits for — a DIS election and
+// a SID reaching the FIB — are both several hellos and a housekeeping tick
+// deep, and on the wall clock that is a race with the test's own deadline
+// under load rather than a statement about the protocol. It flaked there, and
+// a flaky test does worse than fail: during round 5 it reported a mutation
+// caught that was not.
 func TestSRv6LANEndXOnBroadcastAdjacency(t *testing.T) {
-	ta := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xa1}, 1500)
-	tb := datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 0xb2}, 1500)
-	datalink.Link(ta, tb)
-
-	area := packet.AreaAddress{0x49, 0x00, 0x01}
 	loc := netip.MustParsePrefix("fc00:0:1::/48")
 	bGlobal := netip.MustParseAddr("2001:db8::b2")
 	subnet := netip.MustParsePrefix("2001:db8::/64")
 	idB := packet.SystemID{0, 0, 0, 0, 0, 2}
 
-	cfgA := CircuitConfig{Name: "a", Transport: ta, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")},
-		ConnectedPrefixes: []netip.Prefix{subnet}}
-	cfgB := CircuitConfig{Name: "b", Transport: tb, Level2: true, Padding: ptrFalse(),
-		IPv6Addrs:         []netip.Addr{netip.MustParseAddr("fe80::b2"), bGlobal},
-		ConnectedPrefixes: []netip.Prefix{subnet}}
-	fastHello(&cfgA)
-	fastHello(&cfgB)
-
-	afib := newRecordFIB()
-	a := mustServer(t,
-		WithSystemID(packet.SystemID{0, 0, 0, 0, 0, 1}), WithAreaAddresses(area),
-		WithCircuit(cfgA), WithSRv6Locator(loc), WithFIB(afib),
-	)
-	b := mustServer(t, WithSystemID(idB), WithAreaAddresses(area), WithCircuit(cfgB))
-
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	go a.Serve(ctx) //nolint:errcheck // ctx shutdown
-	go b.Serve(ctx) //nolint:errcheck // ctx shutdown
+	afib := newRecordFIB()
+	a, _, clk := lanPair(t, ctx, func(cfgA, cfgB *CircuitConfig) {
+		cfgA.IPv6Addrs = []netip.Addr{netip.MustParseAddr("fe80::a1"), netip.MustParseAddr("2001:db8::a1")}
+		cfgA.ConnectedPrefixes = []netip.Prefix{subnet}
+		cfgB.IPv6Addrs = []netip.Addr{netip.MustParseAddr("fe80::b2"), bGlobal}
+		cfgB.ConnectedPrefixes = []netip.Prefix{subnet}
+	}, WithSRv6Locator(loc), WithFIB(afib))
 
 	sid := netip.MustParseAddr("fc00:0:1:1::")
-	waitFor(t, "a advertises a LAN End.X SID for b", func() bool {
+	waitClock(t, clk, "a advertises a LAN End.X SID for b", func() bool {
 		_, lan := ownEndXSubTLVs(t, a)
 		return len(lan) == 1
 	})
@@ -206,7 +197,7 @@ func TestSRv6LANEndXOnBroadcastAdjacency(t *testing.T) {
 		t.Errorf("LAN End.X SID = %s behavior %d, want %s behavior %d",
 			lan[0].SID, lan[0].Behavior, sid, packet.SRv6BehaviorEndX)
 	}
-	waitFor(t, "a programmed the LAN End.X SID", func() bool {
+	waitClock(t, clk, "a programmed the LAN End.X SID", func() bool {
 		e, ok := afib.getSID(sid)
 		return ok && e.Behavior == fib.BehaviorEndX && e.Nexthop == bGlobal && e.Interface == "a"
 	})
