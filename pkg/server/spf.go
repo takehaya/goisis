@@ -54,7 +54,9 @@ type route struct {
 	level  packet.Level
 	algo   uint8
 	down   bool
-	// mt says the winning advertisement was a multi-topology one. RFC 5120 §4:
+	// mt says EVERY advertisement this route was computed from was a
+	// multi-topology one (TLV 237, MT #2) — addRoute ANDs it, see there.
+	// RFC 5120 §4:
 	// "Route leaking between the levels SHOULD only be performed within the
 	// same MT". goisis originates no MT TLV (see buildTopology's MT case and
 	// the Limitations table in docs/design.md), so the only thing it could say
@@ -490,22 +492,34 @@ func addAttachedDefault(routes map[netip.Prefix]route, nodes map[packet.NodeID]*
 // before metric), within a class a lower total metric wins outright, and an
 // equal one merges the first-hop sets (ECMP).
 //
-// So the route's up/down bit — and its multi-topology flag — is the WINNING
-// advertisement's own, and every reader of them — l1ExportSet, l2LeakSet,
-// preferenceClass — wants exactly that.
-// Merging it stickily ("down when any contributing advertisement was") would be
-// the conservative answer to "a leaked copy re-originated without the bit is
+// So the route's up/down bit is the WINNING advertisement's own, and its
+// readers — preferenceClass and l1ExportSet — want exactly that. Merging it
+// stickily ("down when any contributing advertisement was") would be the
+// conservative answer to "a leaked copy re-originated without the bit is
 // indistinguishable from independent reachability", but it costs far more than
 // it buys: a prefix the area genuinely owns that any border also leaks would
 // stop being exported upward, black-holing it for the rest of the domain, and
 // since a border only leaks what it cannot see inside the area, two borders
 // latch each other into that state with no way out.
+//
+// The multi-topology flag is merged the opposite way — AND over every
+// contribution — because it is the opposite kind of bit. down is loop
+// prevention, where sticky-on black-holes a prefix the area owns; mt is
+// evidence, "no advertisement of this prefix said MT #0", and there it is
+// sticky-OFF that is safe, because the harm is withholding an export the area
+// has an honest TLV 236 advertisement to base on. The merge is taken before
+// the winner is picked, and outside the switch: the flag is a property of the
+// set of advertisements, not of the winner, so it must not depend on which arm
+// ran — least of all on the arm that keeps cur and is written nowhere below (a
+// worse metric in the same class), which carries evidence just the same and
+// which computeSPF reaches, or not, by map iteration order.
 func addRoute(routes map[netip.Prefix]route, p netip.Prefix, r route) {
 	cur, ok := routes[p]
 	if !ok {
 		routes[p] = r
 		return
 	}
+	mt := cur.mt && r.mt
 	switch rc, cc := preferenceClass(r), preferenceClass(cur); {
 	case rc != cc:
 		if rc < cc {
@@ -516,6 +530,7 @@ func addRoute(routes map[netip.Prefix]route, p netip.Prefix, r route) {
 	case r.metric == cur.metric:
 		cur.nextHops = mergeHops(cur.nextHops, r.nextHops)
 	}
+	cur.mt = mt
 	routes[p] = cur
 }
 

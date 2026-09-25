@@ -131,9 +131,13 @@ flex-algo:
 | `advertise` | bool | Originate the definition (FAD), not just participate. At least one node in the area must advertise it. |
 | `locator` | CIDR | Optional SRv6 locator bound to this algorithm; its route is computed over the algorithm's pruned topology. |
 
-A node participates in every listed algorithm (advertised in the SR-Algorithm
-sub-TLV, 19). A locator bound to an algorithm the node does not participate in
-is rejected at startup, since it would be unreachable.
+A node participates in every listed algorithm for which a definition is
+available at that level, and announces exactly those in the SR-Algorithm
+sub-TLV (19): RFC 9350 §5.3 has a node stop participating in an algorithm it
+has no valid definition for, so a configured algorithm nobody has advertised a
+FAD for — yet, or at this level — is not announced. A locator bound to an
+algorithm this node does not list here is rejected at startup, since it would
+be unreachable.
 
 An End.X SID carries the algorithm of the locator it comes from (RFC 9352
 §8.1), so a locator bound to an algorithm hands one out only towards a

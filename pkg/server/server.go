@@ -61,7 +61,7 @@ type IsisServer struct {
 	lspGenPending   bool                    // a protocol event asked for an own-LSP regeneration
 	nextLSPGen      time.Time               // earliest time drainLSPGen may honor that request
 	watchers        map[*watcher]struct{}   // WatchEvent subscribers
-	algoWarned      edgeLog[algoKey]        // (level,algo) whose unsupported metric-type was logged
+	algoWarned      edgeLog[algoKey]        // (level,algo) whose refusal (no definition, or one goisis cannot evaluate) was logged
 	flexAlgoRefused map[algoKey]bool        // (level,algo) updateRIB refuses, so origination stops announcing it
 	endXSIDs        map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
 	seqWrapUntil    map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)

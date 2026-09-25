@@ -383,7 +383,9 @@ type FlexAlgoConfig struct {
 	Priority uint8
 	// AdvertiseDefinition controls whether this node advertises the FAD. A
 	// node may participate (compute paths for the algo) without advertising a
-	// definition; at least one node in the area must advertise it.
+	// definition; at least one node in the area must advertise it, and until
+	// one does this node announces no participation in the algorithm either
+	// (RFC 9350 §5.3, see updateRIB).
 	AdvertiseDefinition bool
 }
 
