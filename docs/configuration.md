@@ -405,7 +405,8 @@ on: remove the address, or suppress it with `policy.advertise`.
 `goisis_config_reloads_total{outcome}` (outcomes: `applied`, `refused`,
 `partial`), `goisis_config_reload_unapplied`,
 `goisis_lsp_lifetime_floored_total{circuit}`,
-`goisis_lsp_lifetime_corrupt_total{circuit}` and
+`goisis_lsp_lifetime_corrupt_total{circuit}`,
+`goisis_subtlv_refused_total{circuit}` and
 `goisis_inter_level_prefixes{direction}` (directions: `l2_to_l1`, `l1_to_l2`).
 
 An adjacency that will not come up is one of three drop reasons.
@@ -535,6 +536,33 @@ report is a real one, so treat a sustained rate as the circuit to take a capture
 on. Which LSP it was is deliberately not in the log: the rate is bounded only by
 how fast a neighbour can flood, and a line per event would turn one segment's
 corruption into an amplifier on the management loop.
+
+`goisis_subtlv_refused_total` counts received LSPs that were entered into the
+database carrying a link or capability attribute whose decoder refused the
+value. Refusing an attribute does not fail the LSP: RFC 5305 §2 has a reader
+skip a sub-TLV it cannot use, and failing the PDU over one attribute would take
+its originator off every node in the area. It is kept opaque instead — which
+makes it indistinguishable from a code point this node does not implement, and
+for an administrative group indistinguishable from a link advertising no
+colours, which a Flex-Algo `exclude` rule leaves alone. A constraint can
+therefore stop pruning a link that was coloured on the wire, and this counter is
+the only report of that. It is not a `goisis_pdu_drops_total` reason: those are
+PDUs that were discarded, and this one was installed.
+
+The baseline is zero, and what it catches is version skew or an encoder
+emitting a length its code point forbids rather than an attack — a peer can
+advertise no colour at all for the same effect:
+
+```
+increase(goisis_subtlv_refused_total[1h]) > 0
+```
+
+Which code point it was is in the log and not in a label: the first refusal per
+circuit and code point logs `attribute refused and kept opaque`, naming the LSP
+to take a capture of, and the rest are suppressed. One neighbour re-flooding a
+malformed attribute would otherwise write a line per flood, which is the same
+reason the corrupt-lifetime report above is counted and never logged; the
+counter carries the rate.
 
 `goisis_adjacencies_suppressed` is what makes `goisis_adjacencies` readable
 during a neighbour's restart. RFC 5306 §3.2.2 keeps an adjacency whose

@@ -88,6 +88,17 @@ func FuzzDecodeTLVs(f *testing.F) {
 		" 10 13 01 00 10 03 04 00 00 00 05 0e 08 00 00 00 05 80 00 00 00" + // ASLA{admin group, extended admin group}
 		" 00 00 00 00 00 03 00 00 00 14 10" + // neighbor ..03, metric 20, 16 octets of sub-TLVs
 		" 10 02 80 00 03 04 00 00 00 03 0e 04 00 00 00 03")) // ASLA(L-flag), then both legacy encodings
+	// The same families on the other side of the line: one TLV 22 entry whose
+	// three sub-TLVs are each refused — an admin group of 3 octets, an ASLA
+	// wrapping an extended admin group of 6, and an ASLA with SABM length 9.
+	// This is decodeSubTLV's fallback, which the accepting seeds above never
+	// reach, and the round trip it must still hold to is the one that carries
+	// a refused value out byte for byte.
+	f.Add(mustHexNoT("16 21" +
+		" 00 00 00 00 00 02 00 00 00 0a 16" + // neighbor ..02, metric 10, 22 octets of sub-TLVs
+		" 03 03 00 00 05" + // administrative group, one octet short
+		" 10 0b 01 00 10 0e 06 00 00 00 05 00 00" + // ASLA{extended admin group of 6 octets}
+		" 10 02 09 00")) // ASLA whose SABM length is 9 (RFC 8919 4.2: ignore it)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		tlvs, err := decodeTLVs(data)

@@ -3,6 +3,7 @@ package packet
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -67,5 +68,76 @@ func TestSubTLVAreaFramingStillFails(t *testing.T) {
 				t.Errorf("decodeSubTLVs(%x) = %v, want ErrTruncated", tc.wire, err)
 			}
 		})
+	}
+}
+
+// TestRefusedAttributeIsToldApartFromAnUnknownOne: containment makes a value a
+// registered decoder refused look exactly like a code point no decoder is
+// registered for — the same opaque form, and for an admin group the same empty
+// colour set, which an exclude rule leaves alone. UnknownSubTLV.Refused is the
+// one bit that tells the two apart, and RefusedSubTLV is how a caller finds it
+// without walking the container shapes itself. The byte-exact round trip is
+// asserted with it: the flag is decode-side only and must not reach the wire.
+func TestRefusedAttributeIsToldApartFromAnUnknownOne(t *testing.T) {
+	// A well-formed extended administrative group sits beside every case as
+	// the control: marking a refusal must not disturb the attribute next to it.
+	sibling := mustHex(t, "0e 04 00000005")
+	asla := func(attrs []byte) []byte {
+		return append([]byte{subTLVASLA, byte(3 + len(attrs)), 0x01, 0x00, ASLAAppFlexAlgo}, attrs...)
+	}
+	for _, tc := range []struct {
+		name  string
+		attrs []byte
+		// want is the code point RefusedSubTLV must report, or -1 for
+		// "nothing here was refused".
+		want int
+	}{
+		{"an administrative group of 3 octets", mustHex(t, "03 03 000005"), subTLVAdminGroup},
+		{"the same one nested in an ASLA", asla(mustHex(t, "03 03 000005")), subTLVAdminGroup},
+		{"an extended administrative group of 6 octets", mustHex(t, "0e 06 000000050000"), subTLVExtendedAdminGroup},
+		{"an ASLA with SABM length 9", mustHex(t, "10 02 0900"), subTLVASLA},
+		{"an unregistered code point", mustHex(t, "63 02 dead"), -1},
+		{"a well-formed administrative group", mustHex(t, "03 04 00000005"), -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attrs := append(slices.Clone(tc.attrs), sibling...)
+			entry := []byte{0, 0, 0, 0, 0, 2, 0, 0, 0, 10, byte(len(attrs))}
+			wire := append([]byte{byte(TLVTypeExtendedISReachability), byte(len(entry) + len(attrs))}, entry...)
+			wire = append(wire, attrs...)
+
+			tlvs := checkTLVRoundtrip(t, wire)
+			refused := RefusedSubTLV(tlvs)
+			switch {
+			case tc.want < 0 && refused != nil:
+				t.Errorf("RefusedSubTLV reported sub-TLV %d, want nothing refused", refused.SubTLVType)
+			case tc.want >= 0 && refused == nil:
+				t.Errorf("RefusedSubTLV reported nothing, want sub-TLV %d", tc.want)
+			case tc.want >= 0 && int(refused.SubTLVType) != tc.want:
+				t.Errorf("RefusedSubTLV reported sub-TLV %d, want %d", refused.SubTLVType, tc.want)
+			}
+
+			decoded := tlvs[0].(*ExtendedISReachabilityTLV).Neighbors[0].SubTLVs
+			last, ok := decoded[len(decoded)-1].(*AdminGroupSubTLV)
+			if !ok || !last.Extended || !slices.Equal(last.Groups, []uint32{5}) {
+				t.Errorf("the attribute beside it decoded as %+v (%T), want it typed", decoded[len(decoded)-1], decoded[len(decoded)-1])
+			}
+		})
+	}
+}
+
+// TestEveryContextWithDecodersIsWalked guards the shortcut in RefusedSubTLV: it
+// walks the neighbor TLVs and the Router Capability TLV because those are the
+// contexts decoders are registered in, and registering one in a fourth context
+// would make refusals there silent again — which is the whole defect.
+func TestEveryContextWithDecodersIsWalked(t *testing.T) {
+	walked := map[SubTLVContext]bool{
+		SubTLVContextISReachability:   true,
+		SubTLVContextASLA:             true,
+		SubTLVContextRouterCapability: true,
+	}
+	for ctx := range subTLVDecoders {
+		if !walked[ctx] {
+			t.Errorf("context %d has a registered decoder, but RefusedSubTLV does not walk a TLV that carries it", ctx)
+		}
 	}
 }

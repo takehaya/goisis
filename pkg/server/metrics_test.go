@@ -778,3 +778,95 @@ func (m *countingMetrics) reportCounts() (made, atForget int) {
 	defer m.mu.Unlock()
 	return m.reports, m.reportsAtForget
 }
+
+func (m *countingMetrics) SubTLVRefused(circuit string) { m.inc("subtlv_refused", circuit) }
+
+// TestARefusedAttributeIsCountedWhereAnUnknownOneIsNot pins the one signal a
+// contained refusal leaves. decodeSubTLVs keeps a value a decoder refused as
+// the same opaque sub-TLV an unregistered code point produces -- which is what
+// stops one malformed attribute taking its originator off every node in the
+// area -- so nothing downstream can tell "this link advertises no colours"
+// from "this link's colours were refused". The second silently takes the link
+// out from under a Flex-Algo exclude rule, since prunesLink's step 1 is false
+// for an empty colour set.
+//
+// So: counted per accepted LSP, at the point the LSP is accepted and not where
+// a consumer reads the colours -- there the refusal is already indistinguishable
+// from an honest absence, and the read happens once per SPF run per algorithm
+// rather than once per advertisement. An unregistered code point is not
+// counted: nothing refused it, and a peer advertising what this node does not
+// implement is ordinary.
+func TestARefusedAttributeIsCountedWhereAnUnknownOneIsNot(t *testing.T) {
+	now := time.Now()
+	badAdminGroup := &packet.UnknownSubTLV{SubTLVType: 3, Value: []byte{0, 0, 5}} // RFC 5305 3.1 fixes it at 4 octets
+	// A well-formed attribute rides along in every case: marking a refusal
+	// must not disturb the link attribute beside it, nor count for it.
+	sibling := &packet.AdminGroupSubTLV{Extended: true, Groups: []uint32{5}}
+	lspWith := func(attrs ...packet.SubTLV) *packet.LSP {
+		lsp := peerLSP(1000)
+		lsp.TLVs = []packet.TLV{&packet.ExtendedISReachabilityTLV{
+			Neighbors: []packet.ExtendedISReachEntry{{
+				NeighborID: nodeID(metricsSelfID, 0),
+				Metric:     10,
+				SubTLVs:    append(attrs, sibling),
+			}},
+		}}
+		return lsp
+	}
+
+	for _, tc := range []struct {
+		name  string
+		attrs []packet.SubTLV
+		want  int
+	}{
+		{"an administrative group of 3 octets, directly under TLV 22", []packet.SubTLV{badAdminGroup}, 1},
+		{"the same one nested in an ASLA", []packet.SubTLV{
+			&packet.ASLASubTLV{SABM: []byte{packet.ASLAAppFlexAlgo}, SubSubTLVs: []packet.SubTLV{badAdminGroup}},
+		}, 1},
+		{"an unregistered code point", []packet.SubTLV{
+			&packet.UnknownSubTLV{SubTLVType: 99, Value: []byte{0xde, 0xad}},
+		}, 0},
+		{"a well-formed administrative group alone", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, c, m := metricsServer(t, true)
+			addUpAdjacency(c, now)
+			s.handleRx(c, datalink.Frame{PDU: serialize(t, lspWith(tc.attrs...)), Src: metricsPeerSNPA})
+
+			if got := m.count("subtlv_refused", "c"); got != tc.want {
+				t.Errorf("refused attributes on c = %d, want %d", got, tc.want)
+			}
+			// The containment itself: the LSP is entered into the database and
+			// is not a drop, whatever was refused inside it.
+			if _, ok := s.dbs[packet.Level2].entries[lspID(metricsPeerID, 0)]; !ok {
+				t.Error("the LSP was not entered into the database; containment is what makes the counter necessary")
+			}
+			if got := m.count("pdu_drop", "c", dropDecode); got != 0 {
+				t.Errorf("decode drops = %d, want 0: a refused attribute does not discard the PDU", got)
+			}
+		})
+	}
+
+	t.Run("the log is edge-triggered per code point, the counter carries the rate", func(t *testing.T) {
+		var logs bytes.Buffer
+		s, c, m := metricsServerWith(t, CircuitConfig{
+			Name:      "c",
+			Transport: datalink.NewMockTransport(packet.SNPA{0, 0, 0, 0, 0, 1}, 1500),
+			Level2:    true,
+			P2P:       true,
+			Padding:   ptrFalse(),
+		}, WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+		addUpAdjacency(c, now)
+		for seq := uint32(7); seq < 10; seq++ {
+			lsp := lspWith(badAdminGroup)
+			lsp.SequenceNumber = seq
+			s.handleRx(c, datalink.Frame{PDU: serialize(t, lsp), Src: metricsPeerSNPA})
+		}
+		if got := m.count("subtlv_refused", "c"); got != 3 {
+			t.Errorf("refused attributes on c = %d, want 3 (one per LSP accepted)", got)
+		}
+		if n := strings.Count(logs.String(), "attribute refused"); n != 1 {
+			t.Errorf("logs for 3 refreshes of the same advertisement = %d, want 1: the rate is bounded only by how fast a neighbour can flood", n)
+		}
+	})
+}

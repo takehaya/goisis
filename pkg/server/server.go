@@ -82,6 +82,7 @@ type IsisServer struct {
 	dupSystemIDWarned edgeLog[string]           // circuits that heard a hello carrying our own System ID
 	adjLimitWarned    edgeLog[string]           // circuits that turned a station away at their adjacency limit
 	txFailWarned      edgeLog[txFailKey]        // (circuit,step) whose transmit failure was already logged
+	refusedWarned     edgeLog[refusedKey]       // (circuit,sub-TLV) whose refused attribute was already logged
 	ticks             uint64                    // housekeeping ticks run, for work that is not due every tick
 	lspBufferSize     int                       // largest own LSP we originate (see WithLSPMTU)
 	lspMTUCap         int                       // WithLSPMTU's cap, kept because losing a circuit re-derives the size

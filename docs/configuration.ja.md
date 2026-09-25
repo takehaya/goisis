@@ -388,6 +388,7 @@ RFC 5305 の到達不能しきい値 (`0xfe000000`) 以上のメトリックで�
 `partial`) / `goisis_config_reload_unapplied` /
 `goisis_lsp_lifetime_floored_total{circuit}` /
 `goisis_lsp_lifetime_corrupt_total{circuit}` /
+`goisis_subtlv_refused_total{circuit}` /
 `goisis_inter_level_prefixes{direction}` (direction は `l2_to_l1` /
 `l1_to_l2`)。
 
@@ -514,6 +515,31 @@ hello の到着レートではなくそのレートになる。そして、1 つ
 継続するレートは、キャプチャを取るべきサーキットを指すと思えばよい。どの LSP だったかは
 意図的にログに出さない: レートを押さえているのは隣接がフラッディングできる速さだけで、
 1 件 1 行出せば、あるセグメントの破損が管理ループへの増幅器になる。
+
+`goisis_subtlv_refused_total` は、デコーダが値を拒否したリンク属性・能力属性を
+載せたままデータベースに入った受信 LSP を数える。属性を拒否しても LSP 自体は失敗
+させない: RFC 5305 §2 は使えない sub-TLV を読み飛ばすよう求めており、1 つの属性の
+ために PDU を落とせば、その広報元がエリア内のすべてのノードから消えてしまう。
+代わりに不透明なまま保持するので、このノードが実装していないコードポイントと
+区別がつかなくなる — 管理グループであれば、色を 1 つも広報していないリンクと
+区別がつかない。そして色のないリンクは Flex-Algo の `exclude` ルールが素通りさせる。
+つまり、ワイヤ上では色が付いていたリンクを制約が刈らなくなることがあり、それを
+報告するのはこのカウンタだけである。`goisis_pdu_drops_total` の reason ではない:
+あちらは破棄された PDU で、こちらは取り込まれた PDU である。
+
+基準値は 0 である。捕まえるのは攻撃ではなく、バージョン差や、コードポイントが
+許さない長さを出すエンコーダのほうである — 攻撃者なら色を 1 つも広報しないだけで
+同じ結果になる:
+
+```
+increase(goisis_subtlv_refused_total[1h]) > 0
+```
+
+どのコードポイントだったかはラベルではなくログにある: サーキットとコードポイント
+ごとに最初の 1 件だけ `attribute refused and kept opaque` を、キャプチャを取るべき
+LSP を添えて出し、以降は抑止する。1 つの隣接が不正な属性を再フラッディングすれば
+フラッディングのたびに 1 行になるからで、上の remaining lifetime 破損の報告を
+数えるだけでログに出さないのと同じ理由である。レートを担うのはカウンタのほうである。
 
 `goisis_adjacencies_suppressed` は、隣接の再起動中に `goisis_adjacencies` を読める
 ようにするためのものである。RFC 5306 §3.2.2 は、SA ビットを立てた隣接を Up のまま

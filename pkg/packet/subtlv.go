@@ -40,6 +40,16 @@ type SubTLV interface {
 type UnknownSubTLV struct {
 	SubTLVType uint8
 	Value      []byte
+	// Refused distinguishes the two ways this form is reached on decode: a
+	// code point with no decoder (false) and one whose decoder rejected the
+	// value (true). Both are opaque to every consumer's type switch, which is
+	// what decodeSubTLVs is for; the flag exists so the server can count the
+	// second, which is a peer advertising an attribute this node then ignores
+	// — for the admin-group family, one that an exclude rule stops pruning on.
+	//
+	// Decode-side only: Serialize does not read it, and nothing sets it on a
+	// sub-TLV this node originates, so the byte-exact round trip is unchanged.
+	Refused bool
 }
 
 // Type implements SubTLV.
@@ -116,8 +126,67 @@ func decodeSubTLV(ctx SubTLVContext, typ uint8, value []byte) SubTLV {
 		if sub, err := dec(value); err == nil {
 			return sub
 		}
+		return &UnknownSubTLV{SubTLVType: typ, Value: slices.Clone(value), Refused: true}
 	}
 	return &UnknownSubTLV{SubTLVType: typ, Value: slices.Clone(value)}
+}
+
+// RefusedSubTLV returns the first sub-TLV of a decoded TLV area whose
+// registered decoder refused its value, or nil if none did. It is what lets a
+// caller report a contained refusal (see UnknownSubTLV.Refused) without
+// reaching into every container shape itself.
+//
+// It walks only the TLVs that can hold one: a refusal needs a registered
+// decoder, and decoders are registered in three of the four contexts —
+// SubTLVContextIPReachability has none, so the prefix TLVs carry unknown
+// sub-TLVs and nothing else. TestEveryContextWithDecodersIsWalked fails if a
+// decoder is registered in a context this walk does not reach.
+func RefusedSubTLV(tlvs []TLV) *UnknownSubTLV {
+	for _, tlv := range tlvs {
+		var found *UnknownSubTLV
+		switch t := tlv.(type) {
+		case *ExtendedISReachabilityTLV:
+			found = refusedInISReach(t.Neighbors)
+		case *MTISReachabilityTLV:
+			found = refusedInISReach(t.Neighbors)
+		case *RouterCapabilityTLV:
+			found = refusedInSubTLVs(t.SubTLVs)
+		}
+		if found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// refusedInISReach scans the sub-TLV area of every neighbor entry, the list
+// TLV 22 and TLV 222 share.
+func refusedInISReach(neighbors []ExtendedISReachEntry) *UnknownSubTLV {
+	for _, n := range neighbors {
+		if found := refusedInSubTLVs(n.SubTLVs); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// refusedInSubTLVs scans one sub-TLV area, descending into an ASLA: its
+// attributes are decoded against their own registry (SubTLVContextASLA), so a
+// refusal one level down is the same event one level up.
+func refusedInSubTLVs(subs []SubTLV) *UnknownSubTLV {
+	for _, sub := range subs {
+		switch s := sub.(type) {
+		case *UnknownSubTLV:
+			if s.Refused {
+				return s
+			}
+		case *ASLASubTLV:
+			if found := refusedInSubTLVs(s.SubSubTLVs); found != nil {
+				return found
+			}
+		}
+	}
+	return nil
 }
 
 // serializeSubTLVs renders a sub-TLV area in order.

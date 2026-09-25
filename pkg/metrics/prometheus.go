@@ -33,6 +33,7 @@ type Prometheus struct {
 	configUnapplied prometheus.Gauge
 	lifetimeFloors  *prometheus.CounterVec
 	lifetimeCorrupt *prometheus.CounterVec
+	subTLVRefused   *prometheus.CounterVec
 	interLevel      *prometheus.GaugeVec
 }
 
@@ -122,6 +123,10 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name: "goisis_lsp_lifetime_corrupt_total",
 			Help: "Count of received LSPs whose remaining lifetime is possibly corrupt (RFC 7987 3.2).",
 		}, []string{"circuit"}),
+		subTLVRefused: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "goisis_subtlv_refused_total",
+			Help: "Count of received LSPs carrying an attribute whose decoder refused the value and which was kept opaque.",
+		}, []string{"circuit"}),
 		interLevel: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "goisis_inter_level_prefixes",
 			Help: "Number of prefixes this node originates across the level boundary, by direction.",
@@ -131,7 +136,7 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 		p.fibPending, p.pduRx, p.pduDrops, p.adjacencies, p.adjSuppressed, p.restartRequests,
 		p.routes, p.fibErrors, p.eventQueue,
 		p.pduTxErrors, p.pduRxErrors, p.configReloads, p.configUnapplied, p.lifetimeFloors,
-		p.lifetimeCorrupt, p.interLevel)
+		p.lifetimeCorrupt, p.subTLVRefused, p.interLevel)
 	return p
 }
 
@@ -235,6 +240,11 @@ func (p *Prometheus) LSPLifetimeCorrupt(circuit string) {
 	p.lifetimeCorrupt.WithLabelValues(circuit).Inc()
 }
 
+// SubTLVRefused implements server.Metrics.
+func (p *Prometheus) SubTLVRefused(circuit string) {
+	p.subTLVRefused.WithLabelValues(circuit).Inc()
+}
+
 // InterLevelPrefixes implements server.Metrics.
 func (p *Prometheus) InterLevelPrefixes(direction string, n int) {
 	p.interLevel.WithLabelValues(direction).Set(float64(n))
@@ -256,7 +266,7 @@ func (p *Prometheus) ForgetCircuit(circuit string) {
 	}{
 		p.adjTransitions, p.floodTx, p.floodDrops, p.pduRx, p.pduDrops,
 		p.adjacencies, p.adjSuppressed, p.restartRequests, p.pduTxErrors, p.pduRxErrors,
-		p.lifetimeFloors, p.lifetimeCorrupt,
+		p.lifetimeFloors, p.lifetimeCorrupt, p.subTLVRefused,
 	} {
 		v.DeletePartialMatch(labels)
 	}

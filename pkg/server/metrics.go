@@ -148,6 +148,23 @@ type Metrics interface {
 	// only by how fast a neighbor can flood, and a line per event would make
 	// one segment's corruption an amplifier on the management loop.
 	LSPLifetimeCorrupt(circuit string)
+	// SubTLVRefused records one received LSP that was entered into the
+	// database carrying an attribute whose decoder refused the value, on the
+	// circuit it arrived on. Once per such LSP, not once per attribute: what
+	// an operator acts on is the advertisement, and the first refusal in it
+	// is what the log names.
+	//
+	// Not a PDUDrop, which means the PDU was not installed. This one was: RFC
+	// 5305 §2 and RFC 8919 §4.2 have a reader skip an attribute it cannot
+	// use, and failing the LSP over one attribute would take its originator
+	// off every node in the area. The cost of that containment is that a
+	// refused attribute is indistinguishable from an absent one to every
+	// consumer — and for an admin group, absent means uncoloured, which an
+	// exclude rule leaves alone, so a Flex-Algo constraint fails open. This
+	// counter is the only report of that. It is not an attack signal (a peer
+	// can advertise no colour at all for the same effect); it is version skew
+	// or a buggy encoder, which is why it is worth a line on a dashboard.
+	SubTLVRefused(circuit string)
 	// InterLevelPrefixes reports the number of prefixes this node originates
 	// because of the level boundary, by direction: "l2_to_l1" is the leak and
 	// "l1_to_l2" the upward export. RouteCount is what this node learned;
@@ -326,6 +343,9 @@ func (NoopMetrics) LSPLifetimeFloored(string) {}
 // LSPLifetimeCorrupt implements Metrics.
 func (NoopMetrics) LSPLifetimeCorrupt(string) {}
 
+// SubTLVRefused implements Metrics.
+func (NoopMetrics) SubTLVRefused(string) {}
+
 // InterLevelPrefixes implements Metrics.
 func (NoopMetrics) InterLevelPrefixes(string, int) {}
 
@@ -349,6 +369,33 @@ func (s *IsisServer) txFailed(c *circuit, reason string, err error, args ...any)
 	s.txFailWarned.warn(txFailKey{circuit: c.cfg.Name, reason: reason}, func() {
 		s.logger.Error("circuit cannot transmit; suppressing repeats",
 			append([]any{"circuit", c.cfg.Name, "step", reason, "error", err}, args...)...)
+	})
+}
+
+// refusedKey identifies one refused attribute code point on one circuit. Not
+// the LSP: the condition is one encoder that this node and its advertiser
+// disagree about, and it repeats on every refresh of every LSP that carries
+// it, so keying per LSP would make one buggy neighbor a line per flood.
+type refusedKey struct {
+	circuit string
+	subTLV  uint8
+}
+
+// noteRefusedSubTLV counts and reports an accepted LSP carrying an attribute
+// whose decoder refused the value (see Metrics.SubTLVRefused). Counted per
+// LSP, logged once per (circuit, code point) — the code point is what says
+// which encoding this node and the advertiser disagree about, and the counter
+// carries the rate.
+func (s *IsisServer) noteRefusedSubTLV(c *circuit, lsp *packet.LSP) {
+	refused := packet.RefusedSubTLV(lsp.TLVs)
+	if refused == nil {
+		return
+	}
+	s.metrics.SubTLVRefused(c.cfg.Name)
+	s.refusedWarned.warn(refusedKey{circuit: c.cfg.Name, subTLV: refused.SubTLVType}, func() {
+		s.logger.Warn("attribute refused and kept opaque; suppressing repeats",
+			"circuit", c.cfg.Name, "level", lsp.Level, "lsp", lsp.LSPID,
+			"sub-tlv", refused.SubTLVType, "octets", len(refused.Value))
 	})
 }
 

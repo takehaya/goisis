@@ -184,6 +184,11 @@ func (s *IsisServer) processLSP(c *circuit, raw []byte, lsp *packet.LSP, adj *ad
 		// test are the two this position already settles — see corruptLifetime.
 		s.metrics.LSPLifetimeCorrupt(c.cfg.Name)
 	}
+	// Report an attribute decodeSubTLVs contained, here and not where a
+	// consumer reads one: the cause is this LSP arriving, while the effect is
+	// read once per SPF run per algorithm, and at that point a refused admin
+	// group looks exactly like a link that advertises no colours.
+	s.noteRefusedSubTLV(c, lsp)
 	db.entries[id] = &lspEntry{
 		lsp:      lsp,
 		raw:      stored,
