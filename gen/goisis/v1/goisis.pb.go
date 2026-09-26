@@ -2330,9 +2330,16 @@ func (*WatchEventResponse_Route) isWatchEventResponse_Event() {}
 
 // AdjacencyEvent reports a change to an adjacency: its state, or — since the
 // point of RFC 5306's helper is that a held adjacency never leaves Up — either
-// of the restarting and suppressed conditions that state cannot express. One
-// event per change and not per hello, so a restart that spans hundreds of IIHs
-// costs a handful of events.
+// of the restarting and suppressed conditions that state cannot express. The
+// two conditions are reported for an adjacency in state Up only, which is the
+// only adjacency they describe.
+//
+// One event per change and not per hello: a restarter sets RR on every IIH for
+// the length of its restart, so a restart that spans hundreds of IIHs costs
+// two events. A neighbor that flips either bit, however, costs one event per
+// flip — the rate is the peer's, and there is no hold-down. A subscriber that
+// cannot keep up is dropped with ResourceExhausted rather than slowing the
+// server.
 type AdjacencyEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Adjacency     *Adjacency             `protobuf:"bytes,1,opt,name=adjacency,proto3" json:"adjacency,omitempty"`

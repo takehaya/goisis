@@ -220,10 +220,14 @@ func (c *circuit) adjacencyInfos(now time.Time) []AdjacencyInfo {
 }
 
 // infoFor takes now rather than reading a clock, because the circuit has none
-// and HoldingRemaining is only true as of an instant. Every caller is on the
-// Serve loop and already holds one, so threading it costs a parameter and the
-// compiler names any future caller that forgets — where computing the value at
-// each snapshot site instead would leave a new one silently reporting zero.
+// and HoldingRemaining is only true as of an instant. A caller that already
+// holds the instant it means threads it, so the compiler names any future one
+// that forgets — where computing the value at each snapshot site instead would
+// leave a new one silently reporting zero. emitAdjacencyDown is the exception
+// and reads the clock itself: its callers reach it through teardownP2PAdj and
+// dropAdjacencies, from a link event, a circuit deletion or an operator's
+// clear, none of which has an instant of its own, and the instant a teardown
+// reports is the teardown.
 func (c *circuit) infoFor(adj *adjacency, l packet.Level, now time.Time) AdjacencyInfo {
 	return AdjacencyInfo{
 		Interface:        c.cfg.Name,

@@ -310,7 +310,9 @@ CLI `goisis`(`--addr`、デフォルト `http://127.0.0.1:50051`)のサブコマ
 `--initial` を付けると変化を追う前に現在の隣接と経路を出力)/ `version`。
 
 `-o json` を付けると、一覧・表示系コマンドは表の代わりに RPC のレスポンスを
-JSON で出力します(スクリプトや `jq` 向け)。`goisis database --detail` は各 LSP
+JSON で出力します(スクリプトや `jq` 向け)。`monitor` は単一のレスポンスではなく
+ストリームなので、イベントごとに JSON 値を 1 つずつ出力します(ストリームを `jq`
+のパイプラインで読むときの形です)。`goisis database --detail` は各 LSP
 の行の下にその TLV を並べるので、パケットキャプチャなしで対向の広告内容を読めます。
 
 `goisis flex-algo` の `CONSTRAINTS` 列には、選出された定義の制約 sub-sub-TLV
