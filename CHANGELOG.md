@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.1](https://github.com/takehaya/goisis/compare/v0.9.0...v0.9.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **cli:** make the restart visible where an operator is looking ([6223e58](https://github.com/takehaya/goisis/commit/6223e588f5ab99e88bb150f7281bcfce3026eae0))
+* **lsdb:** let the suppression budget leak back ([12db36e](https://github.com/takehaya/goisis/commit/12db36e8d2b8e1a3043a5cd12c999407130b502d))
+* **rib:** announce a Flexible Algorithm only once it has been computed ([9130bae](https://github.com/takehaya/goisis/commit/9130bae5c0016f23d9dfeb9e6b2da9074618d4a0))
+
 ## [0.9.0](https://github.com/takehaya/goisis/compare/v0.8.0...v0.9.0) (2026-09-25)
 
 ### Upgrade notes for operators
