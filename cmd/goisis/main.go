@@ -95,19 +95,44 @@ func newHTTPClient(addr string) (*http.Client, string, error) {
 // command rather than threaded through every constructor, so a subcommand sees
 // the root's persistent flag.
 func printResponse(cmd *cobra.Command, msg proto.Message, table func() error) error {
-	switch format, _ := cmd.Flags().GetString("output"); format {
-	case "json":
-		b, err := protojson.MarshalOptions{Multiline: true, EmitUnpopulated: false}.Marshal(msg)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(cmd.OutOrStdout(), string(b))
+	format, err := outputFormat(cmd)
+	if err != nil {
 		return err
-	case "table", "":
-		return table()
-	default:
-		return fmt.Errorf("unknown output format %q (want table or json)", format)
 	}
+	if format == formatJSON {
+		return printJSON(cmd, msg)
+	}
+	return table()
+}
+
+// The two values -o takes.
+const (
+	formatTable = "table"
+	formatJSON  = "json"
+)
+
+// outputFormat is the flag's reading, split out of printResponse because a
+// streaming command has no one response message to render: it decides per
+// event, and an unknown format has to be refused before the stream blocks
+// waiting for its first one rather than when one arrives.
+func outputFormat(cmd *cobra.Command) (string, error) {
+	switch format, _ := cmd.Flags().GetString("output"); format {
+	case formatJSON:
+		return formatJSON, nil
+	case formatTable, "":
+		return formatTable, nil
+	default:
+		return "", fmt.Errorf("unknown output format %q (want table or json)", format)
+	}
+}
+
+func printJSON(cmd *cobra.Command, msg proto.Message) error {
+	b, err := protojson.MarshalOptions{Multiline: true, EmitUnpopulated: false}.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), string(b))
+	return err
 }
 
 func levelStr(l goisisv1.Level) string {
@@ -596,16 +621,38 @@ func newMonitorCmd(addr *string) *cobra.Command {
 		Use:   "monitor",
 		Short: "Stream adjacency and route changes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Read and rejected before the RPC, because everything after this
+			// blocks until the server says something.
+			format, err := outputFormat(cmd)
+			if err != nil {
+				return err
+			}
 			stream, err := newClient(*addr).WatchEvent(cmd.Context(),
 				connect.NewRequest(&goisisv1.WatchEventRequest{IncludeInitial: initial}))
 			if err != nil {
 				return err
 			}
 			for stream.Receive() {
+				if format == formatJSON {
+					// One JSON value per event: a stream has no single
+					// response to marshal, and the value is the same message
+					// every other command's -o json prints, so the same jq
+					// pipeline reads it.
+					if err := printJSON(cmd, stream.Msg()); err != nil {
+						return err
+					}
+					continue
+				}
 				switch ev := stream.Msg().GetEvent().(type) {
 				case *goisisv1.WatchEventResponse_Adjacency:
 					a := ev.Adjacency.GetAdjacency()
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ADJ  %s %s %s %s\n", a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState())
+					// restartStr last, because on a held adjacency it is the
+					// only column that moves: RFC 5306 keeps the state at Up
+					// through the whole restart, so without it entering
+					// restart, entering suppression and leaving both render
+					// as one line repeated three times.
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ADJ  %s %s %s %s %s\n",
+						a.GetSystemId(), a.GetInterface(), levelStr(a.GetLevel()), a.GetState(), restartStr(a))
 				case *goisisv1.WatchEventResponse_Route:
 					r := ev.Route.GetRoute()
 					verb := "ROUTE+"

@@ -403,12 +403,23 @@ func (stubService) ListAdjacencies(context.Context, *connect.Request[goisisv1.Li
 	}}}), nil
 }
 
+// WatchEvent sends the three events a neighbour's restart produces on the
+// server side: entering restart, entering suppression, and leaving both. All
+// three carry State "Up", because an adjacency the helper holds never leaves
+// it -- which is the reason the stream reports the conditions at all.
 func (stubService) WatchEvent(_ context.Context, _ *connect.Request[goisisv1.WatchEventRequest], stream *connect.ServerStream[goisisv1.WatchEventResponse]) error {
-	return stream.Send(&goisisv1.WatchEventResponse{Event: &goisisv1.WatchEventResponse_Adjacency{
-		Adjacency: &goisisv1.AdjacencyEvent{Adjacency: &goisisv1.Adjacency{
-			SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2, State: "Up",
-		}},
-	}})
+	for _, adj := range []*goisisv1.Adjacency{
+		{SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2, State: "Up", Restarting: true},
+		{SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2, State: "Up", Restarting: true, Suppressed: true},
+		{SystemId: "0000.0000.0002", Interface: "eth0", Level: goisisv1.Level_LEVEL_2, State: "Up"},
+	} {
+		if err := stream.Send(&goisisv1.WatchEventResponse{Event: &goisisv1.WatchEventResponse_Adjacency{
+			Adjacency: &goisisv1.AdjacencyEvent{Adjacency: adj},
+		}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TestCommandsWriteTheirAnswerToStdout covers the renderers that do not go
@@ -434,6 +445,14 @@ func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
 		{"version", []string{"version"}, version.Version},
 		{"global", []string{"global", "--addr", srv.URL}, "system-id: 0000.0000.0001"},
 		{"monitor", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up"},
+		// The three lines the three events above have to become. State is
+		// "Up" on all three, so without the last column an operator watching
+		// a neighbour's maintenance window sees one line repeated -- churn,
+		// where the feature exists to report a restart that by definition
+		// moves no state.
+		{"monitor renders entering restart", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up restarting\n"},
+		{"monitor renders entering suppression", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up restarting,suppressed\n"},
+		{"monitor renders leaving both", []string{"monitor", "--addr", srv.URL}, "ADJ  0000.0000.0002 eth0 L2 Up -\n"},
 		{"global as json", []string{"global", "--addr", srv.URL, "-o", "json"}, `"systemId"`},
 		{"neighbor renders the restart column", []string{"neighbor", "--addr", srv.URL}, "restarting"},
 		// The hold that is left is a column of its own, so it is visible next
@@ -458,4 +477,64 @@ func TestCommandsWriteTheirAnswerToStdout(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMonitorHonorsTheOutputFormat guarantees that the persistent -o flag
+// means something on the one command that streams. A stream has no single
+// response message to marshal, so "json" is one JSON value per event -- the
+// same shape every other command emits, read back by the same jq pipeline --
+// and a format neither renderer knows is an error before the stream blocks,
+// rather than a flag accepted and ignored.
+func TestMonitorHonorsTheOutputFormat(t *testing.T) {
+	_, handler := goisisv1connect.NewIsisServiceHandler(stubService{})
+	mux := http.NewServeMux()
+	mux.Handle(goisisv1connect.IsisServiceWatchEventProcedure, handler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	t.Run("json is one value per event", func(t *testing.T) {
+		var out, errBuf bytes.Buffer
+		root := newRootCmd()
+		root.SetOut(&out)
+		root.SetErr(&errBuf)
+		root.SetArgs([]string{"monitor", "--addr", srv.URL, "-o", "json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("monitor -o json: %v", err)
+		}
+		dec := json.NewDecoder(strings.NewReader(out.String()))
+		var restarting []bool
+		for dec.More() {
+			var ev struct {
+				Adjacency struct {
+					Adjacency struct {
+						Restarting bool `json:"restarting"`
+					} `json:"adjacency"`
+				} `json:"adjacency"`
+			}
+			if err := dec.Decode(&ev); err != nil {
+				t.Fatalf("output is not a stream of JSON values: %v\n%s", err, out.String())
+			}
+			restarting = append(restarting, ev.Adjacency.Adjacency.Restarting)
+		}
+		if want := []bool{true, true, false}; len(restarting) != len(want) {
+			t.Fatalf("decoded %d events %v, want %d (%v)", len(restarting), restarting, len(want), want)
+		} else {
+			for i := range want {
+				if restarting[i] != want[i] {
+					t.Errorf("event %d restarting = %t, want %t", i, restarting[i], want[i])
+				}
+			}
+		}
+	})
+
+	t.Run("an unknown format is refused, not ignored", func(t *testing.T) {
+		var out, errBuf bytes.Buffer
+		root := newRootCmd()
+		root.SetOut(&out)
+		root.SetErr(&errBuf)
+		root.SetArgs([]string{"monitor", "--addr", srv.URL, "-o", "yaml"})
+		if err := root.Execute(); err == nil {
+			t.Errorf("monitor -o yaml was accepted and printed %q, want an error", out.String())
+		}
+	})
 }

@@ -557,13 +557,14 @@ type restartHelper struct {
 	// hello sends an IIH that completes the handshake, carrying rt — nil for a
 	// neighbour that does not implement RFC 5306 at all, and otherwise the TLV
 	// §3.2 makes a MUST on every IIH of one that does. settle is the first of
-	// those. request sends an IIH with RR set that echoes nobody, which is all
-	// a router with no adjacency database left can send. src is where the
-	// frame came from.
-	hello   func(src packet.SNPA, holding uint16, rt *packet.RestartTLV)
-	settle  func(src packet.SNPA, holding uint16)
-	request func(src packet.SNPA, holding uint16)
-	adj     func() *adjacency
+	// those. echoNobody sends an IIH that echoes nobody, which is all a router
+	// with no adjacency database left can send; request is that with RR set.
+	// src is where the frame came from.
+	hello      func(src packet.SNPA, holding uint16, rt *packet.RestartTLV)
+	settle     func(src packet.SNPA, holding uint16)
+	echoNobody func(src packet.SNPA, holding uint16, rt *packet.RestartTLV)
+	request    func(src packet.SNPA, holding uint16)
+	adj        func() *adjacency
 }
 
 func newRestartHelper(t *testing.T, p2p bool, opts ...ServerOption) *restartHelper {
@@ -584,7 +585,7 @@ func newRestartHelper(t *testing.T, p2p bool, opts ...ServerOption) *restartHelp
 			s.processP2PHello(c, src, hello)
 		}
 		h.settle = func(src packet.SNPA, holding uint16) { h.hello(src, holding, nil) }
-		h.request = func(src packet.SNPA, holding uint16) {
+		h.echoNobody = func(src packet.SNPA, holding uint16, rt *packet.RestartTLV) {
 			s.processP2PHello(c, src, &packet.P2PHello{
 				CircuitType:    packet.CircuitTypeLevel2,
 				SourceID:       peer,
@@ -593,9 +594,12 @@ func newRestartHelper(t *testing.T, p2p bool, opts ...ServerOption) *restartHelp
 				// No three-way option at all: nobody to echo.
 				TLVs: []packet.TLV{
 					&packet.AreaAddressesTLV{Addresses: []packet.AreaAddress{area}},
-					&packet.RestartTLV{RestartRequest: true},
+					rt,
 				},
 			})
+		}
+		h.request = func(src packet.SNPA, holding uint16) {
+			h.echoNobody(src, holding, &packet.RestartTLV{RestartRequest: true})
 		}
 		return h
 	}
@@ -612,10 +616,13 @@ func newRestartHelper(t *testing.T, p2p bool, opts ...ServerOption) *restartHelp
 		s.processLANHello(c, src, hello)
 	}
 	h.settle = func(src packet.SNPA, holding uint16) { h.hello(src, holding, nil) }
-	h.request = func(src packet.SNPA, holding uint16) {
-		hello := restartingHello(peer, lanID, &packet.RestartTLV{RestartRequest: true})
+	h.echoNobody = func(src packet.SNPA, holding uint16, rt *packet.RestartTLV) {
+		hello := restartingHello(peer, lanID, rt)
 		hello.HoldingTime = holding
 		s.processLANHello(c, src, hello)
+	}
+	h.request = func(src packet.SNPA, holding uint16) {
+		h.echoNobody(src, holding, &packet.RestartTLV{RestartRequest: true})
 	}
 	return h
 }
@@ -1246,6 +1253,57 @@ func TestAWatcherSeesTheRestartAndSuppressionEdges(t *testing.T) {
 	}
 }
 
+// TestAStationWithNoAdjacencyDrivesNoRestartEvents guarantees that a station
+// that never completed the three-way handshake cannot reach a subscriber. RFC
+// 5306 §3.2.1's hold has an adjacency already in state Up as its precondition,
+// so neither condition means anything on a station stuck in Init — but
+// noteRestart records the RR and SA bits of any IIH carrying TLV 211, and the
+// edge between two of those is one event per hello for as long as the station
+// alternates a bit. `goisis monitor` and every library subscriber are dropped
+// at watcherBuffer events with ResourceExhausted, so an ungated edge hands the
+// subscriber list to a station with no handshake. What such a request is
+// entitled to is the counter, restart_requests_total{outcome="unheld"}.
+func TestAStationWithNoAdjacencyDrivesNoRestartEvents(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			drain := h.watchAdjacencies(t)
+
+			// The one event the station is owed: it appeared, in Init.
+			h.request(h.snpa, 30)
+			if got := drain(); len(got) != 1 || got[0].State != AdjInit {
+				t.Fatalf("the station's first hello emitted %+v, want one event reporting Init", got)
+			}
+
+			// The lever: RR set, then a TLV 211 with every flag clear — the
+			// capability advertisement §3.2 makes a MUST — and back again.
+			// Every pair is two condition edges and no state change.
+			const hellos = 20
+			for i := 0; i < hellos; i++ {
+				h.echoNobody(h.snpa, 30, &packet.RestartTLV{})
+				h.request(h.snpa, 30)
+			}
+			if got := drain(); len(got) != 0 {
+				t.Errorf("%d hellos from a station stuck in Init emitted %d adjacency events, want 0",
+					2*hellos, len(got))
+			}
+			if got := h.adj().state; got != AdjInit {
+				t.Fatalf("the station reached %v; the case needs one that never hand shakes", got)
+			}
+			// The signal the gate must not take away with the events: every
+			// one of those requests is still counted where §3.2.1's
+			// "Otherwise" puts it.
+			if got := m.count("restart_request", "c", restartUnheld); got != hellos+1 {
+				t.Errorf("unheld restart requests = %d, want %d: the gate silenced the counter too", got, hellos+1)
+			}
+			if got := m.count("restart_request", "c", restartHeld); got != 0 {
+				t.Errorf("held restart requests = %d, want 0: nothing was Up to hold", got)
+			}
+		})
+	}
+}
+
 // TestTheHoldReportedIsTheOneLeftNotTheOneAdvertised guarantees that the two
 // numbers a held adjacency has are both readable. RFC 5306 §3.2.1a withholds
 // the refresh from every request after the first, so the advertised holding
@@ -1270,6 +1328,19 @@ func TestTheHoldReportedIsTheOneLeftNotTheOneAdvertised(t *testing.T) {
 				// neighbor` renders and what a watcher is handed.
 				if got := adjacencyToProto(info).GetHoldingRemaining(); got != uint32(want) {
 					t.Errorf("Adjacency.holding_remaining = %d, want %d", got, want)
+				}
+				// And the same reading through the join every RPC takes:
+				// ListAdjacencies and snapshotState both go through
+				// adjacencyInfos, never infoFor, so pinning only infoFor
+				// leaves the instant it is called with free to become the
+				// zero one with the suite green.
+				infos := h.c.adjacencyInfos(h.clk.Now())
+				if len(infos) != 1 {
+					t.Fatalf("adjacencyInfos returned %d adjacencies, want the one this circuit has", len(infos))
+				}
+				if infos[0].Holding != 30 || infos[0].HoldingRemaining != want {
+					t.Errorf("adjacencyInfos reports hold %d, remaining %d; want 30 and %d",
+						infos[0].Holding, infos[0].HoldingRemaining, want)
 				}
 				h.clk.Advance(10 * time.Second)
 			}

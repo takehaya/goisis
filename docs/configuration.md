@@ -326,7 +326,9 @@ The `goisis` CLI (`--addr`, default `http://127.0.0.1:50051`) provides:
 current adjacencies and routes before following changes), and `version`.
 
 `-o json` prints the RPC response of any list or show command as JSON instead
-of a table, for scripts and `jq`. `goisis database --detail` additionally prints
+of a table, for scripts and `jq`. `monitor` is a stream rather than one
+response, so there it prints one JSON value per event, which is what a `jq`
+pipeline reads from a stream. `goisis database --detail` additionally prints
 each LSP's TLVs under its row, so a peer's advertisement can be read without a
 packet capture.
 

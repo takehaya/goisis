@@ -396,11 +396,21 @@ func (s *IsisServer) processLANHello(c *circuit, src packet.SNPA, h *packet.LANH
 			"neighbor", h.SourceID, "from", prev, "to", newState)
 		s.metrics.AdjacencyTransition(c.cfg.Name, levelLabel(level), newState.String())
 		s.emitAdjacency(c.infoFor(adj, level, now))
-	} else if restartEdge {
+	} else if restartEdge && adj.state == AdjUp {
 		// RFC 5306's two conditions are the one thing an observer can be told
 		// about an adjacency that deliberately never leaves Up, so the stream
 		// reports them where it would report a transition — see reportRestart
 		// for why this arm is the caller's and not its.
+		//
+		// Up, because that is the only adjacency either condition describes:
+		// §3.2.1's precondition for a hold is an adjacency already Up, and
+		// §3.2.2's suppression governs what this node's LSPs advertise, which
+		// is again only an Up neighbor. Without the test a station that never
+		// completed the handshake keeps its state at Init and so misses the
+		// arm above, and every IIH that flips the RR bit is an edge here — an
+		// event per hello from a peer with no adjacency, which empties a
+		// subscriber's buffer at the hello rate. Such a request is already
+		// reported as restart_requests_total{outcome="unheld"}.
 		s.emitAdjacency(c.infoFor(adj, level, now))
 	}
 	// A triggered hello when the state moved, so the neighbor sees our echo
@@ -554,9 +564,10 @@ func (s *IsisServer) processP2PHello(c *circuit, src packet.SNPA, h *packet.P2PH
 			}
 		}
 		s.requestLSPRegen()
-	} else if restartEdge {
+	} else if restartEdge && adj.state == AdjUp {
 		// See processLANHello: the restart conditions are reported where a
-		// transition would be, once per level rather than once per hello.
+		// transition would be, once per level rather than once per hello, and
+		// only for the Up adjacency they are conditions of.
 		for _, l := range adj.levels.levels() {
 			s.emitAdjacency(c.infoFor(adj, l, now))
 		}
