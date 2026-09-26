@@ -53,14 +53,21 @@ func (s *IsisServer) updateRIB(now time.Time) {
 	// intra-area is won by Level 1 (betterRoute), which is exactly the prefix
 	// l2LeakSet still has to look at to decide it is intra-area.
 	var l2Reach map[netip.Prefix]route
-	// RFC 9350 §5.3: a node that stops computing a Flexible Algorithm "MUST
+	// RFC 9350 §5.3: a node that does not compute a Flexible Algorithm "MUST
 	// NOT announce participation" in it either, because §13 has every other
 	// router prune a non-participant out of its topology for that algorithm —
 	// so the announcement is the one thing steering algorithm-K traffic into a
-	// node holding no algorithm-K forwarding state. The refusal is decided
-	// here, per (level, algo); recording it is what lets origination say the
-	// same thing without re-deriving the condition.
-	refused := map[algoKey]bool{}
+	// node holding no algorithm-K forwarding state. What origination reads is
+	// this positive record, written per (level, algo) below once a definition
+	// has been elected and found evaluable. It is deliberately the positive
+	// one: an algorithm this pass never reached is one the node computes
+	// nothing for, and only absence says that for an algorithm no pass has
+	// considered yet — the state every startup, every AddFlexAlgo and every
+	// AddCircuit that opens a new level begins in, and each of those
+	// originates before the RIB pass that would have recorded a refusal
+	// (Serve originates before entering the loop; the loop drains the LSP
+	// generation before recomputing).
+	computedAlgos := map[algoKey]bool{}
 	algos := s.routingAlgos()
 	// Iteration order is immaterial: betterRoute alone decides which route wins
 	// when the same prefix is computed at both levels or under two algorithms.
@@ -91,7 +98,6 @@ func (s *IsisServer) updateRIB(now time.Time) {
 				// the FAD sub-TLV to one level, so a definition advertised in
 				// Level 2 alone leaves Level 1 here permanently.
 				if fi == nil || fi.Definition == nil {
-					refused[algoKey{level: level, algo: algo}] = true
 					// Edge-triggered like the arms below, and for one more
 					// reason: an area whose FAD advertiser has not been heard
 					// from yet passes through this branch on the way up.
@@ -102,7 +108,6 @@ func (s *IsisServer) updateRIB(now time.Time) {
 					continue
 				}
 				if fi.Definition.MetricType != packet.FlexAlgoMetricIGP {
-					refused[algoKey{level: level, algo: algo}] = true
 					// Edge-triggered, keyed per (level, algo) because each level
 					// elects its FAD independently: warn once until the
 					// metric-type becomes supported again so a persistent
@@ -119,7 +124,6 @@ func (s *IsisServer) updateRIB(now time.Time) {
 				// install paths over links the definition excluded.
 				var err error
 				if aff, err = flexAlgoAffinityOf(fi.Definition); err != nil {
-					refused[algoKey{level: level, algo: algo}] = true
 					s.algoWarned.warn(algoKey{level: level, algo: algo}, func() {
 						s.logger.Warn("flex-algo constraint unsupported; not computing routes, not participating",
 							"algo", algo, "level", level, "error", err)
@@ -127,6 +131,7 @@ func (s *IsisServer) updateRIB(now time.Time) {
 					continue
 				}
 				s.algoWarned.clear(algoKey{level: level, algo: algo}) // re-arm
+				computedAlgos[algoKey{level: level, algo: algo}] = true
 			}
 			computed := s.computeSPF(level, algo, aff, now)
 			if level == packet.Level2 && algo == 0 {
@@ -141,13 +146,13 @@ func (s *IsisServer) updateRIB(now time.Time) {
 		}
 	}
 
-	// Withdrawing the announcement is a change to our own LSP, taken at the
-	// next drain the way the inter-level sets below are, and through the flag
+	// Announcing or withdrawing is a change to our own LSP, taken at the next
+	// drain the way the inter-level sets below are, and through the flag
 	// rather than requestLSPRegen for the same one-extra-pass reason: the
-	// re-origination marks dirty, and the pass that follows it finds the
-	// refusal unchanged.
-	if !maps.Equal(refused, s.flexAlgoRefused) {
-		s.flexAlgoRefused = refused
+	// re-origination marks dirty, and the pass that follows it finds the set
+	// unchanged.
+	if !maps.Equal(computedAlgos, s.flexAlgoComputed) {
+		s.flexAlgoComputed = computedAlgos
 		s.lspGenPending = true
 	}
 

@@ -250,28 +250,36 @@ func (a flexAlgoAffinity) empty() bool {
 
 // prunesLink applies RFC 9350 §13 steps 1, 3 and 4 to one IS-reachability
 // entry's sub-TLVs, in that order, and also reports whether the entry carries
-// colors of its own. It is not the whole rule: an entry with no colors is
-// pruned a second way, when another entry advertising the same neighbor is
-// pruned here — see buildTopology.
+// link attributes of its own. It is not the whole rule: an entry with no
+// attributes is pruned a second way, when another entry advertising the same
+// neighbor is pruned here — see buildTopology.
 //
-// The colors are read lazily so algorithm 0, whose affinity is empty, does not
-// walk the sub-TLVs of every edge in the area; colored is therefore false on
-// every algorithm-0 edge, where nothing reads it.
-func (a flexAlgoAffinity) prunesLink(subs []packet.SubTLV) (prune, colored bool) {
+// hasAttrs is the presence of an ASLA this application reads, not of an admin
+// group inside it. RFC 9350 §12 carries the link delay and the TE metric in
+// the same Flex-Algo ASLA as the administrative groups, so an entry
+// advertising one of those and no color is an ordinary advertisement of a
+// link, which §13 step 1 prunes only on a color that is set on it. What
+// buildTopology's second pass is for is the split-off half of an overflowed
+// entry, and that half carries no ASLA at all.
+//
+// The sub-TLVs are read lazily so algorithm 0, whose affinity is empty, does
+// not walk every edge in the area; hasAttrs is therefore false on every
+// algorithm-0 edge, where nothing reads it.
+func (a flexAlgoAffinity) prunesLink(subs []packet.SubTLV) (prune, hasAttrs bool) {
 	if a.empty() {
 		return false, false
 	}
+	hasAttrs = len(flexAlgoASLAs(subs)) > 0
 	color := flexAlgoLinkColors(subs)
-	colored = len(color) > 0
 	switch {
 	case anyColorSet(a.exclude, color): // 1. exclude admin group
-		return true, colored
+		return true, hasAttrs
 	case len(a.includeAny) > 0 && !anyColorSet(a.includeAny, color): // 3. include-any
-		return true, colored
+		return true, hasAttrs
 	case len(a.includeAll) > 0 && !allColorsSet(a.includeAll, color): // 4. include-all
-		return true, colored
+		return true, hasAttrs
 	}
-	return false, colored
+	return false, hasAttrs
 }
 
 // anyColorSet reports whether the link has any color the rule names. A word
@@ -329,6 +337,23 @@ func allColorsSet(rule, color []uint32) bool {
 // sub-sub-TLVs ignored once it is set, which reading only the entry's
 // top-level sub-TLVs does.
 func flexAlgoLinkColors(subs []packet.SubTLV) []uint32 {
+	var attrs []packet.SubTLV
+	for _, asla := range flexAlgoASLAs(subs) {
+		if asla.Legacy {
+			return adminGroupColors(subs)
+		}
+		attrs = append(attrs, asla.SubSubTLVs...)
+	}
+	return adminGroupColors(attrs)
+}
+
+// flexAlgoASLAs returns the ASLA sub-TLVs of one IS-reachability entry that
+// the Flexible Algorithm application reads: those naming it, or — when the
+// entry names it in none — the zero-length-bit-mask ones RFC 8919 §4.2 gives
+// to any application with no advertisement of its own. An ASLA that names
+// only other applications is not one of them, here or in prunesLink: this
+// application cannot read a single attribute out of it.
+func flexAlgoASLAs(subs []packet.SubTLV) []*packet.ASLASubTLV {
 	var forFlexAlgo, forAnyApp []*packet.ASLASubTLV
 	for _, sub := range subs {
 		asla, ok := sub.(*packet.ASLASubTLV)
@@ -343,16 +368,9 @@ func flexAlgoLinkColors(subs []packet.SubTLV) []uint32 {
 		}
 	}
 	if len(forFlexAlgo) == 0 {
-		forFlexAlgo = forAnyApp
+		return forAnyApp
 	}
-	var attrs []packet.SubTLV
-	for _, asla := range forFlexAlgo {
-		if asla.Legacy {
-			return adminGroupColors(subs)
-		}
-		attrs = append(attrs, asla.SubSubTLVs...)
-	}
-	return adminGroupColors(attrs)
+	return forFlexAlgo
 }
 
 // adminGroupColors folds the admin-group advertisements of one sub-TLV list

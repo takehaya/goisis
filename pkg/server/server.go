@@ -45,29 +45,29 @@ type IsisServer struct {
 	readers  sync.WaitGroup
 
 	// The following are owned by the Serve loop after Serve starts.
-	circuits        []*circuit
-	dbs             map[packet.Level]*lsdb
-	levelCap        levelSet // union of circuit levels, for the LSP IS-Type field
-	fib             fib.FIB
-	metrics         Metrics
-	clock           Clock
-	rib             map[netip.Prefix]RouteInfo
-	l1Export        map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
-	l2Leak          map[netip.Prefix]uint32 // L2-reachable prefixes leaked down into our L1 LSP
-	connected       map[netip.Prefix]bool   // directly-connected prefixes, derived (never installed)
-	fibPending      map[netip.Prefix]bool   // routes whose last FIB write failed; retried
-	fibInstalled    map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
-	spfDirty        bool                    // a topology change needs an SPF recompute
-	lspGenPending   bool                    // a protocol event asked for an own-LSP regeneration
-	nextLSPGen      time.Time               // earliest time drainLSPGen may honor that request
-	watchers        map[*watcher]struct{}   // WatchEvent subscribers
-	algoWarned      edgeLog[algoKey]        // (level,algo) whose refusal (no definition, or one goisis cannot evaluate) was logged
-	flexAlgoRefused map[algoKey]bool        // (level,algo) updateRIB refuses, so origination stops announcing it
-	endXSIDs        map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
-	seqWrapUntil    map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
-	endXNoNexthop   map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
-	sidPending      map[netip.Addr]bool     // local SIDs whose removal failed; retried from housekeeping
-	sidFailed       edgeLog[netip.Addr]     // local SIDs whose failed FIB write was already logged
+	circuits         []*circuit
+	dbs              map[packet.Level]*lsdb
+	levelCap         levelSet // union of circuit levels, for the LSP IS-Type field
+	fib              fib.FIB
+	metrics          Metrics
+	clock            Clock
+	rib              map[netip.Prefix]RouteInfo
+	l1Export         map[netip.Prefix]uint32 // L1-reachable prefixes advertised in our L2 LSP
+	l2Leak           map[netip.Prefix]uint32 // L2-reachable prefixes leaked down into our L1 LSP
+	connected        map[netip.Prefix]bool   // directly-connected prefixes, derived (never installed)
+	fibPending       map[netip.Prefix]bool   // routes whose last FIB write failed; retried
+	fibInstalled     map[netip.Prefix]bool   // routes currently written to the FIB (gated by fibFilter)
+	spfDirty         bool                    // a topology change needs an SPF recompute
+	lspGenPending    bool                    // a protocol event asked for an own-LSP regeneration
+	nextLSPGen       time.Time               // earliest time drainLSPGen may honor that request
+	watchers         map[*watcher]struct{}   // WatchEvent subscribers
+	algoWarned       edgeLog[algoKey]        // (level,algo) whose refusal (no definition, or one goisis cannot evaluate) was logged
+	flexAlgoComputed map[algoKey]bool        // (level,algo) updateRIB has elected a definition for and computed; only these may be announced as participated
+	endXSIDs         map[endXKey]endXSID     // SRv6 End.X SIDs, one per (locator, adjacency)
+	seqWrapUntil     map[lspKey]time.Time    // LSP IDs held down after sequence exhaustion (see exhaustSeq)
+	endXNoNexthop    map[endXAdjKey]bool     // adjacencies whose missing End.X next hop was warned about
+	sidPending       map[netip.Addr]bool     // local SIDs whose removal failed; retried from housekeeping
+	sidFailed        edgeLog[netip.Addr]     // local SIDs whose failed FIB write was already logged
 
 	overloadOnStartup time.Duration             // set the OL bit this long after startup
 	overloadUntil     time.Time                 // OL bit is set while now < this (zero = not set)

@@ -574,10 +574,12 @@ func (s *IsisServer) floodLSP(level packet.Level, id packet.LSPID, except *circu
 // when Flex-Algos are configured — the SR-Algorithm sub-TLV (algo 0 plus every
 // participated algorithm) followed by a FAD sub-TLV per advertised definition.
 //
-// An algorithm updateRIB refuses at this level is left out of the SR-Algorithm
-// sub-TLV but keeps its FAD: RFC 9350 §5.3 withdraws the participation of a
-// node that computes nothing for an algorithm, and explicitly lets a
-// non-participating router go on advertising the definition.
+// An algorithm updateRIB has not computed at this level is left out of the
+// SR-Algorithm sub-TLV but keeps its FAD: RFC 9350 §5.3 withdraws the
+// participation of a node that computes nothing for an algorithm — including
+// one it has not computed yet, which is every algorithm until the first RIB
+// pass records it — and explicitly lets a non-participating router go on
+// advertising the definition.
 func (s *IsisServer) routerCapabilitySubTLVs(level packet.Level) []packet.SubTLV {
 	var caps []packet.SubTLV
 	if len(s.locators) > 0 {
@@ -586,7 +588,7 @@ func (s *IsisServer) routerCapabilitySubTLVs(level packet.Level) []packet.SubTLV
 	if len(s.flexAlgos) > 0 {
 		algos := []uint8{0} // algorithm 0 (normal SPF) is always supported
 		for _, fa := range s.flexAlgos {
-			if s.flexAlgoRefused[algoKey{level: level, algo: fa.Algo}] {
+			if !s.flexAlgoComputed[algoKey{level: level, algo: fa.Algo}] {
 				continue
 			}
 			algos = append(algos, fa.Algo)

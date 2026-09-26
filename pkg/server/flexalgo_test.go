@@ -81,9 +81,16 @@ func TestFlexAlgoParticipationFollowsTheFADAdvertiser(t *testing.T) {
 		WithFlexAlgo(FlexAlgoConfig{Algo: 128}), // participate; someone else defines it
 	)
 	now := time.Now()
+	// The startup origination. Serve runs it before entering the loop, and the
+	// loop drains the LSP generation before it recomputes, so this LSP reaches
+	// the wire before any RIB pass has looked for a definition — and "not
+	// computed yet" is one of the states §5.3 forbids announcing from, not a
+	// window the announcement may live in until a later pass corrects it.
 	s.regenerateLSPs(false, now)
-	if !slices.Contains(ownSRAlgorithms(t, s), 128) {
-		t.Fatal("control: the node must announce participation before the first RIB pass reads the LSDB")
+	if algos := ownSRAlgorithms(t, s); slices.Contains(algos, 128) {
+		t.Error("the startup LSP announces participation in an algorithm no RIB pass has computed")
+	} else if !slices.Contains(algos, 0) {
+		t.Fatal("the startup LSP carries no SR-Algorithm sub-TLV at all, so the check above proves nothing")
 	}
 	// Each step is its own minLSPGenInterval, so drainLSPGen really originates
 	// rather than coalescing the sequence into one LSP.
@@ -116,6 +123,42 @@ func TestFlexAlgoParticipationFollowsTheFADAdvertiser(t *testing.T) {
 	injectLSP(s, advertiser, []packet.TLV{fadCap(100)}, now)
 	if !announced() {
 		t.Error("participation does not return when the definition does")
+	}
+}
+
+// TestFlexAlgoRuntimeAdditionAnnouncesNoParticipationBeforeItComputes is the
+// runtime half of the same clause, on a live loop. AddFlexAlgo asks for a
+// re-origination, and the loop drains the LSP generation before it recomputes,
+// so the LSP the addition itself originates is the one that has to withhold
+// the announcement: nothing corrects it for a whole generation interval, and
+// for that interval the area is pruning an algorithm-129 topology that routes
+// through a node holding none of its forwarding state.
+func TestFlexAlgoRuntimeAdditionAnnouncesNoParticipationBeforeItComputes(t *testing.T) {
+	s, _, cancel := mutateServer(t)
+	defer cancel()
+	ctx := context.Background()
+
+	waitFor(t, "the node originated its own LSP", func() bool { return ownLSPSeq(t, s) > 0 })
+	seq := ownLSPSeq(t, s)
+
+	// No router in the area defines 129, this node included.
+	if err := s.AddFlexAlgo(ctx, FlexAlgoConfig{Algo: 129}); err != nil {
+		t.Fatalf("AddFlexAlgo: %v", err)
+	}
+	waitFor(t, "the addition re-originated this node's LSP", func() bool { return ownLSPSeq(t, s) > seq })
+	if hasSRAlgo(t, s, 129) {
+		t.Error("the LSP AddFlexAlgo originates announces participation in an algorithm no router defines")
+	}
+
+	// The positive control, on the same server so the withholding above cannot
+	// be "this node announces nothing": 128 is defined by this node itself, and
+	// the RIB pass that elects that definition puts the participation out.
+	if err := s.AddFlexAlgo(ctx, FlexAlgoConfig{Algo: 128, Priority: 100, AdvertiseDefinition: true}); err != nil {
+		t.Fatalf("AddFlexAlgo: %v", err)
+	}
+	waitFor(t, "algo 128 announced once its own definition is elected", func() bool { return hasSRAlgo(t, s, 128) })
+	if hasSRAlgo(t, s, 129) {
+		t.Error("participation in an algorithm no router defines survived the RIB pass")
 	}
 }
 

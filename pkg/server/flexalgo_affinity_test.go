@@ -369,13 +369,13 @@ func TestCircuitOriginatesAdminGroupASLA(t *testing.T) {
 	}
 }
 
-// TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation is the other half of
-// the refusal RFC 9350 §5.3 asks for: a node that stops computing an algorithm
+// TestFlexAlgoUnevaluableDefinitionWithholdsParticipation is the other half of
+// the refusal RFC 9350 §5.3 asks for: a node that does not compute an algorithm
 // "MUST NOT announce participation" in it either. §13 prunes every
 // non-participating node out of the other routers' topology for that
 // algorithm, so the announcement is the one thing steering algorithm-K traffic
 // into a node that holds no algorithm-K forwarding state.
-func TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation(t *testing.T) {
+func TestFlexAlgoUnevaluableDefinitionWithholdsParticipation(t *testing.T) {
 	fad := func(metric uint8, cons ...packet.FlexAlgoSubSubTLV) packet.SubTLV {
 		return &packet.FlexAlgoDefinitionSubTLV{FlexAlgo: 128, MetricType: metric, Priority: 100, SubSubTLVs: cons}
 	}
@@ -393,12 +393,16 @@ func TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation(t *testing.T) {
 				&packet.SRAlgorithmSubTLV{Algorithms: []uint8{0, 128}}, def,
 			}},
 		}, now)
+		// The startup origination runs before the first RIB pass, so it may
+		// not announce participation either: the definition has not been read
+		// yet, and §5.3 grants participation only to an algorithm this node
+		// computes.
 		s.regenerateLSPs(false, now)
-		if !slices.Contains(ownSRAlgorithms(t, s), 128) {
-			t.Fatal("control: the node must announce participation before the definition is read")
+		if slices.Contains(ownSRAlgorithms(t, s), 128) {
+			t.Error("the startup LSP announces participation before any definition has been read")
 		}
 		s.updateRIB(now)
-		s.drainLSPGen(now) // the refusal has to reach the LSP without another event
+		s.drainLSPGen(now) // the decision has to reach the LSP without another event
 		return slices.Contains(ownSRAlgorithms(t, s), 128)
 	}
 	if announces(t, fad(packet.FlexAlgoMetricIGP, agConstraint(packet.FlexAlgoSubSubExcludeSRLG, 9))) {
@@ -408,7 +412,7 @@ func TestFlexAlgoUnevaluableDefinitionWithdrawsParticipation(t *testing.T) {
 		t.Error("an algorithm whose definition asks for a metric this node cannot measure is still announced as participated")
 	}
 	if !announces(t, fad(packet.FlexAlgoMetricIGP)) {
-		t.Error("control: a definition this node computes must keep its participation announcement")
+		t.Error("control: a definition this node computes must get its participation announced")
 	}
 }
 
@@ -514,6 +518,48 @@ func TestFlexAlgoKeepsAParallelLinkTheRuleDoesNotName(t *testing.T) {
 	}
 	if r.metric != 20 {
 		t.Errorf("metric = %d, want 20: the excluded red link was used instead of the blue one", r.metric)
+	}
+}
+
+// TestFlexAlgoKeepsAParallelLinkCarryingNoColorOfItsOwn: the cross-entry prune
+// tells a link's own advertisement from the split-off half of an overflowed
+// entry by the ASLA, not by an admin group inside it. RFC 9350 §12 carries the
+// link delay and the TE metric in that same Flex-Algorithm ASLA, so a second
+// parallel link advertising a delay and no color is an ordinary link — and §13
+// step 1 prunes a link only on a color that is set on it.
+func TestFlexAlgoKeepsAParallelLinkCarryingNoColorOfItsOwn(t *testing.T) {
+	// One Flex-Algo ASLA carrying a link attribute that is not an admin group.
+	// Min Unidirectional Link Delay (RFC 8570 §4.2, code point 34) is one goisis
+	// keeps opaque, which is the point: the entry advertises attributes this
+	// node cannot read as colors and is still not a split-off half.
+	delayOnly := []packet.SubTLV{&packet.ASLASubTLV{
+		SABM:       []byte{packet.ASLAAppFlexAlgo},
+		SubSubTLVs: []packet.SubTLV{&packet.UnknownSubTLV{SubTLVType: 34, Value: []byte{0, 0, 0x13, 0x88}}},
+	}}
+	parallel := func(nb packet.NodeID) packet.TLV {
+		return &packet.ExtendedISReachabilityTLV{Neighbors: []packet.ExtendedISReachEntry{
+			{NeighborID: nb, Metric: 10, SubTLVs: aslaColors(colorRed)},
+			{NeighborID: nb, Metric: 20, SubTLVs: delayOnly},
+		}}
+	}
+	s := electionServer(t)
+	now := time.Now()
+	self, peer := nodeID(packet.SystemID{0, 0, 0, 0, 0, 1}, 0), nodeID(packet.SystemID{0, 0, 0, 0, 0, 2}, 0)
+	injectNodeLSP(s, self, []packet.TLV{partCap(), parallel(peer)}, now)
+	injectNodeLSP(s, peer, []packet.TLV{partCap(), parallel(self), algoLocTLV(affinityLoc)}, now)
+
+	aff, err := flexAlgoAffinityOf(&FlexAlgoDefinition{Algo: 128, Constraints: []packet.FlexAlgoSubSubTLV{
+		agConstraint(packet.FlexAlgoSubSubExcludeAdminGroup, colorRed),
+	}})
+	if err != nil {
+		t.Fatalf("flexAlgoAffinityOf: %v", err)
+	}
+	r, ok := s.computeSPF(packet.Level2, 128, aff, now)[affinityLoc]
+	if !ok {
+		t.Fatal("the parallel link advertising no admin group was deleted along with its excluded sibling")
+	}
+	if r.metric != 20 {
+		t.Errorf("metric = %d, want 20: the excluded red link was used instead of the parallel one", r.metric)
 	}
 }
 
