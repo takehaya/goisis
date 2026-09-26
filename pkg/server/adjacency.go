@@ -56,15 +56,18 @@ type adjacency struct {
 	// zero value every arriving LSP would read as an exchange that finished in
 	// 1 AD, which is the false positive the field exists to stop.
 	//
-	// upSince and syncSpent are what bound how much of the report a neighbor
-	// can suppress. upSince is the transition into Up — the one instant of the
-	// three a neighbor cannot move, which is what makes it the thing a budget
-	// can be measured against — and syncSpent is how much suppression the
-	// exchanges since then have added, against maxSyncSuppression. See
-	// openSyncWindow.
-	syncSince time.Time
-	upSince   time.Time
-	syncSpent time.Duration
+	// upSince, syncSpent and syncCharged are what bound how much of the report
+	// can be suppressed on this adjacency. upSince is the transition into Up,
+	// which is what the budget-spent line reports and what resetSyncWindow
+	// starts a budget from; syncSpent is how much suppression has been charged
+	// and not yet leaked back, against maxSyncSuppression; syncCharged is when
+	// that leak was last taken, see refillSyncBudget. The counter is this
+	// adjacency's, but on a broadcast circuit it is spent by whichever neighbor
+	// at the level asked for an exchange — see maxSyncSuppression.
+	syncSince   time.Time
+	upSince     time.Time
+	syncSpent   time.Duration
+	syncCharged time.Time
 
 	// Graceful restart (RFC 5306), all three fields fed by noteRestart from
 	// every IIH, whether or not it carries a Restart TLV — one that carries

@@ -959,8 +959,10 @@ func TestTheResyncWindowFollowsTheExchangeAndNotTheRequest(t *testing.T) {
 // "an IIH with the RR bit reset will clear the Restart mode state" re-arms the
 // next request — so one extra packet per ZeroAgeLifetime would otherwise buy
 // it permanent silence on the counter that watches its own LSPs.
-// maxSyncSuppression is the bound, spent against an Up episode the neighbour
-// cannot restart without first letting the adjacency go Down.
+// maxSyncSuppression is the bound this case covers: the burst runs out. What
+// bounds the neighbour after that, once syncRefillDivisor has given some of the
+// budget back, is
+// TestANeighbourThatNeverStopsAskingBuysOneWindowInSyncRefillDivisor.
 func TestANeighbourCannotHoldTheResyncWindowOpenForEver(t *testing.T) {
 	budgeted := int(maxSyncSuppression / (zeroAgeSeconds * time.Second))
 	for _, tc := range bothCircuitKinds {
@@ -1140,7 +1142,9 @@ func TestRestartStateIsLoggedOnItsEdgesNotOnEveryHello(t *testing.T) {
 // last one. The window a single exchange opens is one ZeroAgeLifetime long, so
 // charging the whole gap would bill an adjacency that has been quiet for hours
 // as though it had been suppressing for hours -- and the first genuine restart
-// of the day would exhaust a budget meant to cover about ten of them.
+// of the day would exhaust the budget the next one needs. What the two charges
+// come to is TestAReopeningCostsTheGapItSuppressesCappedAtOneWindow's subject;
+// this case is about the one an operator meets, through the counter.
 func TestAQuietAdjacencyPaysOnlyForTheWindowItOpens(t *testing.T) {
 	for _, tc := range bothCircuitKinds {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1170,6 +1174,236 @@ func TestAQuietAdjacencyPaysOnlyForTheWindowItOpens(t *testing.T) {
 				t.Errorf("corrupt lifetimes = %d, want 0: one quiet gap spent the budget the next restart needed", got)
 			}
 		})
+	}
+}
+
+// TestAReopeningCostsTheGapItSuppressesCappedAtOneWindow guarantees the charge
+// maxSyncSuppression is sized against, in the two numbers the constant's doc
+// states. A reopening suppresses from the instant the window last opened, but
+// never for more than the one ZeroAgeLifetime a single window covers, so the
+// first reopening of a restart on an adjacency that has been quiet costs a flat
+// ZeroAgeLifetime and every later one costs only the gap since the last.
+// Charging the whole gap would bill an hour of quiet as an hour of suppression;
+// charging only the restart's own duration would understate what the budget
+// buys, which is the reading that produced "ten consecutive restarts".
+func TestAReopeningCostsTheGapItSuppressesCappedAtOneWindow(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 65535)
+
+			// An hour quiet, then one exchange: one ZeroAgeLifetime, not the
+			// hour, and not nothing.
+			h.clk.Advance(time.Hour)
+			h.request(h.snpa, 65535)
+			if got, want := h.adj().syncSpent, zeroAgeSeconds*time.Second; got != want {
+				t.Fatalf("the first reopening after an hour quiet charged %v, want %v", got, want)
+			}
+
+			// 50s later, still inside the budget: 50s of new suppression, less
+			// the 5s syncRefillDivisor leaked back over those 50s.
+			h.clk.Advance(50 * time.Second)
+			h.request(h.snpa, 65535)
+			if got, want := h.adj().syncSpent, 105*time.Second; got != want {
+				t.Errorf("after a second reopening 50s on the budget stands at %v, want %v (60s + 50s charged, 5s leaked back)", got, want)
+			}
+		})
+	}
+}
+
+// TestTheSuppressionBudgetLeaksBackAtATenthOfElapsedTime guarantees
+// syncRefillDivisor's rate in the numbers its doc and docs/configuration.md
+// both state: ten minutes of quiet buys a minute of budget back, and the leak
+// floors at zero rather than banking credit a later restart loop could spend.
+// A budget that only a transition into Up refilled made one restart loop cost
+// every adjacency on the segment its zero baseline for the life of the
+// adjacency, which on a stable link is months.
+func TestTheSuppressionBudgetLeaksBackAtATenthOfElapsedTime(t *testing.T) {
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartHelper(t, tc.p2p)
+			h.settle(h.snpa, 65535)
+			adj := h.adj()
+			adj.syncSpent, adj.syncCharged = maxSyncSuppression, h.clk.Now()
+
+			h.clk.Advance(10 * time.Minute)
+			adj.refillSyncBudget(h.clk.Now())
+			if got, want := adj.syncSpent, maxSyncSuppression-time.Minute; got != want {
+				t.Errorf("ten minutes of quiet left the budget at %v spent, want %v", got, want)
+			}
+
+			h.clk.Advance(10 * time.Hour)
+			adj.refillSyncBudget(h.clk.Now())
+			if adj.syncSpent != 0 {
+				t.Errorf("ten hours of quiet left the budget at %v spent, want it empty", adj.syncSpent)
+			}
+		})
+	}
+}
+
+// TestANeighbourThatNeverStopsAskingBuysOneWindowInSyncRefillDivisor
+// guarantees the ceiling the leak leaves behind, which is the property
+// maxSyncSuppression was added for: a peer interleaving ordinary hellos keeps
+// its adjacency alive by the normal path and can ask again for as long as it
+// likes, so without a bound one extra packet per ZeroAgeLifetime buys it
+// permanent silence on the counter that watches its own LSPs. Making the budget
+// a rate rather than a quota for the life of the adjacency is what stops a
+// spent budget being permanent; this is the other half — what it must still
+// cost a neighbour that never stops.
+//
+// Thirty simulated minutes, a request per ZeroAgeLifetime with an ordinary
+// hello half way between, one near-expiry LSP delivered per round. What the
+// neighbour may buy is the budget's burst plus one round in
+// syncRefillDivisor; everything else is counted.
+func TestANeighbourThatNeverStopsAskingBuysOneWindowInSyncRefillDivisor(t *testing.T) {
+	const rounds = 30
+	for _, tc := range bothCircuitKinds {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newCountingMetrics()
+			h := newRestartHelper(t, tc.p2p, WithMetrics(m))
+			h.settle(h.snpa, 65535)
+			var seq uint32
+			for range rounds {
+				seq++
+				h.clk.Advance(zeroAgeSeconds * time.Second / 2)
+				h.hello(h.snpa, 65535, &packet.RestartTLV{})
+				h.clk.Advance(zeroAgeSeconds * time.Second / 2)
+				h.request(h.snpa, 65535)
+				h.s.handleRx(h.c, datalink.Frame{PDU: serialize(t, helperLSP(seq)), Src: h.snpa})
+			}
+			counted := m.count("lsp_lifetime_corrupt", "c")
+			if counted == 0 {
+				t.Fatalf("all %d rounds were suppressed: the neighbour holds the filter open for as long as it keeps asking", rounds)
+			}
+			// Each round costs one ZeroAgeLifetime and leaks a tenth of one
+			// back, so the budget covers this many rounds before the rate is
+			// the only thing left to buy from.
+			burst := int(maxSyncSuppression/(zeroAgeSeconds*time.Second-zeroAgeSeconds*time.Second/syncRefillDivisor)) + 1
+			suppressed := rounds - counted
+			if want := burst + rounds/syncRefillDivisor; suppressed > want {
+				t.Errorf("%d of %d rounds suppressed, want at most %d: the leak buys more than one window in %d",
+					suppressed, rounds, want, syncRefillDivisor)
+			}
+		})
+	}
+}
+
+// TestOneHelloThatStopsEchoingUsGivesTheSuppressionBudgetBack guarantees the
+// refill resetSyncWindow performs, and what reaching it takes. A transition
+// into Up gives the budget back in full, and docs/configuration.md publishes
+// that as the operator's way out of a spent one — but on a broadcast circuit
+// reaching Up costs no more than one IIH that omits our SNPA from the IS
+// Neighbours option and one that carries it again, with the adjacency object
+// never torn down and nothing going Down anywhere. It is the cheapest refill
+// there is, which is why it is the one that has to stay witnessed: what it
+// costs a neighbour is noise (two state changes, two transition counts, two
+// watch events, a re-origination) rather than nothing, and what bounds the
+// quiet path is syncRefillDivisor.
+func TestOneHelloThatStopsEchoingUsGivesTheSuppressionBudgetBack(t *testing.T) {
+	s, c, local, clk := restartServer(t, u8(64))
+	peer := packet.SystemID{0, 0, 0, 0, 0, 0xff}
+	snpa := packet.SNPA{0, 0, 0, 0, 0, 0xff}
+	lanID := nodeID(peer, 0x05)
+	adjOf := func() *adjacency { return c.adjs[packet.Level2][peer] }
+
+	s.processLANHello(c, snpa, neighborHello(peer, 10, lanID, local))
+	adj := adjOf()
+	if adj == nil || adj.state != AdjUp {
+		t.Fatalf("the adjacency did not reach Up: %+v", adj)
+	}
+	adj.syncSpent, adj.syncCharged = maxSyncSuppression, clk.Now()
+
+	// One hello that echoes nobody. Up to Init, the same adjacency object, and
+	// the budget untouched: leaving Up is not what gives it back.
+	s.processLANHello(c, snpa, neighborHello(peer, 10, lanID, packet.SNPA{}))
+	if got := adjOf(); got != adj || got.state != AdjInit {
+		t.Fatalf("one un-echoing hello left the adjacency at %+v, want the same object in Init", got)
+	}
+	if got := adj.syncSpent; got != maxSyncSuppression {
+		t.Errorf("leaving Up moved the budget to %v spent, want it left at %v", got, maxSyncSuppression)
+	}
+
+	// And the next ordinary hello takes it back Up, which does.
+	s.processLANHello(c, snpa, neighborHello(peer, 10, lanID, local))
+	if got := adjOf(); got != adj || got.state != AdjUp {
+		t.Fatalf("the adjacency did not return to Up: %+v", got)
+	}
+	if got := adj.syncSpent; got != 0 {
+		t.Errorf("the transition into Up left %v of the budget spent, want it given back in full", got)
+	}
+}
+
+// TestOneNeighboursRestartLoopSpendsTheWholeSegmentsBudget guarantees both
+// halves of how the budget is charged on a LAN, because only the two together
+// are defensible. RFC 5306 §3.2.1c's exchange is the whole level's — the SRM
+// flags are the circuit's and the CSNP reaches every neighbour — so
+// syncCircuitLevel charges every Up adjacency at the level for a restart any
+// one of them asked for, and charging only the requester would let a colluding
+// pair hold each other's window open for nothing. The price is that a
+// bystander's budget is spent by somebody else, and the log line names the
+// adjacency whose counter ran out rather than the neighbour that asked, so the
+// line has to say which it is. What makes the price bounded is the leak: the
+// bystander's own genuine helped restart an hour later must still be
+// suppressed, which a budget only a transition into Up refilled would not have
+// been for the months an Up episode on a stable LAN lasts.
+func TestOneNeighboursRestartLoopSpendsTheWholeSegmentsBudget(t *testing.T) {
+	m := newCountingMetrics()
+	var logs bytes.Buffer
+	s, c, local, clk := restartServer(t, u8(64), WithMetrics(m),
+		WithLogger(slog.New(slog.NewTextHandler(&logs, nil))))
+	restarter, bystander := packet.SystemID{0, 0, 0, 0, 0, 0xff}, packet.SystemID{0, 0, 0, 0, 0, 0xee}
+	snpaR, snpaB := packet.SNPA{0, 0, 0, 0, 0, 0xff}, packet.SNPA{0, 0, 0, 0, 0, 0xee}
+	lanR, lanB := nodeID(restarter, 0x05), nodeID(bystander, 0x05)
+	settle := func(id packet.SystemID, lan packet.NodeID, src packet.SNPA) {
+		h := neighborHello(id, 10, lan, local)
+		h.HoldingTime = 65535
+		s.processLANHello(c, src, h)
+	}
+	settle(restarter, lanR, snpaR)
+	settle(bystander, lanB, snpaB)
+	byAdj := c.adjs[packet.Level2][bystander]
+	if byAdj == nil || byAdj.state != AdjUp {
+		t.Fatalf("the bystander's adjacency did not reach Up: %+v", byAdj)
+	}
+
+	// Only the restarter ever asks, once per ZeroAgeLifetime.
+	for range 10 {
+		clk.Advance(zeroAgeSeconds * time.Second)
+		h := restartingHello(restarter, lanR, &packet.RestartTLV{RestartRequest: true})
+		h.HoldingTime = 65535
+		s.processLANHello(c, snpaR, h)
+	}
+	if byAdj.syncSpent < maxSyncSuppression {
+		t.Fatalf("the bystander's budget stands at %v spent, want the circuit's exchanges to have spent all %v of it",
+			byAdj.syncSpent, maxSyncSuppression)
+	}
+	// So the bystander's filter is armed although it asked for nothing: the
+	// control for the assertion after the leak has run.
+	s.handleRx(c, datalink.Frame{PDU: serialize(t, helperLSP(1)), Src: snpaB})
+	if got := m.count("lsp_lifetime_corrupt", "c"); got != 1 {
+		t.Fatalf("corrupt lifetimes on the drained bystander = %d, want 1", got)
+	}
+	line := ""
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "neighbor="+bystander.String()) {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "budget spent by this circuit's exchanges") || !strings.Contains(line, "circuit=c") {
+		t.Errorf("the budget-spent line for the bystander reads %q, want it to name the circuit as what spent the budget", line)
+	}
+
+	// An hour on — the window the alert evaluates over, and the leak's own
+	// claim — the bystander performs its own genuine helped restart. The
+	// budget cannot stand above maxSyncSuppression plus one ZeroAgeLifetime,
+	// so an hour of leak always empties it, whatever the loop spent.
+	clk.Advance(time.Hour)
+	h := restartingHello(bystander, lanB, &packet.RestartTLV{RestartRequest: true})
+	h.HoldingTime = 65535
+	s.processLANHello(c, snpaB, h)
+	s.handleRx(c, datalink.Frame{PDU: serialize(t, helperLSP(2)), Src: snpaB})
+	if got := m.count("lsp_lifetime_corrupt", "c"); got != 1 {
+		t.Errorf("corrupt lifetimes = %d, want 1: the bystander's own restart was counted, on a budget another neighbour spent an hour ago", got)
 	}
 }
 

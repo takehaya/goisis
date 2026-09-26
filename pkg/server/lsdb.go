@@ -84,8 +84,8 @@ func receivedLifetime(remaining uint16) uint16 {
 // Restart mode state" is what re-arms the next request, so a peer that
 // interleaves ordinary hellos keeps the adjacency alive by the normal path and
 // can ask again for as long as it likes. The bound is maxSyncSuppression: the
-// budget openSyncWindow spends from, which nothing refills before the
-// adjacency next comes Up.
+// budget openSyncWindow spends from, which comes back at syncRefillDivisor
+// times slower than it is spent.
 //
 // A purge is not a corrupt lifetime, however far below ZeroAgeLifetime zero
 // is: §2 leaves the handling of purged LSPs alone, and every purge in the area
@@ -99,8 +99,8 @@ func corruptLifetime(adj *adjacency, remaining uint16, now time.Time) bool {
 	return adj != nil && now.Sub(adj.syncSince) >= zeroAgeSeconds*time.Second
 }
 
-// maxSyncSuppression is how much of RFC 7987 §3.2's report one neighbor may
-// suppress between one transition of its adjacency into Up and the next.
+// maxSyncSuppression is how much of RFC 7987 §3.2's report the exchanges on a
+// circuit may suppress on one adjacency before the filter arms again.
 //
 // The window corruptLifetime reads is reopened by every database exchange this
 // node starts, and RFC 5306 §3.2.1c makes a neighbor's restart request one of
@@ -112,38 +112,94 @@ func corruptLifetime(adj *adjacency, remaining uint16, now time.Time) bool {
 // helped restart at the cost of that monotonicity, and this is what is put
 // back in its place.
 //
-// Five minutes, measured against what an exchange actually costs: one helped
-// restart spends roughly its own duration (see openSyncWindow's charge), and
-// RFC 5306 §3.3 bounds a restart by "the minimum holding time of the
-// neighbors" — 30s in ISO 10589's architectural defaults — so the budget
-// covers on the order of ten consecutive restarts over one Up episode, on an
-// adjacency that never went Down between them. What it caps is the other side:
-// a neighbor holding the window open costs the counter at most
-// maxSyncSuppression plus the ZeroAgeLifetime of the last window, under a
-// tenth of the hour docs/configuration.md's alert evaluates over.
+// The counter is the adjacency's; the spend is the circuit's. §3.2.1c's
+// exchange belongs to the whole level — the SRM flags are the circuit's and the
+// CSNP reaches every neighbor on it — so syncCircuitLevel charges every Up
+// adjacency at the level for an exchange any one of them asked for. Charging
+// only the requester would let a colluding pair hold each other's window open
+// for nothing, which is the same third party this bound exists to keep out. So
+// what the budget measures is how long this node's filter has been held off one
+// adjacency, not how often that neighbor asked, and openSyncWindow's log line
+// says so rather than naming the neighbor as the cause.
+//
+// Five minutes, against what an exchange costs: openSyncWindow charges the gap
+// since the window last opened, capped at one ZeroAgeLifetime, so the first
+// reopening of a restart on a quiet adjacency costs a flat ZeroAgeLifetime and
+// the rest of that restart costs its own duration. This is the burst allowance
+// on top of syncRefillDivisor's rate, not a quota for the life of the
+// adjacency; what bounds a neighbor that keeps asking is the rate.
 const maxSyncSuppression = 5 * zeroAgeSeconds * time.Second
+
+// syncRefillDivisor is the rate the budget comes back at: refillSyncBudget
+// gives syncSpent one second back per syncRefillDivisor elapsed, floored at
+// zero.
+//
+// A budget only a transition into Up refilled was a quota for the life of the
+// adjacency, and an Up episode on a stable link is months. Since the spend is
+// the circuit's, one restart loop by any neighbor on a LAN left every adjacency
+// there with the filter armed until something rebooted, and the next genuine
+// helped restart anywhere on that segment was counted as corruption — the
+// outcome the window exists to prevent. A rate keeps what the budget was added
+// for and drops the permanence: a neighbor that keeps asking gets one window
+// reopened per syncRefillDivisor windows it asks for, so the suppression it can
+// buy over an interval is that interval divided by syncRefillDivisor, plus the
+// budget and one final window.
+//
+// Ten, so that share is a tenth of the hour docs/configuration.md's alert
+// evaluates over — the bound the old comment claimed for a permanent budget,
+// now true of a neighbor that never stops. Ten minutes of quiet buys a minute
+// of budget back, so a segment an hour past a restart loop has its zero
+// baseline again.
+const syncRefillDivisor = 10
 
 // resetSyncWindow starts a fresh Up episode on an adjacency that has just
 // reached state Up. The transition is where the exchange RFC 7987 §3.2 words
 // its fourth condition around begins, so the window opens with it, and the
-// suppression budget starts over — the one thing here a neighbor cannot help
-// itself to quietly, since reaching Up again means having gone Down first.
+// suppression budget goes back to full.
+//
+// Reaching Up does not require having gone Down: on a broadcast circuit one IIH
+// that stops echoing our SNPA takes the adjacency to Init and the next one
+// takes it back Up, with the adjacency itself never torn down. What that costs
+// the neighbor is noise rather than nothing — two state changes, two "adjacency
+// state change" lines, two AdjacencyTransition counts, two watch events and a
+// re-origination, per budget — and what bounds the quiet path is
+// syncRefillDivisor, not this.
 func (adj *adjacency) resetSyncWindow(now time.Time) {
-	adj.upSince, adj.syncSince, adj.syncSpent = now, now, 0
+	adj.upSince, adj.syncSince, adj.syncSpent, adj.syncCharged = now, now, 0, now
+}
+
+// refillSyncBudget leaks syncSpent back at syncRefillDivisor's rate. Taken here
+// rather than on a timer: openSyncWindow is the only reader of the budget, so
+// an adjacency that never has another exchange never needs the leak computed,
+// and one that does pays for exactly the time since the last time it did.
+func (adj *adjacency) refillSyncBudget(now time.Time) {
+	elapsed := now.Sub(adj.syncCharged)
+	if elapsed <= 0 {
+		return
+	}
+	adj.syncCharged = now
+	adj.syncSpent -= elapsed / syncRefillDivisor
+	if adj.syncSpent < 0 {
+		adj.syncSpent = 0
+	}
 }
 
 // openSyncWindow reopens RFC 7987 §3.2's window for an exchange beginning now
-// and charges what that adds to the Up episode's budget. syncCircuitLevel is
-// the only caller: the window follows the exchange, not the request that asked
-// for one.
+// and charges what that adds to the budget. syncCircuitLevel is the only
+// caller: the window follows the exchange, not the request that asked for one,
+// and on a broadcast circuit the exchange is the whole level's, so every Up
+// adjacency there is charged for it.
 //
 // The charge is the suppressed time the reopening actually adds — the gap
 // since the window last opened, never more than the one ZeroAgeLifetime a
 // single window covers — so a restarter that asks on every IIH pays for the
 // seconds it is quiet rather than for the number of times it asked, and the
-// total suppressed over an Up episode is syncSpent plus one final window. Once
-// the budget is gone the window is never reopened on this adjacency again.
+// total suppressed over an interval is what was charged in it plus one final
+// window. The budget is refilled before it is read: while it is gone the window
+// is not reopened, which is the filter armed, and what ends that is the leak
+// rather than the adjacency going Down.
 func (s *IsisServer) openSyncWindow(c *circuit, adj *adjacency, now time.Time) {
+	adj.refillSyncBudget(now)
 	add := now.Sub(adj.syncSince)
 	if add <= 0 {
 		// The open window already covers now: the transition into Up opened it
@@ -156,12 +212,16 @@ func (s *IsisServer) openSyncWindow(c *circuit, adj *adjacency, now time.Time) {
 	adj.syncSpent += min(add, zeroAgeSeconds*time.Second)
 	adj.syncSince = now
 	if adj.syncSpent >= maxSyncSuppression {
-		// On the edge, so it is one line per Up episode however long the
-		// neighbor keeps asking. It is what an operator reading a silent
+		// On the edge, so it is one line per budget however long the neighbor
+		// keeps asking. It is what an operator reading a silent
 		// lsp_lifetime_corrupt against a busy restart_requests needs told:
-		// from here the filter is armed for this neighbor whatever it sends.
-		s.logger.Warn("restart resync suppression budget spent", "circuit", c.cfg.Name,
-			"neighbor", adj.systemID, "up", now.Sub(adj.upSince).Truncate(time.Second))
+		// from here the filter is armed for this adjacency until the leak gives
+		// the budget back. The neighbor named is whose counter ran out, which
+		// on a LAN is not necessarily who spent it — see maxSyncSuppression,
+		// and the per-circuit correlate docs/configuration.md points at.
+		s.logger.Warn("restart resync suppression budget spent by this circuit's exchanges",
+			"circuit", c.cfg.Name, "neighbor", adj.systemID,
+			"up", now.Sub(adj.upSince).Truncate(time.Second))
 	}
 }
 

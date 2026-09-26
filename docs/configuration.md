@@ -520,18 +520,38 @@ readings differ only while a restart is being helped;
 The adjacency's age is monotone and a neighbour cannot move it; the exchange is
 not, since a neighbour decides when to ask for one. Two things put that bound
 back. The exchange is held down to one per circuit and level every 5s, so the
-window reopens at that rate rather than at the rate hellos arrive; and the
-suppression one neighbour can accumulate between one transition of its
-adjacency into Up and the next is capped at five minutes, after which the filter
-stays armed for that neighbour whatever it asks for. Crossing the cap logs
-`restart resync suppression budget spent` once, naming the circuit, the
-neighbour and how long the adjacency has been Up — a neighbour that reaches it
-has been handed the database for five cumulative minutes without its adjacency
-ever going Down, which is either a restart loop or a neighbour keeping this
-counter quiet. Past the cap a genuine helped restart on that adjacency is
-counted as well, which is what the log line is there to explain; the adjacency
-going Down and coming back up clears it. Below the cap the alert's baseline is
-unchanged.
+window reopens at that rate rather than at the rate hellos arrive; and each
+adjacency carries a suppression budget of five minutes. A reopening is charged
+the gap since that adjacency's window last opened, capped at one
+ZeroAgeLifetime, so it pays for the time it actually suppressed and not for the
+number of times a neighbour asked — an isolated 30s restart on a quiet
+adjacency costs about a minute and a half, most of it the flat
+ZeroAgeLifetime of the first reopening. While the budget is gone the filter
+stays armed for that adjacency whatever the neighbour asks for.
+
+The budget leaks back at a tenth of elapsed time, so ten minutes of quiet buys
+a minute of it back, a segment an hour past a restart loop has its zero
+baseline again, and a neighbour that never stops asking gets one window
+reopened in ten — a tenth of the hour the alert evaluates over. The adjacency
+going Down and coming back up gives the budget back in full, and on a broadcast
+circuit so does one hello that stops echoing this node, at the cost of two
+logged state changes and a re-origination.
+
+On a broadcast circuit the exchange belongs to the circuit rather than to the
+neighbour that asked: §3.2.1c floods the whole level, so one neighbour's
+restart charges the budget of every adjacency at that level. Crossing the cap
+logs `restart resync suppression budget spent by this circuit's exchanges` once
+per budget, naming the circuit, the adjacency whose counter ran out and how
+long it has been Up. On a LAN that adjacency is not necessarily the cause; the
+correlate that names who asked is the circuit's, not the neighbour's:
+
+```
+sum by (circuit) (goisis_restart_requests_total{outcome="held"})
+```
+
+Past the cap a genuine helped restart on that adjacency is counted as well,
+which is what the log line is there to explain. Below the cap the alert's
+baseline is unchanged.
 
 §3.2 promises neither that every corrupt lifetime is caught nor that every
 report is a real one, so treat a sustained rate as the circuit to take a capture
