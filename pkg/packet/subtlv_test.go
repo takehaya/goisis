@@ -141,3 +141,51 @@ func TestEveryContextWithDecodersIsWalked(t *testing.T) {
 		}
 	}
 }
+
+// TestRefusedSubTLVWalksEveryCarrierItClaims guarantees each arm of the walk
+// RefusedSubTLV performs, which TestEveryContextWithDecodersIsWalked does not:
+// that canary guards the *context* axis — a decoder registered where nothing
+// looks — while the switch keys on the *carrier* axis, the TLVs that hold a
+// sub-TLV area at all. A carrier dropped from the switch is invisible to it.
+//
+// The second neighbour entry is here for the same reason: the walk returns the
+// first refusal it finds, so an arm that stops after entry one reports nothing
+// for a peer whose colours sit on its second link.
+func TestRefusedSubTLVWalksEveryCarrierItClaims(t *testing.T) {
+	bad := mustHex(t, "03 03 000005") // an administrative group three octets long
+	entry := func(last byte, attrs []byte) []byte {
+		e := []byte{0, 0, 0, 0, 0, last, 0, 0, 0, 10, byte(len(attrs))}
+		return append(e, attrs...)
+	}
+	// The router capability area has its own registry, so the refusal there
+	// has to be a code point registered in it: an administrative group is
+	// simply unknown at that level and would prove nothing.
+	badCap := mustHex(t, "19 01 00") // SRv6 capabilities, one octet
+	for _, tc := range []struct {
+		name string
+		wire []byte
+		want uint8
+	}{
+		{"TLV 22, the first entry",
+			append([]byte{byte(TLVTypeExtendedISReachability), 11 + byte(len(bad))}, entry(2, bad)...),
+			subTLVAdminGroup},
+		{"TLV 22, an entry after the first",
+			append(append([]byte{byte(TLVTypeExtendedISReachability), 11 + 11 + byte(len(bad))}, entry(2, nil)...), entry(3, bad)...),
+			subTLVAdminGroup},
+		{"TLV 222, which shares the entry list",
+			append([]byte{byte(TLVTypeMTISReachability), 2 + 11 + byte(len(bad)), 0x00, 0x02}, entry(2, bad)...),
+			subTLVAdminGroup},
+		{"TLV 242, the router capability area",
+			append([]byte{byte(TLVTypeRouterCapability), 5 + byte(len(badCap)), 10, 0, 0, 1, 0}, badCap...),
+			badCap[0]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tlvs := checkTLVRoundtrip(t, tc.wire)
+			if refused := RefusedSubTLV(tlvs); refused == nil {
+				t.Error("RefusedSubTLV reported nothing: this carrier is not walked")
+			} else if refused.SubTLVType != tc.want {
+				t.Errorf("RefusedSubTLV reported sub-TLV %d, want %d", refused.SubTLVType, tc.want)
+			}
+		})
+	}
+}
