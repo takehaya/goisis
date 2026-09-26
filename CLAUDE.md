@@ -74,20 +74,24 @@ test/fixturegen/  scripts to capture FRR golden PDUs (need docker)
   `datalink.Link`; no privileges needed. White-box tests inject LSPs with the
   `injectLSP` helper and call `computeSPF`/`flexAlgoState` directly.
 - **Which tests can flake is a property of the clock they wait on, not a list.**
-  A test that calls `waitFor` polls the wall clock and can flake under heavy
-  parallel load; one that calls `waitClock` advances an injected clock and will
-  stall rather than fail. So `grep -l 'waitFor(t,' pkg/server/*_test.go` is the
-  list, it is current by construction, and it shrinks as conversions land.
-  Re-run the single test before assuming a regression. (Naming three tests here
-  went stale the moment those three moved to `waitClock` and the note then
-  pointed away from the ones that could still flake.)
+  `waitFor` and `waitForLong` give a condition a wall-clock deadline and call
+  `t.Fatalf` when it passes, so load can fail a test that would have passed.
+  `waitClock` gives it a budget of simulated ticks instead: load makes it
+  slower without changing the outcome. Both end in `t.Fatalf`; the difference
+  is whether elapsed time can spend the budget.
+
+  So the list is
+  `grep -ln 'waitFor(t,\|waitForLong(t,' pkg/*/*_test.go` — note `pkg/config`
+  has its own `waitFor` as well as `pkg/server` — and it is current by
+  construction, shrinking as conversions land. Re-run the single test before
+  assuming a regression. (Naming three tests here went stale the moment those
+  three moved to `waitClock`, and the note then pointed away from the ones that
+  could still flake.)
 - **FRR interop** (`test/interop`) and **golden-fixture capture**
   (`test/fixturegen/*.sh`) require `docker` + root, so they run in CI, not in a
   sandbox without docker. They are written to run there.
 - FRR LAN LSP regeneration takes ~40s (a FRR characteristic); interop route
   tests use P2P for fast convergence.
-- `waitFor` polls with a 10 s deadline (a passing test still returns as soon as
-  its condition holds), so a loaded runner stalls rather than fails.
 - Give each worktree its own `GOLANGCI_LINT_CACHE`; a shared cache makes
   concurrent `make lint` runs collide.
 
