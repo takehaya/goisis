@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	connectrpc.com/connect v1.21.0
 	connectrpc.com/grpchealth v1.5.0
-	connectrpc.com/grpcreflect v1.3.0
+	connectrpc.com/grpcreflect v1.3.1
 	github.com/mdlayher/packet v1.2.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/spf13/cobra v1.10.2
